@@ -1,0 +1,32 @@
+[18.01.2025]
+
+Conda Environment - thesis
+
+Python: 3.12.3
+
+Installed packages -
+
+pip3 install torch torchvision torchaudio # PyTorch: 2.5.1, CUDA 12.4
+# NOTE - cuda compatibility 12.2 (a40-lo)
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+
+pip3 install numpy==1.26.4 (numpy>2.0 causes issues)
+pip3 install matplotlib pillow opencv-python tqdm einops imgaug wandb timm
+
+# detectron2
+git clone https://github.com/facebookresearch/detectron2.git
+cd detectron2
+git checkout v0.6           # current version as of 18.01.2025
+python -m pip install -e .
+
+# make MSDA without GPU
+TORCH_CUDA_ARCH_LIST='8.0' FORCE_CUDA=1 python setup.py build install
+# or with CUDA_HOME set (module load cuda/12.4)
+sh make.sh      # in pixel_decoder/ops dir
+
+
+NOTES: 
+
+* If `module avail` does not work, first run -
+source /etc/profile.d/modules.sh
+module load cuda/12.4

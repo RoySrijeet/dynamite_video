@@ -1,0 +1,1 @@
+from dynamite_video.model.dynamite_model import DynamiteModel
