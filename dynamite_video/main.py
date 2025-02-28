@@ -18,6 +18,7 @@ from detectron2.engine import launch
 from detectron2.checkpoint import DetectionCheckpointer
 
 from dynamite_video.training.trainer import Trainer
+from dynamite_video.evaluation.evaluator import Evaluator
 from dynamite_video.utils.misc import get_cl_arguments, load_config
 
 
@@ -48,7 +49,7 @@ def training_pipeline(cfg, args):
     trainer.train()
 
 
-def inference_pipeline(cfg, args):
+def evaluation_pipeline(cfg, args):
     print("Welcome to DynaMITe-Video Evaluation Pipeline!")
 
     # load model architecture
@@ -57,6 +58,7 @@ def inference_pipeline(cfg, args):
     DetectionCheckpointer(model, 
                           save_dir=cfg.OUTPUT_DIR).resume_or_load(cfg.MODEL.WEIGHTS)
     
+    Evaluator.interactive_evaluation(cfg, args)
 
 
 def main(args):
@@ -65,7 +67,7 @@ def main(args):
     cfg = load_config(args)
 
     if args.eval_only:
-        inference_pipeline(cfg, args)
+        evaluation_pipeline(cfg, args)
     else:
         training_pipeline(cfg, args)
 

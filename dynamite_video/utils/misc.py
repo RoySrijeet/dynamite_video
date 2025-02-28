@@ -7,13 +7,15 @@ import numpy as np
 from datetime import datetime
 
 from dynamite_video.utils.paths import Paths
+from dynamite_video.utils.detectron2_custom import default_setup
 from dynamite_video.utils.config import add_maskformer2_config
 
 from detectron2.utils import comm
 from detectron2.config import get_cfg
-from detectron2.engine import default_setup
+# from detectron2.engine import default_setup
 from detectron2.utils.logger import setup_logger
 from detectron2.projects.deeplab import add_deeplab_config # type: ignore
+
 
 def get_expt_config(expt_dir: str):
     """
@@ -34,7 +36,6 @@ def get_expt_config(expt_dir: str):
     assert len(yaml_files)==1, f"Experiment directory ({expt_dir}) must contain 1 yaml file, found {len(yaml_files)}. \
                                 File *config.yaml* is ignored as detectron2 uses this name to save updated config."
     return yaml_files[0]
-
 
 
 def get_base_config():
@@ -99,17 +100,13 @@ def load_config(args):
     # outputs are saved in experiment directory
     cfg.OUTPUT_DIR = args.expt_dir
     
-    # during inference, create a sub-directory inside expt_dir to save outputs
+    # during evaluation, create a sub-directory inside expt_dir to save outputs
     if args.eval_only:
         output_dir = os.path.join(args.expt_dir, "output")
         if os.path.isdir(output_dir):
             output_dir = output_dir + datetime.now().strftime('%Y_%m_%d_%H%M%S')
         os.makedirs(output_dir)
         cfg.OUTPUT_DIR = output_dir
-        
-        # save inference visualizations
-        if args.vis_path is not None:
-            cfg.VIS_DIR = args.vis_path
 
     # command line overwrites
     cfg.merge_from_list(args.opts)
@@ -149,7 +146,13 @@ def get_cl_arguments():
         "https://pytorch.org/docs/stable/distributed.html for details.",
     )
     
-    parser.add_argument(
+    parser.add_argument(           # eval
+        "--eval-datasets", 
+        type=tuple_type, 
+        help="perform evaluation on given datsets"
+    )
+    
+    parser.add_argument(           # eval
         "--eval-only", 
         action="store_true", 
         help="perform evaluation only"
@@ -173,11 +176,25 @@ def get_cl_arguments():
         "to the directory containing the pretrained checkpoint, and not the checkpoint file itself."
     )
 
+    parser.add_argument(           # eval
+        "--iou-threshold",
+        type=float, 
+        default=0.85,
+        help="IoU threshold for interactive evaluation"
+    )
+
     parser.add_argument(
         "--machine-rank", 
         type=int, 
         default=0, 
         help="Unique rank of this machine (machine==node)"
+    )
+
+    parser.add_argument(            # eval
+        "--max-interactions",
+        type=int, 
+        default=10,
+        help="Max no. of interactions allowed per instance for interactive evaluation"
     )
 
     parser.add_argument(
@@ -225,10 +242,10 @@ def get_cl_arguments():
         help="Seed id for random evaluation."
     )
 
-    parser.add_argument(
+    parser.add_argument(           # eval
         "--vis-path", 
         default=None, 
-        help="Path to save visualizations from inference."
+        help="Path to save visualizations from evaluation."
     )
 
     args = parser.parse_args()
@@ -242,3 +259,8 @@ def get_cl_arguments():
     # args.config_file = expt_config
 
     return args
+
+
+def tuple_type(strings):
+    strings = strings.replace("(", "").replace(")", "")
+    return tuple(strings.split(","))

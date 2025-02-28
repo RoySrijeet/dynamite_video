@@ -132,12 +132,11 @@ dmypy.json
 .vscode
 
 # chunky directories
-weights/*
-datasets/*
-wandb/
+weights
+datasets
+wandb
 debug
 notebooks
 jobscripts
 detectron2
-experiments/*
-pretrained_weights/*
+experiments
