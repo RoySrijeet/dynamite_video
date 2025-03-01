@@ -161,6 +161,11 @@ class TrainingDataset(Dataset, ABC):
         return [self.name] * len(self.sample_image_dims)
     
 
+    def random_draw(self, x):
+        while True:
+            yield random.randint(0, x)
+    
+
     def create_training_samples(
         self, 
         videos: Dict[str, GenericVideoSequence],
@@ -169,7 +174,7 @@ class TrainingDataset(Dataset, ABC):
         max_num_instances: int=4,
     ):
         """
-        Generate set number of samples from the dataset
+        Generate a set number of samples from the dataset
 
         Args:
             videos: all video sequences in the dataset as GenericVideoSequence objects
@@ -182,61 +187,73 @@ class TrainingDataset(Dataset, ABC):
         rnd_state_backup = random.getstate()
         random.seed(2202)
 
-        samples_by_num_instance = defaultdict(list)
         max_temporal_span = int(round(frame_sampling_multiplicative_factor * self.clip_length))
 
-        for vid_id, vid in videos.items():
-            # last index in the video to be the first frame of a clip
-            last_t = len(vid) - self.clip_length
+        # uniformly sample videos with different instance counts
+        samples_per_instance_count = [int(math.ceil(num_total_samples / float(max_num_instances))) for _ in range(max_num_instances)]
+        leftovers = num_total_samples - sum(samples_per_instance_count)
+        samples_per_instance_count[-1] += leftovers
 
-            for t in range(last_t):
-                # instances present in the clip starting at frame t,
-                # are the instances present in frame t
-                valid_instance_ids = [iid for iid in vid.instance_ids if iid in vid.segmentations[t]]
-                if not valid_instance_ids:
+        video_bins = defaultdict(list)
+        for vid_id, vid in videos.items():
+            bin_id = min(len(vid.instance_ids), max_num_instances)
+            for b in range(1, bin_id+1):
+                video_bins[b].append(vid_id)
+
+
+        samples_by_num_instance = defaultdict(list)
+        for bin_id in range(1, max_num_instances+1):
+            # calculate how many samples with the given number of 
+            # instances must be drawn from each available video
+            num_available_videos = len(video_bins[bin_id])
+            samples_per_video = int(math.ceil(samples_per_instance_count[bin_id-1] / num_available_videos))
+
+            for vid_id, vid in videos.items():
+                if vid_id not in video_bins[bin_id]:
                     continue
                 
-                # max_num_instances is currently set to 4, TarViS default
-                bin_id = min(max_num_instances, len(valid_instance_ids))
+                # last index in the video that can be the first frame of a sampled clip
+                last_t = len(vid) - self.clip_length
+                index_generator = self.random_draw(last_t)
+                count = 0
 
-                # n-th bin has clips with n instances, except the final bin (say bin # N)
-                # final bin has clips with N or more instances
-                samples_by_num_instance[bin_id].append((vid_id, t, valid_instance_ids))
+                while True:
+                    t = next(index_generator)
+
+                    valid_instance_ids = [iid for iid in vid.instance_ids if iid in vid.segmentations[t]]
+                    if not valid_instance_ids:
+                        continue
+
+                    samples_by_num_instance[bin_id].append((vid_id, t, valid_instance_ids))
+                    count += 1
+                    if count>=samples_per_video:
+                        break
+
 
         # random samples within each bin
         for bin_id in samples_by_num_instance.keys():
             random.shuffle(samples_by_num_instance[bin_id])
-        
+
         train_samples = []
         train_sample_dims = []
-        train_sample_ni = []
-        
-        # uniformly sample videos with different instance counts
-        num_instances_per_count = int(math.ceil(num_total_samples / float(max_num_instances)))
-        available_sample_pool = []
+        train_sample_bin = []
 
-        for ni in range(max_num_instances, 0, -1):
-            if ni not in samples_by_num_instance.keys():
-                continue
-            available_sample_pool = samples_by_num_instance[ni] + available_sample_pool
+        for bin_id in range(1, max_num_instances+1):
 
-            # TODO - exclude extracted samples from the pool
-            for ii in range(num_instances_per_count):
-                ii = ii % len(available_sample_pool)
-                
+            for sample in samples_by_num_instance[bin_id]:
+
                 # extract metadata for a training sample (i.e., a clip)
                 # 1. the video ID to identify the source video to extract the clip from
                 # 2. index of the frame in the video that will be the first frame of the clip - 
                 # let's call it a reference frame
                 # 3. IDs of the instances in this reference frame
-                vid_id, ref_frame_idx, instance_ids = available_sample_pool[ii]
+                vid_id, ref_frame_idx, instance_ids = sample
 
-                assert len(instance_ids) >= ni
-
-                if len(instance_ids) > ni:
+                assert len(instance_ids) >= bin_id
+                if len(instance_ids) > bin_id:
                     # if reference frame contains more instances than permitted, take a subset
                     # only happens when sampling from the final bin
-                    instance_ids = random.sample(instance_ids, ni)
+                    instance_ids = random.sample(instance_ids, bin_id)
 
                 # extract the video info from the dataset
                 vid = videos[vid_id]
@@ -264,16 +281,108 @@ class TrainingDataset(Dataset, ABC):
                 # store original clip resolution
                 train_sample_dims.append((vid.height, vid.width))
                 # store bin (==#instances in the clip) size
-                train_sample_ni.append(ni)
+                train_sample_bin.append(bin_id)
 
         # restore initial random state
         random.setstate(rnd_state_backup)
 
         train_samples = train_samples[:num_total_samples]
         train_sample_dims = train_sample_dims[:num_total_samples]
-        train_sample_ni = train_sample_ni[:num_total_samples]
+        train_sample_bin = train_sample_bin[:num_total_samples]
 
-        return train_samples, train_sample_dims, train_sample_ni
+        return train_samples, train_sample_dims, train_sample_bin
+
+
+        # samples_by_num_instance = defaultdict(list)
+        # for vid_id, vid in videos.items():
+        #     # last index in the video to be the first frame of a clip
+        #     last_t = len(vid) - self.clip_length
+
+        #     for t in range(last_t):
+        #         # instances present in the clip starting at frame t,
+        #         # are the instances present in frame t
+        #         valid_instance_ids = [iid for iid in vid.instance_ids if iid in vid.segmentations[t]]
+        #         if not valid_instance_ids:
+        #             continue
+                
+        #         # max_num_instances is currently set to 4, TarViS default
+        #         bin_id = min(max_num_instances, len(valid_instance_ids))
+
+        #         # n-th bin has clips with n instances, except the final bin (say bin # N)
+        #         # final bin has clips with N or more instances
+        #         samples_by_num_instance[bin_id].append((vid_id, t, valid_instance_ids))
+
+        # # random samples within each bin
+        # for bin_id in samples_by_num_instance.keys():
+        #     random.shuffle(samples_by_num_instance[bin_id])
+        
+        # train_samples = []
+        # train_sample_dims = []
+        # train_sample_ni = []
+        
+        # # uniformly sample videos with different instance counts
+        # num_instances_per_count = int(math.ceil(num_total_samples / float(max_num_instances)))
+        # available_sample_pool = []
+
+        # for ni in range(max_num_instances, 0, -1):
+        #     if ni not in samples_by_num_instance.keys():
+        #         continue
+        #     available_sample_pool = samples_by_num_instance[ni] + available_sample_pool
+
+        #     # TODO - exclude extracted samples from the pool
+        #     for ii in range(num_instances_per_count):
+        #         ii = ii % len(available_sample_pool)
+                
+        #         # extract metadata for a training sample (i.e., a clip)
+        #         # 1. the video ID to identify the source video to extract the clip from
+        #         # 2. index of the frame in the video that will be the first frame of the clip - 
+        #         # let's call it a reference frame
+        #         # 3. IDs of the instances in this reference frame
+        #         vid_id, ref_frame_idx, instance_ids = available_sample_pool[ii]
+
+        #         assert len(instance_ids) >= ni
+
+        #         if len(instance_ids) > ni:
+        #             # if reference frame contains more instances than permitted, take a subset
+        #             # only happens when sampling from the final bin
+        #             instance_ids = random.sample(instance_ids, ni)
+
+        #         # extract the video info from the dataset
+        #         vid = videos[vid_id]
+
+        #         # the rest of the frames in the clip can be sampled from 
+        #         # a window of the next max_temporal_span frames
+        #         other_frames_list = list(
+        #             range(ref_frame_idx + 1, min(len(vid), ref_frame_idx + max_temporal_span))
+        #         )
+
+        #         assert len(other_frames_list) >= self.clip_length - 1, \
+        #             f"Something went wrong here: {ref_frame_idx}, {len(vid)}, {other_frames_list}"
+
+        #         # from the window sample the necessary #frames to fill the clip
+        #         other_frame_idxes = sorted(random.sample(other_frames_list, self.clip_length - 1))
+
+        #         train_samples.append({
+        #             "vid_id": vid_id,
+        #             "ref_frame": ref_frame_idx,
+        #             "other_frames": other_frame_idxes,
+        #             "ref_inst_ids": instance_ids,
+        #             "video": vid,
+        #         })
+
+        #         # store original clip resolution
+        #         train_sample_dims.append((vid.height, vid.width))
+        #         # store bin (==#instances in the clip) size
+        #         train_sample_ni.append(ni)
+
+        # # restore initial random state
+        # random.setstate(rnd_state_backup)
+
+        # train_samples = train_samples[:num_total_samples]
+        # train_sample_dims = train_sample_dims[:num_total_samples]
+        # train_sample_ni = train_sample_ni[:num_total_samples]
+
+        # return train_samples, train_sample_dims, train_sample_ni
 
     
     def apply_color_augmentation(self, images: List[np.ndarray]):
