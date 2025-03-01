@@ -88,27 +88,53 @@ class KITTISTEPTrainingDataset(TrainingDataset):
             img_dims = (seq['height'], seq['width'])
             
             updated_segmentations = []
-            accepted_track_ids = set()
-            # filter out small instances
+            salient_classes = []
+            accepted_track_ids = {}
+            
+            # salient classes (with instance-level annotations)
+            # KITTI-STEP has only two salient classes - 'person' and 'car'
             for fr_idx, segs_t in enumerate(seq['segmentations']):
+                
                 updated_segmentations.append(dict())
+                salient_classes.append(set())
+                
+                # add the instance masks of the salient classes
                 for track_id, seg in segs_t.items():
                     # only consider instances with a minimum mask area
                     if self.mask_area(seg, img_dims) >= MIN_MASK_AREA:
                         # store instance mask
                         updated_segmentations[-1][int(track_id)] = seg
-                        accepted_track_ids.add(track_id)
+                        accepted_track_ids[int(track_id)] = seq['categories'][track_id]
+                        # note the salient classes present in the frame
+                        salient_classes[-1].add(seq['categories'][track_id])
+
+            max_track_id = max(accepted_track_ids.keys())
+            
+            # panoptic masks of 'stuff' classes
+            for fr_idx, pano_masks in enumerate(seq["semantic_segmentations"]):
+                for class_id, pano_seg in pano_masks.items():
+                    
+                    # ignore if 'void' class
+                    if class_id == '255':
+                        continue
+                    
+                    # record 'stuff' classes
+                    if class_id not in salient_classes and self.mask_area(pano_seg, img_dims) >= MIN_MASK_AREA:
+                        # store panoptic mask with unique ID per 'stuff' class
+                        stuff_track_id = max_track_id + int(class_id) + 1
+                        updated_segmentations[fr_idx][stuff_track_id] = pano_seg
+                        accepted_track_ids[int(stuff_track_id)] = int(class_id)
+
+                    # TODO - some salient classes may not be fully represented in instance masks
+                    # they automatically become part of the background
+
 
             # if none of the instances are large enough, exclude this sequence
             if not accepted_track_ids:
                 continue
 
             seq['segmentations'] = updated_segmentations
-            accepted_categories = {
-                int(track_id): seq["categories"][track_id]
-                for track_id in accepted_track_ids
-            }
-            seq["categories"] = accepted_categories
+            seq["categories"] = accepted_track_ids
             
             # save semantic segmentations as panoptic segmentation
             seq["panoptic_segmentations"] = seq["semantic_segmentations"]
@@ -116,8 +142,8 @@ class KITTISTEPTrainingDataset(TrainingDataset):
             sequences.append(seq)
 
             # TODO - remove
-            if len(sequences) == 2:
-                break
+            # if len(sequences) == 2:
+            #     break
 
         # store category id to name mapping
         meta_info = content["meta"]["category_labels"]
@@ -141,6 +167,15 @@ class KITTISTEPTrainingDataset(TrainingDataset):
             "size": img_dims
         })
 
+    def decode_mask(self, rle, img_dims=None):
+        """
+        Decode RLE mask to numpy.ndarray
+        """
+        encoded_mask = {
+            "counts": rle.encode("utf-8"),
+            "size": img_dims
+        }
+        return np.ascontiguousarray(mt.decode(encoded_mask)).astype(np.uint8)
 
 
 class KITTISTEPInferenceDataset(InferenceDataset):
