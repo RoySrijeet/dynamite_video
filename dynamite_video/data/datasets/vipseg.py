@@ -94,29 +94,32 @@ class VIPSEGTrainingDataset(TrainingDataset):
         with open(video_info_path, "r") as f:
             video_info = json.load(f)
 
+        # Convention: For panoptic masks, category IDs range from 0 to 124. "0" denotes VOID class. 
+        # For "stuff" classes, the value of masks is the same as the category ID. 
+        # For "thing" classes, the value of masks is "category_id x 100 + instance_id". 
+        # Example - values of masks of "person" (category ID = 61) instances are "6100", "6101", ...
+        # Thus, instances with mask values larger than 124 belong to "thing" classes, rest to "stuff".
+
+        # NOTE: In JSON file, category IDs range from 0-123 and excludes VOID class. However, the values 
+        # in the masks still correspond to original convention. So, the category IDs are shifted to match
+        # the original convention.
+        
         # store category labels in meta info
         categories = {}
-        # instances of not all categories belong to "thing" classes
-        # separately store category IDs that do belong
+        # keep a separate record of IDs of "thing" classes
         isthing = []
         for entry in video_info["categories"]:
             categories[int(entry['id'])+1] = entry['name']
             if entry["isthing"]:
-                isthing.append(int(entry['id']))
+                isthing.append(int(entry['id'])+1)
         meta_info = {
             "category_labels": categories,
             "thing_ids": isthing
         }
         
+        # read annotations
         sequence_annotations = []
-
-        
-        # TODO - add stuff classes
-        
         for seq in video_info["sequences"]:
-            # skip, if there are no sequences
-            if len(seq["instance_ids"]) < 1:
-                continue
             
             entry = {}
             entry["id"] = f"{self.name}/{seq['name']}"
@@ -128,34 +131,44 @@ class VIPSEGTrainingDataset(TrainingDataset):
             entry["image_paths"] = sorted([os.path.join(path_to_images, seq["name"], file + '.jpg') for file in seq["filenames"]])
             # mask files
             maskfiles = sorted([os.path.join(path_to_annotations, seq["name"], file + '.png') for file in seq["filenames"]])
-            # IDs of the instances present in each frame
-            present_instances = seq["frame_instance_occupancy"]
-
+            
             segmentations = []
+            accepted_stuff_classes = set()
+            accepted_track_ids = set()
             for idx, file in enumerate(maskfiles):
                 # read panoptic mask
                 mask = np.asarray(Image.open(file))
                 
-                # instances present in the mask
-                instances = present_instances[idx]
+                # instances of both "thing" and "stuff" classes
+                instances = list(np.unique(mask))[1:]       # ignore VOID (0)
 
                 binary_masks = {}
-                for i in instances:
-                    _m = (mask==i).astype(dtype='uint8')
+                for inst_id in instances:
+                    # extract binary mask
+                    _m = (mask==inst_id).astype(dtype='uint8')
                     # check mask area
                     if self.mask_area(_m) >= MIN_MASK_AREA:
-                        binary_masks[int(i)] = mt.encode(np.asfortranarray(_m))
-                segmentations.append(binary_masks)
+                        # encode mask array as RLE
+                        binary_masks[int(inst_id)] = mt.encode(np.asfortranarray(_m))
+                        if (inst_id-1) in seq["stuff_classes"]:
+                            accepted_stuff_classes.add(int(inst_id))
+                        else:
+                            # instance belongs to a "thing" class
+                            accepted_track_ids.add(int(inst_id))
 
+                segmentations.append(binary_masks)
+            
             entry["segmentations"] = segmentations
-            entry["stuff_classes"] = [k+1 for k in seq["stuff_classes"]]
-            entry["thing_classes"] = [k+1 for k in seq["thing_classes"]]
+            entry["stuff_classes"] = list(accepted_stuff_classes)
             # assigned_id = category_id x 100 + instance_id
-            entry["categories"] = {int(k): k//100 for k in seq["instance_ids"]}
+            entry["thing_classes"] = [k//100 for k in accepted_track_ids]
+            entry["categories"] = {k:k//100 for k in accepted_track_ids} # of "thing" classes
+            entry["categories"].update({k:k for k in accepted_stuff_classes})
 
             sequence_annotations.append(entry)
-            # TODO - remove
-            if len(sequence_annotations) == 2:
+            
+            # # TODO - remove
+            if len(sequence_annotations) == 30:
                 break
 
         return {
