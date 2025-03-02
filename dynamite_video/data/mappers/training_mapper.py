@@ -17,7 +17,7 @@ class TrainingMapper:
 
     def __init__(self, cfg):
         self.cfg = cfg
-        print("Training Mapper")
+        # print("Training Mapper")
     
     def __call__(self, sample):
         """

@@ -18,7 +18,7 @@ DATASET_BUILDERS = {
 
 def build_training_dataset(cfg):
     """
-    Load data from one or more datasets and return as a single training dataset
+    Load training samples from one or more datasets and return as a single training dataset
     """
 
     dataset_list = cfg.TRAINING.DATASET_LIST

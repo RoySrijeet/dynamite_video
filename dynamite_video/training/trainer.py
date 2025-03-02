@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Set
 from detectron2.engine import DefaultTrainer
 from detectron2.utils.comm import get_world_size
 from detectron2.data.samplers import TrainingSampler
-from detectron2.data.common import AspectRatioGroupedDataset, MapDataset
-from detectron2.data.build import build_detection_train_loader
+from detectron2.data.common import DatasetFromList, MapDataset
+from detectron2.data.build import build_batch_data_loader
 from detectron2.solver.build import maybe_add_gradient_clipping
 
 from dynamite_video.data.mappers import TrainingMapper
@@ -32,14 +32,35 @@ class Trainer(DefaultTrainer):
     
     @classmethod
     def build_train_loader(cls, cfg):
-        dataset = build_training_dataset(cfg)
+        """
+        Build training dataset and return training data loader.
+        Applies some overwrites to detectron2's default training data loader.
+        """
 
-        dataloader = build_detection_train_loader(cfg, 
-                                                  dataset=dataset, 
-                                                  mapper=TrainingMapper(cfg),
-                                                  #collate_fn=Collator(cfg, is_train=True)
-                                            )
-        return dataloader    
+        # obtain training dataset - a list of training clip metadata
+        dataset = build_training_dataset(cfg)
+        
+        # NOTE: skipping serializing samples to avoid OOM 
+        dataset = DatasetFromList(dataset, copy=False, serialize=False)
+        # training map function over the elements in the dataset
+        # this converts the clip metadata into the actual clip used in training
+        mapper = TrainingMapper(cfg)
+        dataset = MapDataset(dataset, mapper)
+
+        return build_batch_data_loader(
+                        dataset,
+                        sampler=TrainingSampler(len(dataset), seed=cfg.SEED),
+                        total_batch_size=cfg.SOLVER.IMS_PER_BATCH,
+                        aspect_ratio_grouping=cfg.DATALOADER.ASPECT_RATIO_GROUPING,
+                        num_workers=cfg.DATALOADER.NUM_WORKERS,
+                    )
+
+        # dataloader = build_detection_train_loader(cfg, 
+        #                                           dataset=dataset, 
+        #                                           mapper=TrainingMapper(cfg),
+        #                                           #collate_fn=Collator(cfg, is_train=True)
+        #                                     )
+        # return dataloader    
     
     
     @classmethod
