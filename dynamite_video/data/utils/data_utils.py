@@ -289,7 +289,7 @@ def apply_random_crop(
         
         Args:
             images: [T, H, W, 3]
-            binary_masks: [N, T, H, W]
+            binary_masks: [T, N, H, W]
             instance_ids: list of instances in the clip
             crop_size: randomly crop area of this dimensions
             MIN_MASK_AREA: minimum area threshold
@@ -303,6 +303,7 @@ def apply_random_crop(
         max_offset = np.subtract(input_size, crop_size)
         max_offset = np.maximum(max_offset, 0)
 
+        num_instances = binary_masks.shape[1]
         attempt = 0
         while True:
             
@@ -315,17 +316,24 @@ def apply_random_crop(
             
             # ensure remaining mask sizes are valid
             valid = True
-            avg_area = 0
-            for fr_msk in cropped_binary_masks:
-                avg_area += fr_msk.sum()
-                for _msk in fr_msk:
-                    if _msk.sum() > 0 and _msk.sum() < MIN_MASK_AREA:
-                        # existing mask is smaller than threshold
-                        valid = False
-                        break
-            # empty mask
-            if avg_area==0 or avg_area // cropped_binary_masks.shape[0] < MIN_MASK_AREA:
-                valid = False
+            for inst_id in range(num_instances):
+                if list(np.unique(cropped_binary_masks[:, inst_id,:,:])) == [0]:
+                    # at least one instance is missing
+                    valid = False
+                    break
+            if valid:
+                avg_area = 0
+                for fr_msk in cropped_binary_masks:
+                    avg_area += fr_msk.sum()
+                    for _msk in fr_msk:
+                        if _msk.sum() > 0 and _msk.sum() < MIN_MASK_AREA:
+                            # existing mask is smaller than threshold
+                            valid = False
+                            break
+            if valid:
+                # empty mask
+                if avg_area==0 or avg_area // cropped_binary_masks.shape[0] < MIN_MASK_AREA:
+                    valid = False
             if valid:
                 break
             
