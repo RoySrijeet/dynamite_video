@@ -224,7 +224,7 @@ def get_clicks_coords(
         optional_frames_fg_prob: probability of sampling fg clicks on more frames
         bg_prob: probability of sampling bg clicks on any given frame
         gamma: probability scaling factor of sampling n no. of clicks
-        start_t: starting time stamp for each clip, (default: 0)
+        start_t: starting time stamp for each clip, (default: 1)
     """ 
     # no. of frames in the clip
     num_frames = bg_masks.shape[0]
@@ -275,12 +275,6 @@ def get_clicks_coords(
         fg_coords_list.append(fg_coords_list_fr)
         if count > 0:
             max_timestamp_clip[fr_idx]=t-1
-        
-    # assert each instance received a foreground click
-    #assert all(np.sum(num_clicks_per_object, axis=0)), f"Every instance did not receive a click"
-    #if not all(np.sum(num_clicks_per_object, axis=0)):
-        # np.save("/home/roy/REPOS/dynamite_video/notebooks/kitti_step/problem_mask.npy", instance_masks)
-        # raise f"Every instance did not receive a click"
 
     # BG clicks
     bg_coords_list = []
@@ -305,3 +299,62 @@ def get_clicks_coords(
 
 
     return num_clicks_per_object.tolist(), fg_coords_list, bg_coords_list, max_timestamp_clip
+
+
+def get_clicks_coords_evaluation(
+    instance_masks,
+    clip_instance_ids,
+    sequence_instance_ids,
+    frame_instance_occupancy,
+    max_num_points=1,
+    first_click_center=True,
+    start_t=1
+):
+    """
+    Clicker for evaluation data
+
+    Args:
+        instance_ids: IDs of instances present in each frame
+        instance_masks: binary instance masks of the frames
+        max_num_points: maximum number of points to sample *for each instance*
+        first_click_center: whether to sample first click at object center, (default: True)
+    """
+    num_frames = instance_masks.shape[0]
+
+    fg_coords_list = [[] for _ in range(num_frames)]
+    bg_coords_list = [[] for _ in range(num_frames)]
+    max_timestamp = [0 for _ in range(num_frames)]
+
+    # sample one click (object center) for each instance
+    # across all frames
+    sample_instances_from = defaultdict(list)
+    for inst_id, frame_idxs in frame_instance_occupancy.items():
+        choice = random.choice(frame_idxs)
+        # add a click on instance `inst_id` in frame `choice`
+        sample_instances_from[choice].append(inst_id)
+
+    
+    # all clicks in a clip share a single timeline
+    t = start_t
+    num_clicks_per_object = np.zeros((num_frames, len(sequence_instance_ids))).astype('int')
+    # Sample clicks from a given frame
+    for fr_idx in range(num_frames):
+
+        if fr_idx not in sample_instances_from.keys():
+            continue
+        
+        # instance masks of the frame
+        fr_mask = instance_masks[fr_idx]
+        # sample one click at object center
+        for inst_id in sample_instances_from[fr_idx]:
+            _mask = fr_mask[inst_id-1]
+            # fetch center coordinates
+            center_coords = get_center_coords(_mask)
+            # record click
+            fg_coords_list[fr_idx].append([center_coords[0], center_coords[1], inst_id, fr_idx, t])
+            
+            num_clicks_per_object[fr_idx][inst_id-1]+=1
+            max_timestamp[fr_idx] = t
+            t+=1
+
+    return num_clicks_per_object.tolist(), fg_coords_list, bg_coords_list, max_timestamp
