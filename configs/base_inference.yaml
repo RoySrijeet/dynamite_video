@@ -6,6 +6,8 @@ DATASETS:
       MAX_NUM_INSTANCES: 4
     INFERENCE:
       FPS: 30
+      CLIP_LENGTH: 8
+      FRAME_OVERLAP: 4
       SPLIT: val
   CITYSCAPES_VPS:
     TRAINING:
@@ -21,6 +23,8 @@ DATASETS:
       MAX_NUM_INSTANCES: 4
     INFERENCE:
       FPS: 30
+      CLIP_LENGTH: 12
+      FRAME_OVERLAP: 6
       SPLIT: val
   KITTI_STEP:
     TRAINING:
@@ -133,8 +137,8 @@ INPUT:
     MAX_DIM_TRAIN: 910
     MIN_DIM_TRAIN: 512
     RESIZE_TEST:
-    MAX_DIM_TEST: 
-    MIN_DIM_TEST:
+    MAX_DIM_TEST: 910
+    MIN_DIM_TEST: 512
 
     # random horizontal flip
     RANDOM_FLIP: true
