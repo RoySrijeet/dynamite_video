@@ -52,9 +52,9 @@ class Paths:
         return os.path.join(cls.to_davis_root(), "Annotations/480p")
     
     @classmethod
-    def to_davis_annotations_json(cls):
-        """Path to DAVIS-2017 Annotations JSON file"""
-        return os.path.join(cls.to_davis_root(), "davis_2017.json")
+    def to_davis_train_annotations_json(cls):
+        """Path to DAVIS-2017 Training Annotations JSON file"""
+        return os.path.join(cls.to_datasets_root(), "davis_semisupervised.json")
     
     @classmethod
     def to_davis_train_imset(cls):
