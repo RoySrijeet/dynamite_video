@@ -131,7 +131,7 @@ class BURSTTrainingDataset(TrainingDataset):
                 int(cat['id']): cat['name'] for cat in content["categories"]
             }
         }
-        del content["categories"], content["split"]
+        del content
 
         return {
             "sequences": sequences,
