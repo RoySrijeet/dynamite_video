@@ -121,9 +121,9 @@ class TrainingMapper:
             if all(np.sum(num_clicks_per_object, axis=0)):
                 break
             else:
-                np.save("/home/roy/REPOS/dynamite_video/notebooks/kitti_step/problem_mask.npy", masks)
-                np.save("/home/roy/REPOS/dynamite_video/notebooks/kitti_step/problem_sem_mask.npy", semantic_masks)
-                pass
+                # np.save("/home/roy/REPOS/dynamite_video/notebooks/kitti_step/problem_mask.npy", masks)
+                # np.save("/home/roy/REPOS/dynamite_video/notebooks/kitti_step/problem_sem_mask.npy", semantic_masks)
+                raise "One or more instances did not receive a click!"
 
 
         return {
