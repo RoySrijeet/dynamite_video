@@ -10,7 +10,7 @@ def compute_iou(gt_masks, pred_masks, max_objs=15, iou_thres = 0.90):
     intersections = np.sum(np.logical_and(gt_masks, pred_masks), (1,2))
     unions = np.sum(np.logical_or(gt_masks,pred_masks), (1,2))
     if not unions.all():
-        # at least for one of the instances, there's no gt mask or pred mask
+        # at least for one of the instances, there's no gt mask and no pred mask
         # that's a correct prediction
         pos = np.where(unions==0)
         unions[pos] = 1
@@ -52,7 +52,7 @@ def get_next_clicks(data, pred_output, timestamp, batched_num_clicks_per_object=
         for j in indices:
             sampled_coords_info = _get_corrective_clicks(pred_masks_per_image[j], gt_masks_per_image[j],
                                                         semantic_map, padding_mask, timestamp = timestamp,
-                                                        fr_idx=i, inst_id=j, max_num_points=2)
+                                                        fr_idx=i, inst_id=int(j), max_num_points=2)
             
             if sampled_coords_info is not None:
                 point_coords, obj_indices = sampled_coords_info
