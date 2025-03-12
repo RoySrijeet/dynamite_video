@@ -1,12 +1,11 @@
-import torch
 import numpy as np
-from typing import Any, Callable, Dict, List, Optional
+
+from detectron2.utils import comm
+from detectron2.utils.logger import setup_logger
 
 from dynamite_video.data.datasets import *
 
-from dynamite_video.utils.paths import Paths
-
-DATASET_BUILDERS = {
+TRAINING_DATASET_BUILDERS = {
     "BURST": BURSTTrainingDataset,
     "CITYSCAPES_VPS": CITYSCAPESVPSTrainingDataset,
     "DAVIS": DAVISTrainingDataset,
@@ -14,6 +13,11 @@ DATASET_BUILDERS = {
     "MOSE": MOSETrainingDataset,
     "PUMAVOS": PUMAVOSTrainingDataset,
     "VIPSEG": VIPSEGTrainingDataset,
+}
+
+EVALUATION_DATASET_BUILDERS = {
+    "DAVIS": DAVISInferenceDataset,
+    "BURST": BURSTInferenceDataset,
 }
 
 def build_training_dataset(cfg):
@@ -28,6 +32,11 @@ def build_training_dataset(cfg):
 
     num_samples = total_iterations * batch_size
 
+    logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name=__name__)
+    logger.info(f"Building training dataset from following datasets: {dataset_list}")
+    logger.info(f"Building training dataset with following dataset weights: {dataset_weights}")
+    logger.info(f"Number of training samples: {num_samples} (MAX_ITER: {total_iterations}, BATCH_SIZE: {batch_size})")
+    
     if len(dataset_list) > 1:
         dataset_num_samples = np.round(np.array(dataset_weights, np.float32) * num_samples).astype(int)
         dataset_num_samples[-1] = num_samples - dataset_num_samples[:-1].sum()
@@ -37,15 +46,10 @@ def build_training_dataset(cfg):
     
     datasets = []
     for ds_name, ds_num_samples in zip(dataset_list, dataset_num_samples):
-        datasets.append(DATASET_BUILDERS[ds_name](cfg, ds_num_samples))
+        datasets.append(TRAINING_DATASET_BUILDERS[ds_name](cfg, ds_num_samples))
 
     if True:
         return listify(datasets)
-
-    if len(datasets) > 1:
-        return ConcatDataset(datasets)
-    else:
-        return datasets[0]
     
 
 def listify(datasets):
@@ -53,3 +57,11 @@ def listify(datasets):
     for ds in datasets:
         dataset_list.extend(ds.samples)
     return dataset_list
+
+
+def build_evaluation_dataset(cfg, dataset_name):
+    """
+    Load evaluation dataset in clips
+    """
+    eval_ds = EVALUATION_DATASET_BUILDERS[dataset_name](cfg)
+    return eval_ds.annotation_clips
