@@ -80,7 +80,7 @@ def load_config(args):
     base_cfg = get_base_config()
     cfg.set_new_allowed(True)
     cfg.merge_from_file(base_cfg)
-    print(cfg)
+    # print(cfg)
 
     if args.resume or args.eval_only:
         # check if checkpoint directory contains config file
@@ -91,6 +91,9 @@ def load_config(args):
         
         # update with checkpoint configuration
         cfg.merge_from_file(path_to_ckpt_config)
+        if args.eval_config:
+            cfg.set_new_allowed(True)
+            cfg.merge_from_file(args.eval_config)
 
     else:
         # experiment config
@@ -144,6 +147,13 @@ def get_cl_arguments():
         default="tcp://127.0.0.1:{}".format(port),
         help="initialization URL for pytorch distributed backend. See "
         "https://pytorch.org/docs/stable/distributed.html for details.",
+    )
+    
+    parser.add_argument(           # eval
+        "--eval-config", 
+        type=str,
+        default=None,
+        help="custom evaluation config"
     )
     
     parser.add_argument(           # eval
