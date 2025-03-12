@@ -4,17 +4,15 @@ load_dotenv()
 import sys
 sys.path.append(os.environ["DYNAMITE_VIDEO_WORKSPACE"])
 
-import cv2
-import yaml
 import wandb
 import torch
 import imgaug
 import random
-import logging
 import numpy as np
-from datetime import datetime, timedelta
 
+from detectron2.utils import comm
 from detectron2.engine import launch
+from detectron2.utils.logger import setup_logger
 from detectron2.checkpoint import DetectionCheckpointer
 
 from dynamite_video.training.trainer import Trainer
@@ -30,13 +28,15 @@ def seed_rngs(seed: int):
 
 
 def training_pipeline(cfg, args):
-    print("Welcome to DynaMITe-Video Training Pipeline!")
-
     # set seeds manually
     seed_rngs(args.seed_id)
 
+    logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name=__name__)
+    logger.info("Welcome to DynaMITe-Video Training Pipeline!")
+
     # W&B
     if cfg.WANDB.ENABLE:
+        logger.info(f"Monitoring progress at W&B!!")
         wandb.init(entity=cfg.WANDB.ENTITY, 
                    project=cfg.WANDB.PROJECT, 
                    name=cfg.WANDB.RUN_NAME, 
@@ -50,7 +50,8 @@ def training_pipeline(cfg, args):
 
 
 def evaluation_pipeline(cfg, args):
-    print("Welcome to DynaMITe-Video Evaluation Pipeline!")
+    logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name=__name__)
+    logger.info("Welcome to DynaMITe-Video Evaluation Pipeline!")
 
     # load model architecture
     model = Trainer.build_model(cfg)

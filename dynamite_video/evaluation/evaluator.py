@@ -1,15 +1,12 @@
 from detectron2.engine import DefaultTrainer
 
+from dynamite_video.data.dataset_builder import build_evaluation_dataset
 from dynamite_video.evaluation.interactive_evaluation import evaluate
 
 class Evaluator(DefaultTrainer):
 
     # def __init__(self, cfg):
     #     self.cfg = cfg
-
-    @classmethod
-    def build_test_loader(cls, dataset_name):
-        ...
     
     @classmethod
     def interactive_evaluation(cls, cfg, args):
@@ -25,7 +22,7 @@ class Evaluator(DefaultTrainer):
         # NOTE - evaluation only supported for a handful of datasets
         for dataset_name in eval_datasets:
 
-            dataloader = cls.build_test_loader(cfg, dataset_name)
-            result = evaluate()
+            eval_dataset = build_evaluation_dataset(cfg, dataset_name)
+            result = evaluate(eval_dataset)
         
         # save result - TODO
