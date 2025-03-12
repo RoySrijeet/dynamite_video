@@ -87,18 +87,17 @@ class KITTISTEPTrainingDataset(TrainingDataset):
             # video resolution
             img_dims = (seq['height'], seq['width'])
             
-            updated_segmentations = []
-            salient_classes = []
-            accepted_track_ids = {}
+            updated_segmentations = []      # store valid segmentations (binary)
+            salient_classes = []            # store salient class IDs whose instances are present in the frame
+            accepted_track_ids = {}         # store accepted instance IDs
             
-            # salient classes (with instance-level annotations)
-            # KITTI-STEP has only two salient classes - 'person' and 'car'
+            # salient classes ('person' and 'car') - with instance-level annotations
             for fr_idx, segs_t in enumerate(seq['segmentations']):
                 
                 updated_segmentations.append(dict())
                 salient_classes.append(set())
                 
-                # add the instance masks of the salient classes
+                # add instance masks of the salient classes
                 for track_id, seg in segs_t.items():
                     # only consider instances with a minimum mask area
                     if self.mask_area(seg, img_dims) >= MIN_MASK_AREA:
@@ -108,9 +107,11 @@ class KITTISTEPTrainingDataset(TrainingDataset):
                         # note the salient classes present in the frame
                         salient_classes[-1].add(seq['categories'][track_id])
 
+            # maximum instance ID (belonging only to salient classes) seen across all frames
             max_track_id = max(accepted_track_ids.keys())
             
             # panoptic masks of 'stuff' classes
+            # Label values for panoptic class annotations start from max_track_id + 1 
             for fr_idx, pano_masks in enumerate(seq["semantic_segmentations"]):
                 for class_id, pano_seg in pano_masks.items():
                     
@@ -118,12 +119,13 @@ class KITTISTEPTrainingDataset(TrainingDataset):
                     if class_id == '255':
                         continue
                     
-                    # record 'stuff' classes
-                    if class_id not in salient_classes and self.mask_area(pano_seg, img_dims) >= MIN_MASK_AREA:
-                        # store panoptic mask with unique ID per 'stuff' class
-                        stuff_track_id = max_track_id + int(class_id) + 1
-                        updated_segmentations[fr_idx][stuff_track_id] = pano_seg
-                        accepted_track_ids[int(stuff_track_id)] = int(class_id)
+                    # skip any annotation that belongs to the salient instances present in this frame
+                    if int(class_id) not in salient_classes[fr_idx]:
+                        if self.mask_area(pano_seg, img_dims) >= MIN_MASK_AREA:
+                            # store panoptic mask with unique ID per 'stuff' class
+                            stuff_track_id = max_track_id + int(class_id) + 1
+                            updated_segmentations[fr_idx][stuff_track_id] = pano_seg
+                            accepted_track_ids[int(stuff_track_id)] = int(class_id)
 
                     # TODO - some salient classes may not be fully represented in instance masks
                     # they automatically become part of the background
