@@ -217,8 +217,8 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         if self.training:
             prev_output = None
-            #num_iters = random.randint(0, self.max_num_interactions)
-            num_iters = random.randint(1, self.max_num_interactions)
+            num_iters = random.randint(0, self.max_num_interactions)   # TODO - reset
+            # num_iters = random.randint(1, self.max_num_interactions)
 
             for i in range(num_iters):
                 prev_output = self.iterative_batch_forward(multi_scale_features, src, pos, size_list, 
@@ -272,9 +272,9 @@ class DynamiteInteractiveTransformer(nn.Module):
         # TxQxhxw -(sigmoid)-> TxQxhxw -(flatten)-> TxQx(hw) -unsqueeze-> Tx1xQx(hw) -(repeat)-> TxMxQx(hw) -(flatten)-> (TM)xQx(hw)    [M - num attn heads]
         # attn_mask = (attn_mask.sigmoid().flatten(2).unsqueeze(1).repeat(1, self.num_heads, 1, 1).flatten(0, 1) < 0.5).bool()    # (T*M)xQx(hw)
         
-        # T,Q,h,w -(sigm)> T,Q,h,w -(flat)> T,Q,(hw) -(transpose)> T,(hw),Q -(flat)> (Thw),Q -(unsqueeze)> (Thw),1,Q -(repeat)> (Thw),M,Q
-        attn_mask = (attn_mask.sigmoid().flatten(2).transpose(1,2).flatten(0,1).unsqueeze(0).repeat(self.num_heads,1,1) < 0.5).bool()    # (T*hw*M)xQ
-        attn_mask = attn_mask.transpose(1,2).detach()
+        # T,Q,h,w -(sigm)> T,Q,h,w -(flat)> T,Q,(hw) -(transpose)> T,(hw),Q -(flat)> (Thw),Q -(unsqueeze)> 1,(Thw),Q -(repeat)> M,(Thw),Q
+        attn_mask = (attn_mask.sigmoid().flatten(2).transpose(1,2).flatten(0,1).unsqueeze(0).repeat(self.num_heads,1,1) < 0.5).bool()    # M,(Thw),Q
+        attn_mask = attn_mask.transpose(1,2).detach()   # M,Q,Thw
 
         return outputs_mask, attn_mask
 
