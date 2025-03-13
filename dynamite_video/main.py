@@ -54,12 +54,12 @@ def evaluation_pipeline(cfg, args):
     logger.info("Welcome to DynaMITe-Video Evaluation Pipeline!")
 
     # load model architecture
-    model = Trainer.build_model(cfg)
+    model = Evaluator.build_model(cfg)
     # load model weights from cfg.MODEL.WEIGHTS
     DetectionCheckpointer(model, 
                           save_dir=cfg.OUTPUT_DIR).resume_or_load(cfg.MODEL.WEIGHTS)
     
-    Evaluator.interactive_evaluation(cfg, args)
+    Evaluator.interactive_evaluation(cfg, args, model)
 
 
 def main(args):
