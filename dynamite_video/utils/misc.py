@@ -168,6 +168,14 @@ def get_cl_arguments():
         help="perform evaluation only"
     )
 
+    parser.add_argument(            # eval
+        "--eval-strategy", 
+        type=str, 
+        default="random", 
+        help="Strategy to select the instance to add corrective clicks on. Default: 'random'"
+        "Choose between 'random', 'worst', 'best'."
+    )
+
     parser.add_argument(
         "--expt-dir",
         required=True, 
