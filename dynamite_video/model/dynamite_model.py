@@ -322,22 +322,6 @@ class DynamiteModel(nn.Module):
                     "padding_mask": padding_mask,
                 })
             targets.append(clip_targets)
-        
-        # targets = []
-        # for clip in inputs:
-        #     clip_labels = [0] * len(clip["instance_ids"])
-        #     if len(clip_labels) > 0:
-        #         clip_inst_msk = [torch.from_numpy(x).to(self.device) for x in clip["instance_masks"]]
-        #         clip_bg_msk = [torch.from_numpy(x).to(self.device) for x in clip["bg_masks"]]
-        #         clip_padding_msk = torch.from_numpy(clip["padding_mask"]).to(self.device)
-        #         targets.append({
-        #             "labels": clip_labels,  # TODO - figure out usage
-        #             "masks": clip_inst_msk,
-        #             "padding_mask": clip_padding_msk,
-        #             "bg_mask": clip_bg_msk
-        #         })
-        #     else:
-        #         targets.append(None)
         return targets
 
 

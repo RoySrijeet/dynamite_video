@@ -204,7 +204,7 @@ def apply_resizer(
 
         Args:
             images: [T, H, W, 3]
-            binary_masks: [N, T, H, W]
+            binary_masks: [T, N, H, W]
             mode: currently only supports "min_dim" which corresponds to resizing the
                 shortest edge
             min_dim: resize shorter edge to this size
@@ -259,7 +259,7 @@ def apply_random_horizontal_flip(
         
         Args:
             images: [T, H, W, 3]
-            binary_masks: [N, T, H, W]
+            binary_masks: [T, N, H, W]
             flip_axis: whether to flip horizontal or vertical.
                 Currently only "horizontal" flips are supported
             prob: apply flip with this probability

@@ -1,28 +1,62 @@
+from detectron2.utils import comm
 from detectron2.engine import DefaultTrainer
+from detectron2.utils.logger import setup_logger
 
 from dynamite_video.data.dataset_builder import build_evaluation_dataset
 from dynamite_video.evaluation.interactive_evaluation import evaluate
 
 class Evaluator(DefaultTrainer):
-
-    # def __init__(self, cfg):
-    #     self.cfg = cfg
     
     @classmethod
-    def interactive_evaluation(cls, cfg, args):
+    def interactive_evaluation(cls, cfg, args, model):
+        """
+        Perform interactive evaluation on evaluation datasets one-by-one
+
+        Args:
+            cfg: experiment configuration
+            args: command line arguments
+            model: trained model (with weights already loaded)
+        """
         
+        
+        logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name=__name__)
+
         eval_datasets = args.eval_datasets
-        vis_path = args.vis_path
-        seed_id = args.seed_id
         iou_threshold = args.iou_threshold
         max_interactions = args.max_interactions
+        eval_strategy = args.eval_strategy
+        seed_id = args.seed_id
+        vis_path = args.vis_path
+
+        logger.info("Initiating interactive evaluation with following setup:")
+        logger.info(f"Evaluation datasets: {eval_datasets}")
+        logger.info(f"IoU threshold: {iou_threshold}")
+        logger.info(f"Max #interactions: {max_interactions}")
+        logger.info(f"Evaluation strategy: {eval_strategy}")
+        logger.info(f"Random seed: {seed_id}")
+        logger.info(f"Output path: {cfg.OUTPUT_DIR}")
+        if vis_path is not None:
+            logger.info(f"More visualizations saved in: {vis_path}")
+
 
         # assert iou_threshold >= 0.80
 
-        # NOTE - evaluation only supported for a handful of datasets
+        # Evaluate one dataset at a time
         for dataset_name in eval_datasets:
-
-            eval_dataset = build_evaluation_dataset(cfg, dataset_name)
-            result = evaluate(eval_dataset)
+            
+            logger.info(f"Loading dataset: {dataset_name} ...")
+            
+            # build clips from input dataset
+            data = build_evaluation_dataset(cfg, dataset_name)
+            
+            result = evaluate(model,
+                            data,
+                            iou_threshold=iou_threshold,
+                            max_interactions=max_interactions,
+                            eval_strategy=eval_strategy,
+                            seed_id=seed_id,
+                            output_path=cfg.OUTPUT_DIR,
+                            vis_path=vis_path
+                    )
         
         # save result - TODO
