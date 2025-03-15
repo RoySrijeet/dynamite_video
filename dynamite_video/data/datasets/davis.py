@@ -280,8 +280,6 @@ class DAVISInferenceDataset(InferenceDataset):
 
         self.path_to_annotations = Paths.to_davis_annotations()
         self.path_to_val_imset = Paths.to_davis_val_imset()
-        
-        return self.create_inference_dataset()
 
     
     def create_inference_dataset(self):

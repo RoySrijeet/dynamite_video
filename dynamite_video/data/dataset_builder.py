@@ -48,8 +48,7 @@ def build_training_dataset(cfg):
     for ds_name, ds_num_samples in zip(dataset_list, dataset_num_samples):
         datasets.append(TRAINING_DATASET_BUILDERS[ds_name](cfg, ds_num_samples))
 
-    if True:
-        return listify(datasets)
+    return listify(datasets)
     
 
 def listify(datasets):
@@ -64,4 +63,4 @@ def build_evaluation_dataset(cfg, dataset_name):
     Load evaluation dataset in clips
     """
     eval_ds = EVALUATION_DATASET_BUILDERS[dataset_name](cfg)
-    return eval_ds.annotation_clips
+    return eval_ds.create_inference_dataset()
