@@ -20,7 +20,7 @@ from torch.utils.data import Dataset, ConcatDataset as _ConcatDataset
 from dynamite_video.data.generic_video_parser import GenericVideoSequence
 from dynamite_video.data.utils.data_utils import apply_resizer
 from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks
-from dynamite_video.data.utils.clicker import get_clicks_coords_evaluation
+from dynamite_video.data.utils.clicker import get_center_coords
 
 
 ######################### TRAINING DATASET BASE ###################################
@@ -591,177 +591,80 @@ class InferenceDataset(Dataset):
         self.sample_image_dims = []
         self.sample_instance_counts = []
 
-    def create_inference_clips(self, annotations):
-        
-        all_clips = []
-        import pickle
-        
-        for seq in annotations["sequences"]:
-            
-            seq_length = len(seq["image_paths"])
-            img_dims = seq["height"], seq["width"]
-            
-            # IDs of the instances present in the sequence
-            seq_instances = list(seq["categories"].keys())
-            # serialize instance IDs
-            orig_to_serial_ids, serial_to_orig_ids = self.serialize_instance_ids(seq_instances)
-            
-            # clip indices - subsequent clips have an overlap specified by self.num_overlapping_frames
-            indices = []
-            step = self.clip_length - self.num_overlapping_frames
-            start = 0
-            while start + self.clip_length <= seq_length:
-                indices.append(tuple(range(start, start + self.clip_length)))
-                start += step
-            if indices[-1][-1] != seq_length - 1:
-                indices.append(tuple(range(indices[-1][-1] - self.num_overlapping_frames +1, seq_length)))
-            seq["clip_indices"] = indices
-
-
-            # load images and ground truth mask of each clip
-            sequence_clips = []
-            click_start_t = 1
-            for clip_idx, clip_indices in enumerate(indices):
-                
-                clip_images = []
-                clip_masks = []
-                
-                # load images
-                clip_images = self.load_images(seq["image_paths"], clip_indices)
-                clip_images = np.stack(clip_images)                                       # [T, H, W, 3]
-
-                # load masks
-                clip_rles = [seq["segmentations"][t] for t in clip_indices]
-                clip_masks, clip_instances, frame_instance_occupancy = self.prepare_masks(clip_rles, img_dims, seq_instances, orig_to_serial_ids)
-                clip_masks = np.stack([np.stack(masks_t) for masks_t in clip_masks]).astype('uint8')    # [T, N, H, W]
-                
-                # resize
-                clip_images, clip_masks = apply_resizer(clip_images,
-                                                        clip_masks,
-                                                        mode='min_dim',
-                                                        min_dim=self.cfg.INPUT.AUGMENTATION.MIN_DIM_TEST,
-                                                        max_dim=self.cfg.INPUT.AUGMENTATION.MAX_DIM_TEST,
-                                                    )
-                
-                clip_images = np.transpose(clip_images, (0, 3, 1, 2))   # [T, H, W, 3] -> [T, 3, H, W]
-                if self.cfg.INPUT.RGB:
-                    # BGR -> RGB (load_images uses cv2.imread which reads images in BGR mode by default)
-                    clip_images = np.flip(clip_images, 1).copy()
-
-                # padding - there's no padding applied
-                padding_mask = np.zeros((clip_images.shape[2], clip_images.shape[3])).astype('uint8')
-
-                # background masks
-                bg_masks = []
-                for fr_masks in clip_masks:
-                    dummy = np.ones_like(fr_masks[0])
-                    for inst_mask in fr_masks:
-                        dummy[np.where(inst_mask==1)] = 0
-                    bg_masks.append(dummy)
-                bg_masks = np.stack(bg_masks).astype('uint8')   # [T,H,W]
-
-                # get clicks
-                num_clicks_per_object, fg_coords_list, bg_coords_list, max_timestamp = get_clicks_coords_evaluation(
-                                                                                                instance_masks=clip_masks,
-                                                                                                clip_instance_ids=clip_instances,
-                                                                                                sequence_instance_ids=list(serial_to_orig_ids.keys()),
-                                                                                                frame_instance_occupancy=frame_instance_occupancy,
-                                                                                                max_num_points=1,
-                                                                                                first_click_center=True,
-                                                                                                start_t=click_start_t,
-                                                                                            )
-                
-                click_start_t = max(max_timestamp) + 1
-
-                num_instances_per_frame = [len(fr_inst) for fr_inst in clip_instances]
-
-                entry = {
-                    "id": seq["id"] + f"_{clip_idx}",
-                    "orig_dims": img_dims,
-                    "indices": clip_indices,
-                    "images": clip_images,
-                    "num_instances_per_frame": num_instances_per_frame,
-                    "num_clicks_per_object": num_clicks_per_object,
-                    "fg_coords_list": fg_coords_list,
-                    "bg_coords_list": bg_coords_list,
-                    "max_timestamp_list": max_timestamp,
-                    "instance_masks": clip_masks,
-                    "bg_masks": bg_masks,
-                    "padding_mask": padding_mask,
-                    "orig_to_serial_ids": orig_to_serial_ids,
-                    "serial_to_orig_ids": serial_to_orig_ids,
-                }
-                sequence_clips.append(entry)
-            
-            all_clips.append(sequence_clips)
-        
-        return all_clips
     
-
-    def load_images(self, image_paths, frame_idxes=None):
+    def load_images(self, filepaths):
         """
-        Load frames from the video sequence from disc.
+        Given a list of filepaths, load JPEG images from the disc
 
-        NOTE: the images are loaded in `cv2.imread(f, flags=cv2.IMREAD_COLOR)` mode,
-        which is the default behavior. This loads the image in BGR format, not RGB.
+        NOTE: the images are loaded in the default `cv2.imread(f, flags=cv2.IMREAD_COLOR)` 
+        mode. This loads the image in BGR format, not RGB.
 
         Args:
-            image_paths: path to JPEG image files
-            frame_idxes: if set, load JPGs of specified frames
-
+            filepaths: list of paths to JPEG files
+        
         Returns:
-            images: a list of `np.ndarray`, each array being an [H, W, 3] image (uint8)
+            np.ndarray of shape [T,H,W,3]
         """
-        if frame_idxes is None:
-            frame_idxes = list(range(len(image_paths)))
-
         images = []
-        for t in frame_idxes:
-            im = cv2.imread(image_paths[t], cv2.IMREAD_COLOR)
-
+        for fp in filepaths:
+            im = cv2.imread(fp, cv2.IMREAD_COLOR)
             if im is None:
-                raise ValueError("No image found at path: {}".format(image_paths[t]))
+                raise ValueError("No image found at path: {}".format(fp))
             images.append(im)
-
+        
+        images = np.stack(images)     # [T, H, W, 3]
         return images
 
-
-    def prepare_masks(self, clip_rles, size, seq_instance_ids, orig_to_serial_ids):
+    
+    def load_png_masks(self, filepaths):
         """
-        Decode RLE masks into np.ndarray
+        Given a list of filepaths, load PNG masks from the disc.
 
         Args:
-            clip_rles: list of RLE dictionaries, one for each frame of the clip. Each dictionary
-                    contains (inst_id, rle) pairs.
-            size: dimensions of the mask, (H, W)
-            seq_instance_ids: instances present in the source video sequence of the clip
-            orig_to_serial_ids: mapping between original instance ids and serialized instance ids 
-        """
+            filepaths: list of paths to PNG files
         
-        clip_masks = []
-        clip_instances = []
-        frame_instance_occupancy = defaultdict(list)
+        Returns:
+            
+        """
+        # store semantic maps - expected shape [T,H,W]
+        semantic_maps = []
+        # store bg masks - expected shape [T,H,W]
+        bg_masks = []
+        # store instance IDs present in each frame
+        instances_per_frame = []
+        # for each instance, store index of the frame where it first appeared
+        instance_discovery = {}
+        
+        for fr_idx, fp in enumerate(filepaths):
+            try:
+                msk = np.asarray(Image.open(fp)).astype('uint8')
+            except:
+                raise RuntimeError(f"Problem loading mask from {fp}")
+            
+            semantic_maps.append(msk)
+            
+            # instances present in this frame
+            instances = list(np.unique(msk))[1:]
+            instances_per_frame.append(instances)
 
-        for fr_idx, frame_rles in enumerate(clip_rles):
-            # store binary instance masks of each frame
-            frame_masks = []
-            frame_instances = []
+            # instance discovery
+            for inst_id in instances:
+                if inst_id not in instance_discovery.keys():
+                    instance_discovery[inst_id] = fr_idx
             
-            for inst_id in seq_instance_ids:
-                # check for binary mask of each instance of the sequence
-                # pad empty for ones that are absent
+            # bg mask
+            bg_msk = (msk == 0).astype('uint8')
+            bg_masks.append(bg_msk)
+        
+        semantic_maps = np.stack(semantic_maps)
+        bg_masks = np.stack(bg_masks)
 
-                if inst_id in frame_rles.keys():
-                    frame_masks.append(self.decode_mask(frame_rles[inst_id], size))
-                    frame_instances.append(orig_to_serial_ids[inst_id])
-                    frame_instance_occupancy[orig_to_serial_ids[inst_id]].append(fr_idx)
-                else:
-                    frame_masks.append(np.zeros(size))
-            
-            clip_masks.append(frame_masks)
-            clip_instances.append(frame_instances)
-        return clip_masks, clip_instances, frame_instance_occupancy
-            
+        return semantic_maps, bg_masks, instances_per_frame, instance_discovery
+    
+
+    def load_rle_masks(self):
+        ...
+
 
     def serialize_instance_ids(self, orig_ids):
         """
@@ -780,42 +683,269 @@ class InferenceDataset(Dataset):
         serial_to_orig_id = OrderedDict(zip(serial_ids, orig_ids))
         orig_to_serial_id = OrderedDict(zip(orig_ids, serial_ids))
         return orig_to_serial_id, serial_to_orig_id
+
+
+
+    ####################
+
+
+    # def create_inference_clips_base(self, annotations):
+    #     """
+    #     Given a dictionary of annotations for all sequences in a dataset, extract clips 
+    #     from the sequences.
+
+    #     Args:
+    #         annotations: dict
+    #     """
+        
+    #     all_clips = []
+    #     import pickle
+        
+    #     for seq in annotations["sequences"]:
+            
+    #         # store sequence level info
+    #         metadata = {
+    #             "id": seq["id"],
+    #             "length": len(seq["image_paths"]),
+    #             "orig_dims": (seq["height"], seq["width"]),
+    #             "categories": seq["categories"],
+    #             "num_overlapping_frames": self.num_overlapping_frames,
+    #         }
+            
+    #         # IDs of the instances present in the sequence
+    #         seq_instances = list(seq["categories"].keys())
+    #         # serialize instance IDs
+    #         orig_to_serial_ids, serial_to_orig_ids = self.serialize_instance_ids(seq_instances)
+    #         assert seq_instances == list(orig_to_serial_ids.keys())
+    #         metadata["orig_to_serial_ids"] = orig_to_serial_ids
+    #         metadata["serial_to_orig_ids"] = serial_to_orig_ids
+
+            
+    #         # clip indices - consecutive clips have an overlap specified by self.num_overlapping_frames
+    #         indices = []
+    #         step = self.clip_length - self.num_overlapping_frames
+    #         start = 0
+    #         while start + self.clip_length <= metadata["length"]:
+    #             indices.append(tuple(range(start, start + self.clip_length)))
+    #             start += step
+    #         if indices[-1][-1] != metadata["length"] - 1:
+    #             indices.append(tuple(range(indices[-1][-1] - self.num_overlapping_frames +1, metadata["length"])))
+            
+
+    #         # initially, all instances are undiscovered
+    #         instances_not_seen = seq_instances.copy()
+    #         # for each instance in the sequence, store the frame_idx where it appears
+    #         instance_discovery = {}
+            
+    #         sequence_clips = {"clips": []}
+    #         start_t = 1   # time-stamp of first click; shared across the clips
+    #         for clip_idx, clip_indices in enumerate(indices):
+                
+    #             clip_images = []
+    #             clip_masks = []
+                
+    #             # load images
+    #             clip_images = self.load_images(seq["image_paths"], clip_indices)
+    #             clip_images = np.stack(clip_images)     # [T, H, W, 3]
+
+    #             # load masks
+    #             clip_rles = [seq["segmentations"][t] for t in clip_indices]
+    #             clip_masks, clip_instances, frame_instance_occupancy = self.prepare_masks(clip_rles, metadata["orig_dims"], seq_instances, orig_to_serial_ids)
+    #             clip_masks = np.stack([np.stack(masks_t) for masks_t in clip_masks]).astype('uint8')    # [T, N, H, W]
+    #             num_instances_per_frame = [len(fr_inst) for fr_inst in clip_instances]
+
+    #             # resize
+    #             clip_images, clip_masks = apply_resizer(clip_images,
+    #                                                     clip_masks,
+    #                                                     mode='min_dim',
+    #                                                     min_dim=self.cfg.INPUT.AUGMENTATION.MIN_DIM_TEST,
+    #                                                     max_dim=self.cfg.INPUT.AUGMENTATION.MAX_DIM_TEST,
+    #                                                 )
+                
+    #             clip_images = np.transpose(clip_images, (0, 3, 1, 2))   # [T, H, W, 3] -> [T, 3, H, W]
+    #             if self.cfg.INPUT.RGB:
+    #                 # BGR -> RGB (load_images uses cv2.imread which reads images in BGR mode by default)
+    #                 clip_images = np.flip(clip_images, 1).copy()
+
+    #             # padding - there's no padding applied
+    #             padding_mask = np.zeros((clip_images.shape[2], clip_images.shape[3])).astype('uint8')
+
+    #             # background masks
+    #             bg_masks = []
+    #             for fr_masks in clip_masks:
+    #                 dummy = np.ones_like(fr_masks[0])
+    #                 for inst_mask in fr_masks:
+    #                     dummy[np.where(inst_mask==1)] = 0
+    #                 bg_masks.append(dummy)
+    #             bg_masks = np.stack(bg_masks).astype('uint8')   # [T,H,W]
+                
+                
+    #             # check if current clip contains a new instance
+    #             local_instance_discovery = {}
+    #             for fr_idx, fr_instances in enumerate(clip_instances):
+    #                 for inst_id in fr_instances:
+    #                     if inst_id in instances_not_seen:
+    #                         # a new instance appeared for the first time
+    #                         instance_discovery[orig_to_serial_ids[inst_id]] = clip_indices[fr_idx]
+    #                         local_instance_discovery[orig_to_serial_ids[inst_id]] = fr_idx
+    #                         instances_not_seen.remove(inst_id)
+
+
+    #             # buffers to store click information
+    #             num_frames = len(clip_indices)
+    #             num_clicks_per_object = np.zeros((num_frames, len(orig_to_serial_ids.keys()))).astype('int')
+    #             fg_coords_list = [[] for _ in range(num_frames)]
+    #             bg_coords_list = [[] for _ in range(num_frames)]
+    #             max_timestamp = [0 for _ in range(num_frames)]
+
+
+    #             # get clicks on newly discovered instances
+    #             if len(local_instance_discovery) > 0:
+    #                 for inst_id, fr_idx in local_instance_discovery.items():
+    #                     # instance mask
+    #                     _mask = clip_masks[fr_idx][inst_id-1]
+    #                     # center coordinates
+    #                     center_coords = get_center_coords(_mask)
+    #                     fg_coords_list[fr_idx].append([center_coords[0], center_coords[1], inst_id, fr_idx, start_t])
+
+    #                     num_clicks_per_object[fr_idx][inst_id-1]+=1
+    #                     max_timestamp[fr_idx] = start_t
+    #                     start_t += 1
+
+
+    #             # num_clicks_per_object, fg_coords_list, bg_coords_list, max_timestamp = get_clicks_coords_evaluation(
+    #             #                                                                                 instance_masks=clip_masks,
+    #             #                                                                                 clip_instance_ids=clip_instances,
+    #             #                                                                                 sequence_instance_ids=list(serial_to_orig_ids.keys()),
+    #             #                                                                                 frame_instance_occupancy=frame_instance_occupancy,
+    #             #                                                                                 max_num_points=1,
+    #             #                                                                                 first_click_center=True,
+    #             #                                                                                 start_t=start_t,
+    #             #                                                                             )                
+    #             # start_t = max(max_timestamp) + 1
+
+    #             entry = {
+    #                 "clip_idx": clip_idx,
+    #                 "frame_indices": clip_indices,
+    #                 "images": clip_images,
+    #                 "instance_masks": clip_masks,
+    #                 "bg_masks": bg_masks,
+    #                 "padding_mask": padding_mask,
+    #                 "num_instances_per_frame": num_instances_per_frame,
+    #                 "num_clicks_per_object": num_clicks_per_object.tolist(),
+    #                 "fg_coords_list": fg_coords_list,
+    #                 "bg_coords_list": bg_coords_list,
+    #                 "max_timestamp_list": max_timestamp,
+    #             }
+    #             sequence_clips["clips"].append(entry)
+            
+    #         sequence_clips["metadata"] = metadata
+    #         all_clips.append(sequence_clips)
+        
+    #     return all_clips
+    
+
+    # def load_images_base(self, image_paths, frame_idxes=None):
+    #     """
+    #     Load frames from the video sequence from disc.
+
+    #     NOTE: the images are loaded in `cv2.imread(f, flags=cv2.IMREAD_COLOR)` mode,
+    #     which is the default behavior. This loads the image in BGR format, not RGB.
+
+    #     Args:
+    #         image_paths: path to JPEG image files
+    #         frame_idxes: if set, load JPGs of specified frames
+
+    #     Returns:
+    #         images: a list of `np.ndarray`, each array being an [H, W, 3] image (uint8)
+    #     """
+    #     if frame_idxes is None:
+    #         frame_idxes = list(range(len(image_paths)))
+
+    #     images = []
+    #     for t in frame_idxes:
+    #         im = cv2.imread(image_paths[t], cv2.IMREAD_COLOR)
+
+    #         if im is None:
+    #             raise ValueError("No image found at path: {}".format(image_paths[t]))
+    #         images.append(im)
+
+    #     return images
+
+
+    # def prepare_masks(self, clip_rles, size, seq_instance_ids, orig_to_serial_ids):
+    #     """
+    #     Decode RLE masks into np.ndarray
+
+    #     Args:
+    #         clip_rles: list of RLE dictionaries, one for each frame of the clip. Each dictionary
+    #                 contains (inst_id, rle) pairs.
+    #         size: dimensions of the mask, (H, W)
+    #         seq_instance_ids: instances present in the source video sequence of the clip
+    #         orig_to_serial_ids: mapping between original instance ids and serialized instance ids 
+    #     """
+        
+    #     clip_masks = []
+    #     clip_instances = []
+    #     frame_instance_occupancy = defaultdict(list)
+
+    #     for fr_idx, frame_rles in enumerate(clip_rles):
+    #         # store binary instance masks of each frame
+    #         frame_masks = []
+    #         frame_instances = []
+            
+    #         for inst_id in seq_instance_ids:
+    #             # check for binary mask of each instance of the sequence
+    #             # pad empty for ones that are absent
+
+    #             if inst_id in frame_rles.keys():
+    #                 frame_masks.append(self.decode_mask(frame_rles[inst_id], size))
+    #                 frame_instances.append(orig_to_serial_ids[inst_id])
+    #                 frame_instance_occupancy[orig_to_serial_ids[inst_id]].append(fr_idx)
+    #             else:
+    #                 frame_masks.append(np.zeros(size))
+            
+    #         clip_masks.append(frame_masks)
+    #         clip_instances.append(frame_instances)
+    #     return clip_masks, clip_instances, frame_instance_occupancy
     
     
-    def decode_mask(self, encoded_mask: Union[str, List[int]], size=None):
-        """
-        Decode RLE mask into `np.ndarray`
+    # def decode_mask(self, encoded_mask: Union[str, List[int]], size=None):
+    #     """
+    #     Decode RLE mask into `np.ndarray`
 
-        Args:
-            encoded_mask: RLE mask
-            size: mask dimensions
+    #     Args:
+    #         encoded_mask: RLE mask
+    #         size: mask dimensions
         
-        Returns:
-            `np.ndarray` of dimensions `size`
-        """
-        if size is None:
-            assert isinstance(encoded_mask, dict)
-            assert 'counts' in encoded_mask.keys()
-            assert 'size' in encoded_mask.keys()
-            return np.ascontiguousarray(mt.decode(encoded_mask)).astype(np.uint8)
+    #     Returns:
+    #         `np.ndarray` of dimensions `size`
+    #     """
+    #     if size is None:
+    #         assert isinstance(encoded_mask, dict)
+    #         assert 'counts' in encoded_mask.keys()
+    #         assert 'size' in encoded_mask.keys()
+    #         return np.ascontiguousarray(mt.decode(encoded_mask)).astype(np.uint8)
 
-        if isinstance(encoded_mask, list):  # polygons
-            encoded_mask = {
-                "counts": encoded_mask,
-                "size": size,
-            }
-            encoded_mask = mt.frPyObjects(encoded_mask, size[0], size[1])
+    #     if isinstance(encoded_mask, list):  # polygons
+    #         encoded_mask = {
+    #             "counts": encoded_mask,
+    #             "size": size,
+    #         }
+    #         encoded_mask = mt.frPyObjects(encoded_mask, size[0], size[1])
         
-        else:  # RLE mask
-            assert isinstance(encoded_mask, str), f"Unexpected encoded mask type: {type(encoded_mask)}"
-            encoded_mask = {
-                "counts": encoded_mask.encode("utf-8"),
-                "size": size
-            }
+    #     else:  # RLE mask
+    #         assert isinstance(encoded_mask, str), f"Unexpected encoded mask type: {type(encoded_mask)}"
+    #         encoded_mask = {
+    #             "counts": encoded_mask.encode("utf-8"),
+    #             "size": size
+    #         }
         
-        return np.ascontiguousarray(mt.decode(encoded_mask)).astype(np.uint8)
+    #     return np.ascontiguousarray(mt.decode(encoded_mask)).astype(np.uint8)
 
 
+
+########################### CONCATENATED DATASET ###########################
 
 class ConcatDataset(_ConcatDataset):
     """
