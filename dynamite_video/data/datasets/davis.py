@@ -251,6 +251,12 @@ class DAVISTrainingDataset(TrainingDataset):
 
 
 class DAVISInferenceDataset(InferenceDataset):
+    """
+    Inference dataset for DAVIS ("val" split).
+
+    Loads image and mask files from the disc and generates indices
+    of clips that are to be used in inference forward pass.
+    """
     
     def __init__(self, cfg):
         # number of frames in each training sample
@@ -282,19 +288,40 @@ class DAVISInferenceDataset(InferenceDataset):
         """
         Prepare dataset for evaluation. Involves the following steps:
             1. Load images and masks from files
-            2. Extract clip metadata from the sequence
+            2. Serialize instance IDs. NOTE: All structures loaded in this routine use the 
+            serialized IDs
+            3. Generate indices for extracting clips/sub-sequences from each sequence
+            that is to be used for inference forward pass
+        
+        For each sequence, return a dictionary containing the following keys:
+            * "id": str, sequence name
+            * "length": int, length of the sequence (T)
+            * "orig_dims": tuple(int), original resolution of sequence frames
+            * "images": [T,3,H,W] np.ndarray, RGB images of the sequence frames
+            * "instance_masks": [T,N,H,W] np.ndarray, binary segmentation masks of 
+                        instances in each frame (N: #instances in the sequence)
+            * "semantic_maps": [T,H,W] np.ndarray, semantic map of each frame
+            * "bg_masks": [T,H,W] np.ndarray, background mask of each frame
+            * "instances_per_frame": list, IDs of instances present in each frame
+            * "padding_mask": [H,W] np.ndarray, padding mask (a 0-array)
+            * "orig_to_serial_ids": dict, mapping between original instance IDs and 
+                        serialied instance IDs used by the model
+            * "serial_to_orig_ids": dict, mapping between serial instance IDs used 
+                        by the model and the original instance IDs
+            * "instance_discovery": dict, mapping between each instance ID and the 
+                        frame index where the instance first appeared
+            * "indices": list, frame indices for creating clips/sub-sequences
+
         """
 
         # load the list of evaluation sequences as a list
         with open(self.path_to_val_imset, 'r') as f:
             sequences = [seq.rstrip() for seq in f.readlines()]
-
         
         sequence_annotations = []
-        
         for seq in sequences:
             
-            metadata = {"id": f"{self.name}/{seq}"}
+            metadata = {"id": seq}
 
             # load images
             image_filepaths = sorted([os.path.join(self.path_to_images, seq, file) for file in os.listdir(os.path.join(self.path_to_images, seq)) if file.endswith('jpg')])
@@ -328,9 +355,14 @@ class DAVISInferenceDataset(InferenceDataset):
             if self.cfg.INPUT.RGB:
                 # BGR -> RGB (load_images uses cv2.imread which reads images in BGR mode by default)
                 images = np.flip(images, 1).copy()
-
+            
+            metadata["images"] = images
+            metadata["bg_masks"] = bg_masks
+            # padding - not applied
+            metadata["padding_mask"] = np.zeros((images.shape[2], images.shape[3])).astype('uint8')
             
             # serialize instance IDs
+            
             # IDs of all instances present in the sequence
             orig_instance_ids = sorted(list(instance_discovery.keys()))
             orig_to_serial_ids, serial_to_orig_ids = self.serialize_instance_ids(orig_instance_ids)
@@ -358,6 +390,7 @@ class DAVISInferenceDataset(InferenceDataset):
                 instance_masks.append(np.stack(fr_inst_masks))
             
             instance_masks = np.stack(instance_masks)    # [T,N,H,W]
+            metadata["instance_masks"] = instance_masks
 
             # recreate semantic maps with serial instance IDs
             semantic_maps_serial = []
@@ -366,20 +399,12 @@ class DAVISInferenceDataset(InferenceDataset):
                 for inst_id, inst_mask in zip(sequence_instances_serial_ids, fr_inst_masks):
                     fr_map[np.where(inst_mask==1)] = inst_id
                 semantic_maps_serial.append(fr_map.astype('uint8'))
-
+                
+                # update record on which instances are present in this frame
                 instances_per_frame[fr_idx] = [orig_to_serial_ids[orig_inst_id] for orig_inst_id in instances_per_frame[fr_idx]]
-
-            semantic_maps = np.stack(semantic_maps_serial)
-
-            metadata["images"] = images
-            metadata["instance_masks"] = instance_masks
-            metadata["semantic_maps"] = semantic_maps
-            metadata["bg_masks"] = bg_masks
+            
+            metadata["semantic_maps"] = np.stack(semantic_maps_serial)
             metadata["instances_per_frame"] = instances_per_frame
-
-            # padding - there's no padding applied
-            padding_mask = np.zeros((images.shape[2], images.shape[3])).astype('uint8')
-            metadata["padding_mask"] = padding_mask
 
             # clip indices
             indices = []
