@@ -36,13 +36,14 @@ def training_pipeline(cfg, args):
 
     # W&B
     if cfg.WANDB.ENABLE:
-        logger.info(f"Monitoring progress at W&B!!")
-        wandb.init(entity=cfg.WANDB.ENTITY, 
-                   project=cfg.WANDB.PROJECT, 
-                   name=cfg.WANDB.RUN_NAME, 
-                   config=cfg,
-                   sync_tensorboard=True
-        )
+        if comm.get_rank()==0:
+            logger.info(f"Monitoring progress at W&B!!")
+            wandb.init(entity=cfg.WANDB.ENTITY, 
+                        project=cfg.WANDB.PROJECT, 
+                        name=cfg.WANDB.RUN_NAME, 
+                        config=cfg,
+                        sync_tensorboard=True
+                    )
 
     trainer = Trainer(cfg)
     trainer.resume_or_load(args.resume)
