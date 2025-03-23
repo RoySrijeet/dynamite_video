@@ -1,23 +1,21 @@
 # Adapted from https://github.com/amitrana001/DynaMITe
 
-from itertools import accumulate
-from typing import Tuple
 
+
+import copy
 import torch
+
 from torch import nn
 from torch.nn import functional as F
-import random
+from typing import Tuple
+
 from detectron2.config import configurable
-from detectron2.data import MetadataCatalog
 from detectron2.modeling import META_ARCH_REGISTRY, build_backbone, build_sem_seg_head
-from detectron2.modeling.backbone import Backbone
 from detectron2.modeling.postprocessing import sem_seg_postprocess
-from detectron2.structures import Boxes, ImageList, Instances, BitMasks
+from detectron2.structures import ImageList
 from detectron2.utils.memory import retry_if_cuda_oom
 
-# from mask2former.evaluation import iterative_evaluator
 from dynamite_video.model.utils.criterion import SetFinalCriterion
-#from dynamite_video.model.builder import build_backbone, build_sem_seg_head
 
 
 @META_ARCH_REGISTRY.register()
@@ -116,44 +114,60 @@ class DynamiteModel(nn.Module):
     def device(self):
         return self.pixel_mean.device
 
+    
     def forward(self, inputs, images=None,  num_instances=None,
                 features=None, mask_features=None, 
                 multi_scale_features=None, num_clicks_per_object= None,
                 fg_coords = None, bg_coords = None, max_timestamp=None):
         """
+        Forward pass through the DynaMITe model
+
         Args:
-            inputs: a list, batched outputs of :class:`DatasetMapper`.
-                Each item in the list contains the inputs for one image.
-                For now, each item in the list is a dict that contains:
-                   * "image": Tensor, image in (C, H, W) format.
-                   * "instances": per-region ground truth
-                   * "fg_click_coords": list of per-instance click coordinates
-                   * "bg_click_coords": list of background coordinates
-                   * "num_clicks_per_object": number of clicks sampled per instance
-                   * Other information that's included in the original dicts, such as:
-                     "height", "width" (int): the output resolution of the model (may be different
-                     from input resolution), used in inference.
+            inputs: a list, batch output from DataLoader.
+                    Each item in the list, is a dictionary and contains inputs for 
+                    one sample - a clip. The dictionary contains following keys:
+                * images: [T,3,H,W] np.ndarray, RGB images of the clip frames
+                * instance_masks: [T,N,H,W] np.ndarray, binary segmentation masks 
+                    of the instances in each frame of the clip
+                * semantic_masks: [T,H,W] np.ndarray, semantic map of each frame
+                * bg_masks: [T,H,W] np.ndarray, background mask of each frame
+                * padding_mask: [H,W] np.ndarray, padding applied
+                * instance_ids: list(int), IDs of the instances present in the cliip
+                * num_instances_per_frame: list(int), num of instances present in each
+                    frame of the clip
+                * frame_instance_occupancy: dict, mapping between instance ID and 
+                    frame indices where that instance appears in the clip
+                * fg_coords_list: list, foreground clicks sampled on each frame (at an
+                    instance-level)
+                * bg_coordsl_list: list, background clicks samples on each frame
+                * num_clicks_per_object: list, num of foreground sampled on each instance,
+                    in each frame
+                * max_timestamp_list: list, timestamp of last click sampled from each clip
+                * meta: metadata of the source sequence (original resolution, sequence name, 
+                    mappings between original and serialized/model instance IDs)
             features, mask_features, multi_scale_features:
-                these are computed once per image and passed as an argument to avoid recomputation
+                computed once per clip and passed as an argument to avoid recomputation
                 during iterative evaluation/inference
             fg_coords: a batched list where each item is
-                * list of list of clicks coordinates for each object
+                * list of list of clicks coordinates for each instance in each frame
             bg_coords: a batched list where each item is
-                * list of background coordinates
+                * list of background click coordinates from each frame
             num_clicks_per_object: a batched list where each item  is
-                * list of number of clicks per object/instance
-            max_timestamp: a batched list where each item  is
-                * maximum number of clicks for that image
-            num_instances:  a batched list where each item  is
-                * number of instances per image
+                * list of number of clicks per instance in each frame
+            max_timestamp: a batched list where each item is
+                * timestamp of last click sampled from each clip
+            num_instances:  a batched list where each item is
+                * a list of num of instances in frame
         Returns:
             list[Instances]:
                 each Instances has the predicted masks for one image.
 
         """
+        # NOTE: Currently batch size is fixed to 1.
         assert len(inputs) == 1, "Don't try more than one clip in a batch"
+        
+        # extract resources from batch
         if (images is None) or (num_clicks_per_object is None) or (fg_coords is None):
-            # extract resources from batch
             (
                 images, 
                 num_instances, 
@@ -162,7 +176,7 @@ class DynamiteModel(nn.Module):
                 bg_coords, 
                 max_timestamp
             ) = self.preprocess_batch_data(inputs)
-    
+
         if features is None:
             # extract backbone features from clip frames
             features = []
@@ -171,10 +185,9 @@ class DynamiteModel(nn.Module):
                 features.append(clip_fs)
 
         if self.training:
+            # prepare ground truth mask information
             targets = self.prepare_targets(inputs)
 
-            outputs = []
-            batch_num_clicks_per_object = []
             for sample_idx in range(len(inputs)):
             
                 sample_mask_features = mask_features[sample_idx] if mask_features is not None else None
@@ -204,52 +217,28 @@ class DynamiteModel(nn.Module):
                 return losses
            
         else:
-            (outputs, mask_features, multi_scale_features, num_clicks_per_object) = self.sem_seg_head(inputs,  images, features, num_instances,
-                                                                                    mask_features, 
-                                                                                    multi_scale_features, num_clicks_per_object,
-                                                                                    fg_coords, bg_coords, max_timestamp)
-            processed_results = self.process_results(inputs, images, outputs, num_instances, num_clicks_per_object)
+            # iterative evaluation - for each batch (a clip) we only compute image features and 
+            # mask features once and pass them as arguments to use them again in the next round
+
+            (outputs, mask_features, multi_scale_features, num_clicks_per_object) = self.sem_seg_head(
+                                                                                            inputs[0],
+                                                                                            images[0],
+                                                                                            features[0],
+                                                                                            num_instances[0],
+                                                                                            mask_features, 
+                                                                                            multi_scale_features, 
+                                                                                            num_clicks_per_object[0],
+                                                                                            fg_coords[0], 
+                                                                                            bg_coords[0], 
+                                                                                            max_timestamp[0])
+            processed_results = self.process_results(inputs[0], images[0], outputs, num_instances[0], num_clicks_per_object)
             if self.iterative_evaluation:
                 return (processed_results, outputs, images,  num_instances, features, mask_features,
                         multi_scale_features, num_clicks_per_object, fg_coords, bg_coords)
             else:
                 return processed_results
 
-    def process_results(self, inputs, images, outputs, num_instances, num_clicks_per_object=None):
-       
-        mask_pred_results = outputs["pred_masks"]
-        # upsample masks
-        mask_pred_results = F.interpolate(
-            mask_pred_results,
-            size=(images.tensor.shape[-2], images.tensor.shape[-1]),
-            mode="bilinear",
-            align_corners=False,
-        )
 
-        del outputs
-
-        if num_clicks_per_object is None:
-            num_clicks_per_object = [[1]*inst_per_image for inst_per_image in num_instances]
-
-        processed_results = []
-        for mask_pred_result, input_per_image, image_size, inst_per_image, num_clicks_per_object in zip(
-            mask_pred_results, inputs, images.image_sizes, num_instances, num_clicks_per_object
-        ):
-            height = input_per_image.get("height", image_size[0])
-            width = input_per_image.get("width", image_size[1])
-            processed_results.append({})
-            
-            mask_pred_result = retry_if_cuda_oom(sem_seg_postprocess)(
-                mask_pred_result, image_size, height, width
-            )
-    
-            # interactive instance segmentation inference
-            instance_r = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_result, inst_per_image, num_clicks_per_object)
-            processed_results[-1]["instances"] = instance_r
-
-        return processed_results
-
-    
     def preprocess_batch_data(self, inputs):
         """
         Given a batch of clips, extract images as `torch.Tensor` as well as
@@ -294,7 +283,7 @@ class DynamiteModel(nn.Module):
 
     def prepare_targets(self, inputs):
         """
-        Given a batch of clips, extract ground truth masks and labels of the instances
+        Extract ground truth masks and labels of the instances. Relevant only in the training.
 
         Args:
             inputs: batch
@@ -325,28 +314,72 @@ class DynamiteModel(nn.Module):
         return targets
 
 
-    def interactive_instance_inference(self, mask_pred, num_instances, num_clicks_per_object=None):
+    def process_results(self, inputs, images, outputs, num_instances, num_clicks_per_object):
+        """
+        Process results after one forward pass through the iterative evaluation
 
-        # mask_pred is already processed to have the same shape as original input
-        image_size = mask_pred.shape[-2:]
-        result = Instances(image_size)
-        # mask (before sigmoid)
-        import copy
+        Args:
+            inputs: current clip
+            images: d2 ImageList, [T, 3, H, W] tensors of the images in the clip
+            outputs: prediction 
+            num_instances: List [n_1, n_2, ..., n_T] where n_i is the #instances in the i-th frame
+            num_clicks_per_object: count of clicks on each instance in each frame
+        """
+       
+        mask_pred_results = outputs["pred_masks"]
+        # upsample masks
+        mask_pred_results = F.interpolate(
+            mask_pred_results,
+            size=(images.tensor.shape[-2], images.tensor.shape[-1]),
+            mode="bilinear",
+            align_corners=False,
+        )
+        del outputs
+
+        processed_results = []
+        
+        for mask_pred_per_image, image_size, inst_per_image, clicks_per_image in zip(mask_pred_results, images.image_sizes, num_instances, num_clicks_per_object):
+            height, width = image_size[0], image_size[1]
+
+            mask_pred_per_image = retry_if_cuda_oom(sem_seg_postprocess)(mask_pred_per_image, image_size, height, width)
+
+            # interactive instance segmentation inference
+            instance_r = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image, inst_per_image, clicks_per_image)
+            processed_results.append(instance_r)
+
+        processed_results = torch.stack(processed_results)
+        return processed_results
+    
+    
+    def interactive_instance_inference(self, mask_pred, num_instances, num_clicks_per_object):
+
         num_clicks_per_object_copy = copy.deepcopy(num_clicks_per_object)
-        num_clicks_per_object_copy.append(mask_pred.shape[0]-sum(num_clicks_per_object))
-
+        # handle zero clicks 
+        for i in range(len(num_clicks_per_object_copy)):
+            if num_clicks_per_object_copy[i] == 0:
+                num_clicks_per_object_copy[i]+=1
+        num_clicks_per_object_copy.append(mask_pred.shape[0]-sum(num_clicks_per_object_copy))
+        
         temp_out = []
-        splited_masks = torch.split(mask_pred, num_clicks_per_object_copy, dim=0)
-        for m in splited_masks[:-1]:
+        if num_clicks_per_object_copy[-1] == 0:
+            splited_masks = torch.split(mask_pred, num_clicks_per_object_copy[:-1], dim=0)
+        else:
+            splited_masks = torch.split(mask_pred, num_clicks_per_object_copy, dim=0)
+        for m in splited_masks:
             temp_out.append(torch.max(m, dim=0).values)
-        mask_pred = torch.cat([torch.stack(temp_out),splited_masks[-1]]) # can remove splited_masks[-1] all together
-
+        
+        mask_pred = torch.stack(temp_out)
         mask_pred = torch.argmax(mask_pred,0)
-        m = []
-        for i in range(num_instances):
-            m.append((mask_pred == i).float())
         
-        mask_pred = torch.stack(m)
-        result.pred_masks = mask_pred
-        
-        return result
+        if num_instances > 0:
+            if num_instances > 25:
+                raise
+            m = []
+            for i in range(num_instances):
+                m.append((mask_pred == i).float())
+            
+            mask_pred = torch.stack(m)
+        else:
+            assert mask_pred.ndim == 2
+     
+        return mask_pred

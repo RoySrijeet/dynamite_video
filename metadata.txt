@@ -11,7 +11,7 @@ pip3 install torch torchvision torchaudio # PyTorch: 2.5.1, CUDA 12.4
 pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
 
 pip3 install numpy==1.26.4 (numpy>2.0 causes issues)
-pip3 install matplotlib pillow opencv-python tqdm einops imgaug wandb timm
+pip3 install matplotlib pillow opencv-python tqdm einops imgaug wandb timm python-dotenv
 
 # detectron2
 git clone https://github.com/facebookresearch/detectron2.git

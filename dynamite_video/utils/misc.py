@@ -129,10 +129,10 @@ def get_cl_arguments():
                 Getting started:
 
                 Run on single machine:
-                    $ {sys.argv[0]} --num-gpus 8 --config-file cfg.yaml
+                    $ {sys.argv[0]} --num-gpus 4 --expt-dir path/to/experiment/folder
 
                 Change some config options:
-                    $ {sys.argv[0]} --config-file cfg.yaml MODEL.WEIGHTS /path/to/weight.pth SOLVER.BASE_LR 0.001
+                    $ {sys.argv[0]} --expt-dir path/to/experiment/folder MODEL.WEIGHTS /path/to/weight.pth SOLVER.BASE_LR 0.001
 
                 Run on multiple machines:
                     (machine0)$ {sys.argv[0]} --machine-rank 0 --num-machines 2 --dist-url <URL> [--other-flags]

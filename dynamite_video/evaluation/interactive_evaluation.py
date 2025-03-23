@@ -8,6 +8,8 @@ from contextlib import ExitStack, contextmanager
 from detectron2.utils import comm
 from detectron2.utils.logger import setup_logger
 
+from dynamite_video.evaluation.clicker import SequenceManager
+
 def evaluate(model, 
              dataset,
              iou_threshold=0.85,
@@ -52,8 +54,25 @@ def evaluate(model,
         random.seed(123456+seed_id)
         
         for sequence in dataset:
-            for clip in sequence:
-                ...
+            
+            # a fresh model for each sequence
+            predictor = Predictor(model)
+            manager = SequenceManager(sequence)
+
+            for indices in sequence["indices"]:
+                
+                # extract a clip
+                inputs = manager.extract_clip(indices)
+                # obtain prediction
+                pred_masks = predictor.get_prediction([inputs])
+
+                manager.save_pred_masks(pred_masks, indices)
+
+            
+            del predictor, manager
+
+
+
 
 
 
@@ -71,15 +90,38 @@ def inference_context(model):
     model.train(training_mode)
 
 
+
+
 class Predictor:
+    """
+    A wrapper around DynamiteModel interactive evaluation forward pass
+    """
+
 
     def __init__(self, model):
         self.model = model
-        self.images=None
+        self.images = None
         self.features = None
         self.mask_features = None
         self.multi_scale_features=None
-        self.pred_masks = None
     
-    def get_prediction(self):
-        ...
+    def get_prediction(self, inputs):
+        """
+        Args:
+            inputs: batched input. Batch size is restricted to 1
+        """
+        
+        if self.features is None:
+            # first iteration through the interactive evaluation pipeline 
+            # generates mask features which is saved to avoid re-computation
+            (pred_masks, _, 
+            self.images, _, 
+            self.features, 
+            self.mask_features,
+            self.multi_scale_features, _, _,_) = self.model(inputs)
+
+        else:
+            out = self.model()
+            pred_masks = out[0]
+
+        return pred_masks.to('cpu',dtype=torch.uint8)

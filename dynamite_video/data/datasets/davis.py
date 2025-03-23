@@ -136,13 +136,14 @@ class DAVISTrainingDataset(TrainingDataset):
             sequences.append(entry)
 
             # TODO - remove
-            if len(sequences)==2:
-                break
+            # if len(sequences)==2:
+            #     break
 
         annotations_content = {}
         # there is no explicit categories present in DAVIS
         annotations_content["meta"] = {"category_labels": {1: 'object'}}
         annotations_content["sequences"] = sequences
+        print(f"{len(sequences)} sequences loaded from DAVIS")
         del content
 
         return annotations_content
@@ -265,6 +266,9 @@ class DAVISInferenceDataset(InferenceDataset):
         fps = cfg.DATASETS.DAVIS.INFERENCE.FPS
         # number of overlapping frames between clips
         num_overlapping_frames = cfg.DATASETS.DAVIS.INFERENCE.FRAME_OVERLAP
+
+        assert num_overlapping_frames <= clip_length, f"No. of overlapping frames cannot be more than the length of a clip"
+        
         split = cfg.DATASETS.DAVIS.INFERENCE.SPLIT
         # DAVIS has only one "val" split
         assert split=="val"
@@ -414,7 +418,12 @@ class DAVISInferenceDataset(InferenceDataset):
             if indices[-1][-1] != metadata["length"] - 1:
                 indices.append(tuple(range(indices[-1][-1] - self.num_overlapping_frames +1, metadata["length"])))
             metadata["indices"] = indices
+            metadata["clip_length"] = self.clip_length
+            metadata["num_overlapping_frames"] = self.num_overlapping_frames
 
             sequence_annotations.append(metadata)
+            
+            # TODO - remove
+            # break
 
         return sequence_annotations
