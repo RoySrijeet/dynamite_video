@@ -229,5 +229,6 @@ WANDB:
   RUN_NAME:
 
 OUTPUT_DIR: # experiment dir, specify in cl args
+DEBUG: false
 SEED: 2091831170
 VERSION: 2
