@@ -106,12 +106,12 @@ class SequenceManager:
             clip: dict. The format should be consistent with that of the batch input for 
                 training pass, i.e., inputs argument in `DynamiteModel.forward()`
         """
-        clip = {}
+        clip = {
+                "meta": {"seq_name": self.sequence_id,"frame_indices": indices,}
+        }
         clip["images"] = self.images[indices[0]:indices[-1]+1]
         clip["num_instances_per_frame"] = [len(self.instances_per_frame[fr_idx]) for fr_idx in indices]
         clip["num_clicks_per_object"] = self.num_clicks_per_object[indices[0]:indices[-1]+1]
-        clip["fg_coords_list"] = self.fg_coords_list[indices[0]:indices[-1]+1]
-        clip["bg_coords_list"] = self.bg_coords_list[indices[0]:indices[-1]+1]
         clip["max_timestamp_list"] = self.max_timestamps[indices[0]:indices[-1]+1]
 
         # in case no foreground clicks are found on a given instance, simulate 
@@ -132,9 +132,11 @@ class SequenceManager:
                 while True:
                     if len(choice_range) == 0:
                         break
+                    # randomly select one of the overlapping frames to sample a foreground click from
                     choice = random.sample(choice_range, 1)[0]
                     choice_range.remove(choice)
                     if inst_masks[choice].any():
+                        # obtain a click from the predicted mask area
                         center_coords = get_center_coords(inst_masks[choice])
                         fr_idx = overlapping_frame_indices[choice]
                         self.fg_coords_list[fr_idx][inst_id].append([center_coords[0], center_coords[1], inst_id, fr_idx, t])
@@ -142,6 +144,12 @@ class SequenceManager:
                         self.max_timestamps[fr_idx] = t
                         t += 1
                         break
+            clip["num_clicks_per_object"] = self.num_clicks_per_object[indices[0]:indices[-1]+1]
+            clip["max_timestamp_list"] = self.max_timestamps[indices[0]:indices[-1]+1]
+        
+        clip["fg_coords_list"] = self.fg_coords_list[indices[0]:indices[-1]+1]
+        clip["bg_coords_list"] = self.bg_coords_list[indices[0]:indices[-1]+1]
+        
         return clip
     
 

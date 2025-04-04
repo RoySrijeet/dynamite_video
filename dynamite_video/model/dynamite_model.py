@@ -1,9 +1,10 @@
 # Adapted from https://github.com/amitrana001/DynaMITe
 
 
-
+import os
 import copy
 import torch
+import pickle
 
 from torch import nn
 from torch.nn import functional as F
@@ -35,6 +36,8 @@ class DynamiteModel(nn.Module):
         pixel_std: Tuple[float],
         # inference
         iterative_evaluation: bool,
+        debug: bool,
+        save_dir: str,
         
     ):
         """
@@ -61,7 +64,12 @@ class DynamiteModel(nn.Module):
 
         # iterative
         self.iterative_evaluation = iterative_evaluation
-
+        
+        # debug
+        self.debug = debug
+        if self.debug:
+            self.save_dir = save_dir
+            os.makedirs(save_dir, exist_ok=True)
 
     @classmethod
     def from_config(cls, cfg):
@@ -107,6 +115,10 @@ class DynamiteModel(nn.Module):
 
             #iterative
             "iterative_evaluation": cfg.ITERATIVE.TEST.INTERACTIVE_EVALAUTION,
+            
+            # debug
+            "debug": cfg.DEBUG,
+            "save_dir": os.path.join(cfg.OUTPUT_DIR, "debug"),
         }
         
     
@@ -184,6 +196,15 @@ class DynamiteModel(nn.Module):
                 clip_fs = self.backbone(clip_ims.tensor)
                 features.append(clip_fs)
 
+        if self.debug:
+            sample_name = inputs[0]["meta"]["seq_name"] + "_".join([str(idx) for idx in inputs[0]["meta"]["frame_indices"]]) # debug
+            sample_name = sample_name.replace('/', '-')
+            self.sample_save_dir = os.path.join(self.save_dir, sample_name)
+            os.makedirs(self.sample_save_dir, exist_ok=True)
+            with open(os.path.join(self.sample_save_dir, f"batch.pkl"), "wb") as f:
+                pickle.dump(inputs, f)
+            torch.save(features, os.path.join(self.sample_save_dir, f"backbone_image_features.pth"))
+        
         if self.training:
             # prepare ground truth mask information
             targets = self.prepare_targets(inputs)
@@ -231,6 +252,8 @@ class DynamiteModel(nn.Module):
                                                                                             fg_coords[0], 
                                                                                             bg_coords[0], 
                                                                                             max_timestamp[0])
+            if self.debug:
+                torch.save(outputs["pred_masks"], os.path.join(self.sample_save_dir, f"raw_predictions.pth"))
             processed_results = self.process_results(inputs[0], images[0], outputs, num_instances[0], num_clicks_per_object)
             if self.iterative_evaluation:
                 return (processed_results, outputs, images,  num_instances, features, mask_features,

@@ -56,7 +56,8 @@ class Evaluator(DefaultTrainer):
                             eval_strategy=eval_strategy,
                             seed_id=seed_id,
                             output_path=cfg.OUTPUT_DIR,
-                            vis_path=vis_path
+                            vis_path=vis_path,
+                            debug=cfg.DEBUG,
                     )
         
         # save result - TODO

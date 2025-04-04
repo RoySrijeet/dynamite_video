@@ -1,7 +1,8 @@
 # Adapted by Amit Rana from: https://github.com/facebookresearch/Mask2Former/blob/main/mask2former/modeling/transformer_decoder/mask2former_transformer_decoder.py
-
+import os
 import copy
 import time as timer
+import pickle
 import einops
 import random
 import numpy as np
@@ -46,6 +47,8 @@ class DynamiteInteractiveTransformer(nn.Module):
         mask_dim: int,
         enforce_input_project: bool,
         positional_embeddings: str,
+        debug: bool,
+        save_dir: str,  # debug
     ):
         """
         Args:
@@ -126,6 +129,11 @@ class DynamiteInteractiveTransformer(nn.Module):
         self.mask_embed = MLP(hidden_dim, hidden_dim, mask_dim, 3)
         self._reset_parameters()
 
+        self.debug = debug
+        if self.debug:
+            self.save_dir = save_dir
+            os.makedirs(self.save_dir, exist_ok=True)
+
     
     def _reset_parameters(self):
         nn.init.normal_(self.query_embed)
@@ -166,6 +174,9 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         ret["mask_dim"] = cfg.MODEL.SEM_SEG_HEAD.MASK_DIM
 
+        # debug
+        ret["debug"] = cfg.DEBUG
+        ret["save_dir"] = os.path.join(cfg.OUTPUT_DIR, "debug")
         return ret
 
 
@@ -196,50 +207,84 @@ class DynamiteInteractiveTransformer(nn.Module):
             max_timestamp: list of timestamps of the last clip on each frame of the clip
         """
 
-        # x is a list of multi-scale feature
+        if self.debug:
+            sample_name = data["meta"]["seq_name"] + "_".join([str(idx) for idx in data["meta"]["frame_indices"]])
+            sample_name = sample_name.replace('/', '-')
+            self.sample_save_dir = os.path.join(self.save_dir, sample_name)
+            os.makedirs(self.sample_save_dir, exist_ok=True)
+
+        # multi_scale_features is a list of multi-scale feature
         assert len(multi_scale_features) == self.num_feature_levels
         
-        src = []
-        pos = []
+        memory = []
+        memory_pe = []
         size_list = []
+
+        if self.debug:
+            features_save_dir = os.path.join(self.sample_save_dir, "memory_features")
+            os.makedirs(features_save_dir, exist_ok=True)
 
         for i in range(self.num_feature_levels):
             size_list.append(multi_scale_features[i].shape[-2:])
 
-            pos_i = self.pe_layer(multi_scale_features[i], None).flatten(2) # TxDxhw
-            pos_i = pos_i.contiguous().view(-1, pos_i.shape[1]).clone() # THWxD
-            pos.append(pos_i)
+            memory_pe_i = self.pe_layer(multi_scale_features[i], None).flatten(2) # TxDxhw
+            if self.debug:
+                torch.save(memory_pe_i, os.path.join(features_save_dir, f"memory_pe_i_{i}.pth"))
+            memory_pe_i = memory_pe_i.contiguous().view(-1, memory_pe_i.shape[1]).clone() # THWxD
+            memory_pe.append(memory_pe_i)
             
-            src_i = self.input_proj[i](multi_scale_features[i]).flatten(2) + self.level_embed.weight[i][None, :, None]  # TxDxhw
-            src_i = src_i.contiguous().view(-1, src_i.shape[1]).clone() # THWxD
-            src.append(src_i)
+            memory_i = self.input_proj[i](multi_scale_features[i]).flatten(2) + self.level_embed.weight[i][None, :, None]  # TxDxhw
+            if self.debug:
+                torch.save(memory_i, os.path.join(features_save_dir, f"memory_i_{i}.pth"))
+            memory_i = memory_i.contiguous().view(-1, memory_i.shape[1]).clone() # THWxD
+            memory.append(memory_i)
 
 
         if self.training:
             prev_output = None
-            num_iters = random.randint(0, self.max_num_interactions)   # TODO - reset
-            # num_iters = random.randint(1, self.max_num_interactions)
+            num_iters = random.randint(0, self.max_num_interactions)
+            
+            if self.debug:
+                num_iters = random.randint(1, self.max_num_interactions)
 
+            save_path = None
             for i in range(num_iters):
-                prev_output = self.iterative_batch_forward(multi_scale_features, src, pos, size_list, 
-                                                            mask_features, fg_coords, bg_coords, max_timestamp
+
+                if self.debug:
+                    save_path = os.path.join(self.sample_save_dir, f"iter_{i}")
+                    os.makedirs(save_path, exist_ok=True)
+
+
+                prev_output = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
+                                                            mask_features, fg_coords, bg_coords, max_timestamp, save_path
                 )
                 
-                processed_results = self.process_results(data, images, prev_output, num_instances, num_clicks_per_object)
+                processed_results = self.process_results(data, images, prev_output, num_instances, num_clicks_per_object, save_path)
                                 
-                next_coords_info = get_next_clicks(data, processed_results, i+1, num_clicks_per_object, fg_coords, 
-                                                    bg_coords, max_timestamp=max_timestamp)
+                next_coords_info = get_next_clicks(data, processed_results, i+1, num_clicks_per_object, 
+                                                   fg_coords, bg_coords, max_timestamp)
                 
                 
                 (num_clicks_per_object,  fg_coords, bg_coords, max_timestamp) = next_coords_info
+                if self.debug:
+                    with open(os.path.join(save_path, "next_coords_info.pkl"), "wb") as f:
+                        pickle.dump(next_coords_info, f)
                        
-                        
-            outputs = self.iterative_batch_forward(multi_scale_features, src, pos, size_list, mask_features, fg_coords, 
-                                                    bg_coords, max_timestamp
+
+            if self.debug:
+                save_path = os.path.join(self.sample_save_dir, f"iter_{num_iters}")
+                os.makedirs(save_path, exist_ok=True)
+
+            outputs = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
+                                                   mask_features, fg_coords, bg_coords, max_timestamp, save_path
                     )
         else:
-            outputs = self.iterative_batch_forward(multi_scale_features, src, pos, size_list, mask_features, fg_coords, bg_coords,
-                                                   max_timestamp)
+            if self.debug:
+                save_path = self.sample_save_dir
+            else:
+                save_path=None
+            outputs = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
+                                                   mask_features, fg_coords, bg_coords, max_timestamp, save_path)
         return outputs, num_clicks_per_object
 
     
@@ -247,7 +292,8 @@ class DynamiteInteractiveTransformer(nn.Module):
             self, 
             output, 
             mask_features, 
-            attn_mask_target_size
+            attn_mask_target_size,
+            save_path=None,
     ):
         """
         Obtain predicted mask from decoder output and mask features.
@@ -276,20 +322,21 @@ class DynamiteInteractiveTransformer(nn.Module):
         attn_mask = (attn_mask.sigmoid().flatten(2).transpose(1,2).flatten(0,1).unsqueeze(0).repeat(self.num_heads,1,1) < 0.5).bool()    # M,(Thw),Q
         attn_mask = attn_mask.transpose(1,2).detach()   # M,Q,Thw
 
-        return outputs_mask, attn_mask
+        return outputs_mask, attn_mask, mask_embed
 
       
     
     def iterative_batch_forward(
             self, 
-            x, 
-            src, 
-            pos, 
+            multi_scale_features, 
+            memory, 
+            memory_pe, 
             size_list, 
             mask_features,
             fg_coords=None, 
             bg_coords=None, 
-            max_timestamp=None
+            max_timestamp=None,
+            save_path=None,
     ):
         """
         Meta
@@ -301,29 +348,47 @@ class DynamiteInteractiveTransformer(nn.Module):
         
         # generate query descriptors for input clicks
         descriptors, normalized_click_coords = self.query_descriptors_initializer(
-                                                    x, 
+                                                    multi_scale_features, 
                                                     fg_coords, 
                                                     bg_coords, 
                                                     (height, width), 
                                                     max_timestamp=max_timestamp
                                                 ) # QxD, Qx3
         query_embed = repeat(self.query_embed, "C -> Q C", Q=descriptors.shape[0]) # QxD
+        # if save_path is not None:
+            # torch.save(descriptors, os.path.join(save_path, "raw_descriptors_iterative_batch_forward.pth"))
+            # torch.save(normalized_click_coords, os.path.join(save_path, "normalized_click_coords_iterative_batch_forward.pth"))
+            # torch.save(query_embed, os.path.join(save_path, "raw_query_embed_iterative_batch_forward.pth"))
 
         if self.positional_embeddings:
             pos_coord_embed = get_spatiotemporal_embeddings(normalized_click_coords, self.positional_embeddings, descriptors.shape[1]) # QxD'
+            # if save_path is not None:
+            #     torch.save(pos_coord_embed, os.path.join(save_path, "raw_pos_coord_embed_iterative_batch_forward.pth"))
             pos_coord_embed = self.ca_qpos_sine_proj(pos_coord_embed.to(query_embed.dtype)) # QxD
-
             query_embed = query_embed + pos_coord_embed # QxD
+            # if save_path is not None:
+                # torch.save(pos_coord_embed, os.path.join(save_path, "ca_qpos_sine_proj_pos_coord_embed_iterative_batch_forward.pth"))
+                # torch.save(query_embed, os.path.join(save_path, "query_embed_w_pos_coord_embed_iterative_batch_forward.pth"))
 
         if self.use_static_bg_queries:
             query_embed = torch.cat((query_embed, self.static_bg_pe), dim=0)      # QxD
             descriptors = torch.cat((descriptors, self.static_bg_query), dim=0)   # QxD
+            # if save_path is not None:
+            #     torch.save(descriptors, os.path.join(save_path, "descriptors_w_static_bg_iterative_batch_forward.pth"))
+            #     torch.save(query_embed, os.path.join(save_path, "query_embed_w_static_bg_iterative_batch_forward.pth"))
     
         output = self.queries_nonlinear_projection(descriptors)
+        if save_path is not None:
+            torch.save(output, os.path.join(save_path, "projected_descriptors_iterative_batch_forward.pth"))
         predictions_mask = []
        
         # prediction heads on learnable query features
-        outputs_mask, attn_mask = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[0])
+        outputs_mask, attn_mask, raw_mask_embed = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[0], save_path=save_path)
+        if save_path is not None:
+            torch.save(outputs_mask, os.path.join(save_path, "outputs_mask_pre_encoder.pth"))
+            torch.save(raw_mask_embed, os.path.join(save_path, "mask_embed_pre_encoder.pth"))
+            
+        
         predictions_mask.append(outputs_mask)
 
         for i in range(self.enc_layers):
@@ -332,10 +397,10 @@ class DynamiteInteractiveTransformer(nn.Module):
             # attention: cross-attention first
             output = self.encoder.cross_attention_layers[i](
                                                             tgt=output,                     # QxD
-                                                            memory=src[level_index],        # (hw)xTxD
+                                                            memory=memory[level_index],     # (hw)xTxD
                                                             memory_mask=attn_mask,          # (T*#attn_heads)xQx(hw)
                                                             memory_key_padding_mask=None,   # here we do not apply masking on padded region
-                                                            pos=pos[level_index],           # (hw)xTxD pos emb for memory
+                                                            pos=memory_pe[level_index],     # (hw)xTxD pos emb for memory
                                                             query_pos=query_embed           # QxD pos emb for query
                                                         )
 
@@ -350,7 +415,12 @@ class DynamiteInteractiveTransformer(nn.Module):
                 output
             )
 
-            outputs_mask, attn_mask = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
+            outputs_mask, attn_mask, raw_mask_embed = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
+            
+            if save_path is not None:
+                torch.save(outputs_mask, os.path.join(save_path, f"outputs_mask_encoder_layer_{i}.pth"))
+                torch.save(raw_mask_embed, os.path.join(save_path, f"mask_embed_encoder_layer_{i}.pth"))
+
             predictions_mask.append(outputs_mask)
 
 
@@ -361,7 +431,13 @@ class DynamiteInteractiveTransformer(nn.Module):
            
             mask_features = self.decoder((mask_features, output, query_embed))
             mask_features = einops.rearrange(mask_features,"(B H W) C -> B C H W", H=H, W=W, B=B).contiguous()
-            outputs_mask, attn_mask = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
+            outputs_mask, attn_mask, raw_mask_embed = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
+            
+            if save_path is not None:
+                torch.save(mask_features, os.path.join(save_path, f"decoder_output_rearranged.pth"))
+                torch.save(outputs_mask, os.path.join(save_path, f"outputs_mask_decoder.pth"))
+                torch.save(raw_mask_embed, os.path.join(save_path, f"mask_embed_decoder.pth"))
+            
             predictions_mask.append(outputs_mask)
 
         out = {
@@ -412,7 +488,7 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         for mask_pred_per_image, inst_per_image, clicks_per_image in zip(mask_pred_results, num_instances, num_clicks_per_object):
             mask_pred_per_image = mask_pred_per_image * padding_mask
-            
+
             instance_r = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image, inst_per_image, clicks_per_image)
             processed_results.append(instance_r)
 
@@ -452,113 +528,3 @@ class DynamiteInteractiveTransformer(nn.Module):
             assert mask_pred.ndim == 2
      
         return mask_pred
-    
-
-
-# def forward_prediction_heads(self, output, mask_features, attn_mask_target_size):
-#         decoder_output = self.layer_norm(output)
-#         decoder_output = decoder_output.transpose(0, 1)
-
-#         mask_embed = self.mask_embed(decoder_output)
-      
-#         outputs_mask = torch.einsum("bqc,bchw->bqhw", mask_embed, mask_features)
-
-#         # NOTE: prediction is of higher-resolution
-#         # [B, Q, H, W] -> [B, Q, H*W] -> [B, h, Q, H*W] -> [B*h, Q, HW]
-#         attn_mask = F.interpolate(outputs_mask, size=attn_mask_target_size, mode="bilinear", align_corners=False)
-#         # must use bool type
-#         # If a BoolTensor is provided, positions with ``True`` are not allowed to attend while ``False`` values will be unchanged.
-#         attn_mask = (attn_mask.sigmoid().flatten(2).unsqueeze(1).repeat(1, self.num_heads, 1, 1).flatten(0, 1) < 0.5).bool()
-#         attn_mask = attn_mask.detach()
-
-#         return outputs_mask, attn_mask
-
-# def iterative_batch_forward(self, x, src, pos, size_list, mask_features,
-#                                 fg_coords=None, bg_coords=None, max_timestamp=None):
-
-#         _, bs, _ = src[0].shape
-#         B, C, H, W = mask_features.shape
-#         height = 4*H
-#         width = 4*W
-
-        
-#         # original
-#         # descriptors = self.query_descriptors_initializer(x, fg_coords, bg_coords)
-#         # max_queries_batch = max([desc.shape[1] for desc in descriptors])
-#         # for i, desc in enumerate(descriptors):
-#         #     if self.use_static_bg_queries:
-#         #         bg_queries = repeat(self.bg_query, "C -> 1 L C", L=max_queries_batch-desc.shape[1])
-#         #     else:
-#         #         bg_queries = repeat(self.bg_query, "C -> 1 L C", L=max_queries_batch+1-desc.shape[1])
-#         #     descriptors[i] = torch.cat((descriptors[i], bg_queries), dim=1)
-#         # output = torch.cat(descriptors, dim=0)  # TxQxD
-#         #query_embed = repeat(self.query_embed, "C -> Q N C", N=bs, Q=output.shape[1]) # TxQxD
-
-#         # if self.positional_embeddings:
-#         #     normalized_click_coords = get_pos_tensor_coords(fg_coords, bg_coords,
-#         #                                             output.shape[1], height, width, output.device, max_timestamp=max_timestamp
-#         #                     ) # TxQx3
-#         #     pos_coord_embed = get_spatiotemporal_embeddings(normalized_click_coords.permute(1,0,2), self.positional_embeddings) # Q x bs x C
-#         #     pos_coord_embed = self.ca_qpos_sine_proj(pos_coord_embed.to(query_embed.dtype))
-            
-#         #     query_embed = query_embed + pos_coord_embed
-
-#         # if self.use_static_bg_queries:
-#         #     static_bg_pe = repeat(self.static_bg_pe, "Bg C -> Bg N C", N=bs)        # Bg = num static bg queries (default: 9)
-#         #     query_embed = torch.cat((query_embed,static_bg_pe),dim=0)
-#         #     static_bg_queries = repeat(self.static_bg_query, "Bg C -> N Bg C", N=bs)
-#         #     output = torch.cat((output,static_bg_queries), dim=1)
-    
-#         # # NxQxC -> QxNxC
-#         # output = self.queries_nonlinear_projection(output).permute(1,0,2)
-#         # # query positional embedding QxNxC
-        
-#         # # query_embed = None
-#         # predictions_mask = []
-       
-#         # prediction heads on learnable query features
-#         outputs_mask, attn_mask = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[0])
-#         predictions_mask.append(outputs_mask)
-
-#         for i in range(self.enc_layers):
-#             level_index = i % self.num_feature_levels
-#             attn_mask[torch.where(attn_mask.sum(-1) == attn_mask.shape[-1])] = False
-#             # attention: cross-attention first
-#             output = self.encoder.cross_attention_layers[i](
-#                 output, src[level_index],
-#                 memory_mask=attn_mask,
-#                 memory_key_padding_mask=None,  # here we do not apply masking on padded region
-#                 pos=pos[level_index], query_pos=query_embed
-#             )
-
-#             output = self.encoder.self_attention_layers[i](
-#                 output, tgt_mask=None,
-#                 tgt_key_padding_mask=None,
-#                 query_pos=query_embed
-#             )
-            
-#             # FFN
-#             output = self.encoder.ffn_layers[i](
-#                 output
-#             )
-
-#             outputs_mask, attn_mask = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
-#             predictions_mask.append(outputs_mask)
-
-
-#         if self.use_decoder:
-#             if self.dec_scale_factor > 1:
-#                 scale_factor = self.dec_scale_factor
-#                 mask_features = F.interpolate(mask_features, scale_factor=scale_factor, mode='bilinear', align_corners=False)
-           
-#             mask_features = self.decoder((mask_features, output, query_embed))
-#             mask_features = einops.rearrange(mask_features,"(H W) B C -> B C H W", H=H, W=W, B=B).contiguous()
-#             outputs_mask, attn_mask = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
-#             predictions_mask.append(outputs_mask)
-
-#         out = {
-#             'pred_masks': predictions_mask[-1],
-#             'aux_outputs': self._set_aux_loss(predictions_mask)
-#         }
-#         return out
-

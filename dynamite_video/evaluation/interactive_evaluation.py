@@ -1,5 +1,7 @@
+import os
 import time
 import random
+import pickle
 import torch
 import torch.nn as nn
 
@@ -17,7 +19,8 @@ def evaluate(model,
              eval_strategy="random",
              seed_id=0,
              output_path=None,
-             vis_path=None
+             vis_path=None,
+             debug=False,
              ):
     """
     Evaluate model on provided dataset.
@@ -41,6 +44,10 @@ def evaluate(model,
     
     logger = setup_logger(output=output_path, distributed_rank=comm.get_rank(), name=__name__)
     logger.info(f"Starting inference on {len(dataset)} sequences...")
+
+    if debug:
+        debug_path = os.path.join(output_path, "debug")
+        os.makedirs(debug_path, exist_ok=True)
     
     start_time = time.perf_counter()
     total_data_time = 0 
@@ -59,7 +66,7 @@ def evaluate(model,
             predictor = Predictor(model)
             manager = SequenceManager(sequence)
 
-            for indices in sequence["indices"]:
+            for clip_idx, indices in enumerate(sequence["indices"]):
                 
                 # extract a clip
                 inputs = manager.extract_clip(indices)
@@ -111,17 +118,22 @@ class Predictor:
             inputs: batched input. Batch size is restricted to 1
         """
         
-        if self.features is None:
-            # first iteration through the interactive evaluation pipeline 
-            # generates mask features which is saved to avoid re-computation
-            (pred_masks, _, 
-            self.images, _, 
-            self.features, 
-            self.mask_features,
-            self.multi_scale_features, _, _,_) = self.model(inputs)
+        (pred_masks, _, 
+        self.images, _, 
+        self.features, 
+        self.mask_features,
+        self.multi_scale_features, _, _,_) = self.model(inputs)
+        # if self.features is None:
+        #     # first iteration through the interactive evaluation pipeline 
+        #     # generates mask features which is saved to avoid re-computation
+        #     (pred_masks, _, 
+        #     self.images, _, 
+        #     self.features, 
+        #     self.mask_features,
+        #     self.multi_scale_features, _, _,_) = self.model(inputs)
 
-        else:
-            out = self.model()
-            pred_masks = out[0]
+        # else:
+        #     out = self.model()
+        #     pred_masks = out[0]
 
         return pred_masks.to('cpu',dtype=torch.uint8)
