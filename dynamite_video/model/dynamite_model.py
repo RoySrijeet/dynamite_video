@@ -67,6 +67,8 @@ class DynamiteModel(nn.Module):
         
         # debug
         self.debug = debug
+        self.save_dir = save_dir
+        os.makedirs(save_dir, exist_ok=True)
         if self.debug:
             self.save_dir = save_dir
             os.makedirs(save_dir, exist_ok=True)
@@ -196,6 +198,10 @@ class DynamiteModel(nn.Module):
                 clip_fs = self.backbone(clip_ims.tensor)
                 features.append(clip_fs)
 
+        sample_name = inputs[0]["meta"]["seq_name"] + "_".join([str(idx) for idx in inputs[0]["meta"]["frame_indices"]]) # debug
+        sample_name = sample_name.replace('/', '-')
+        self.sample_save_dir = os.path.join(self.save_dir, sample_name)
+        os.makedirs(self.sample_save_dir, exist_ok=True)
         if self.debug:
             sample_name = inputs[0]["meta"]["seq_name"] + "_".join([str(idx) for idx in inputs[0]["meta"]["frame_indices"]]) # debug
             sample_name = sample_name.replace('/', '-')
@@ -252,8 +258,8 @@ class DynamiteModel(nn.Module):
                                                                                             fg_coords[0], 
                                                                                             bg_coords[0], 
                                                                                             max_timestamp[0])
-            if self.debug:
-                torch.save(outputs["pred_masks"], os.path.join(self.sample_save_dir, f"raw_predictions.pth"))
+            # if self.debug:
+            torch.save(outputs["pred_masks"], os.path.join(self.sample_save_dir, f"raw_predictions.pth"))
             processed_results = self.process_results(inputs[0], images[0], outputs, num_instances[0], num_clicks_per_object)
             if self.iterative_evaluation:
                 return (processed_results, outputs, images,  num_instances, features, mask_features,
@@ -338,7 +344,7 @@ class DynamiteModel(nn.Module):
 
 
     def process_results(self, inputs, images, outputs, num_instances, num_clicks_per_object):
-        """
+        """TODO for EVAL - Query Stacking
         Process results after one forward pass through the iterative evaluation
 
         Args:
@@ -375,6 +381,7 @@ class DynamiteModel(nn.Module):
     
     
     def interactive_instance_inference(self, mask_pred, num_instances, num_clicks_per_object):
+        """TODO for EVAL - Query stacking"""
 
         num_clicks_per_object_copy = copy.deepcopy(num_clicks_per_object)
         # handle zero clicks 
@@ -395,8 +402,8 @@ class DynamiteModel(nn.Module):
         mask_pred = torch.argmax(mask_pred,0)
         
         if num_instances > 0:
-            if num_instances > 25:
-                raise
+            # if num_instances > 25:
+            #     raise 
             m = []
             for i in range(num_instances):
                 m.append((mask_pred == i).float())
