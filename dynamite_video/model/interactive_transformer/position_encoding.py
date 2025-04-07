@@ -79,7 +79,7 @@ class PositionEmbeddingSine(nn.Module):
         return pos
     
     
-    def forward(self, x, contiguous=False, mask=None):
+    def forward(self, x, mask=None, contiguous=False):
         """
         Compute positional embeddings for a 2D feature map
 
