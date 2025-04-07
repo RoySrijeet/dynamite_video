@@ -227,7 +227,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         for i in range(self.num_feature_levels):
             size_list.append(multi_scale_features[i].shape[-2:])
 
-            memory_pe_i = self.pe_layer(multi_scale_features[i], None).flatten(2) # TxDxhw
+            memory_pe_i = self.pe_layer(multi_scale_features[i], None, contiguous=False).flatten(2) # TxDxhw
             if self.debug:
                 torch.save(memory_pe_i, os.path.join(features_save_dir, f"memory_pe_i_{i}.pth"))
             memory_pe_i = memory_pe_i.contiguous().view(-1, memory_pe_i.shape[1]).clone() # THWxD
@@ -259,7 +259,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                             mask_features, fg_coords, bg_coords, max_timestamp, save_path
                 )
                 
-                processed_results = self.process_results(data, images, prev_output, num_instances, num_clicks_per_object, save_path)
+                processed_results = self.process_results(data, images, prev_output, num_instances, num_clicks_per_object)
                                 
                 next_coords_info = get_next_clicks(data, processed_results, i+1, num_clicks_per_object, 
                                                    fg_coords, bg_coords, max_timestamp)
@@ -292,8 +292,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             self, 
             output, 
             mask_features, 
-            attn_mask_target_size,
-            save_path=None,
+            attn_mask_target_size
     ):
         """
         Obtain predicted mask from decoder output and mask features.
@@ -314,9 +313,6 @@ class DynamiteInteractiveTransformer(nn.Module):
         attn_mask = F.interpolate(outputs_mask, size=attn_mask_target_size, mode="bilinear", align_corners=False)   # TxQxhxw
         # must use bool type
         # If a BoolTensor is provided, positions with ``True`` are not allowed to attend while ``False`` values will be unchanged.
-
-        # TxQxhxw -(sigmoid)-> TxQxhxw -(flatten)-> TxQx(hw) -unsqueeze-> Tx1xQx(hw) -(repeat)-> TxMxQx(hw) -(flatten)-> (TM)xQx(hw)    [M - num attn heads]
-        # attn_mask = (attn_mask.sigmoid().flatten(2).unsqueeze(1).repeat(1, self.num_heads, 1, 1).flatten(0, 1) < 0.5).bool()    # (T*M)xQx(hw)
         
         # T,Q,h,w -(sigm)> T,Q,h,w -(flat)> T,Q,(hw) -(transpose)> T,(hw),Q -(flat)> (Thw),Q -(unsqueeze)> 1,(Thw),Q -(repeat)> M,(Thw),Q
         attn_mask = (attn_mask.sigmoid().flatten(2).transpose(1,2).flatten(0,1).unsqueeze(0).repeat(self.num_heads,1,1) < 0.5).bool()    # M,(Thw),Q
@@ -383,7 +379,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         predictions_mask = []
        
         # prediction heads on learnable query features
-        outputs_mask, attn_mask, raw_mask_embed = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[0], save_path=save_path)
+        outputs_mask, attn_mask, raw_mask_embed = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[0])
         if save_path is not None:
             torch.save(outputs_mask, os.path.join(save_path, "outputs_mask_pre_encoder.pth"))
             torch.save(raw_mask_embed, os.path.join(save_path, "mask_embed_pre_encoder.pth"))
@@ -484,47 +480,49 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         # padding mask
         padding_mask = torch.from_numpy(np.logical_not(data["padding_mask"])).to(mask_pred_results.device)
+
+        # add padding clicks to the count
+        num_clicks_per_object_copy = copy.deepcopy(num_clicks_per_object)
+        for fr_idx in range(len(num_clicks_per_object_copy)):
+            for inst_id in range(len(num_clicks_per_object_copy[fr_idx])):
+                if num_clicks_per_object_copy[fr_idx][inst_id] == 0:
+                    num_clicks_per_object_copy[fr_idx][inst_id]+=1
+        query_break_indices = np.sum(np.array(num_clicks_per_object_copy), axis=0).cumsum().tolist()
+        query_break_indices.insert(0,0)
+        
+        net_clicks = [0 for _ in range(len(query_break_indices)-1)]
         processed_results = []
-
-        for mask_pred_per_image, inst_per_image, clicks_per_image in zip(mask_pred_results, num_instances, num_clicks_per_object):
-            mask_pred_per_image = mask_pred_per_image * padding_mask
-
-            instance_r = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image, inst_per_image, clicks_per_image)
-            processed_results.append(instance_r)
+        for mask_pred_per_image, num_instances_per_image, clicks_per_image in zip(mask_pred_results, num_instances, num_clicks_per_object_copy):
+            processed_r, net_clicks = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image * padding_mask, num_instances_per_image, clicks_per_image, query_break_indices, net_clicks)
+            processed_results.append(processed_r)
 
         return processed_results
 
+    
+    def interactive_instance_inference(self, mask_pred, num_instances, clicks_per_image, query_break_indices, net_clicks):
 
-    def interactive_instance_inference(self, mask_pred, num_instances, num_clicks_per_object):
+        instance_masks = []
+        for inst_id, click_count in enumerate(clicks_per_image):
+            start_idx = query_break_indices[inst_id] + net_clicks[inst_id]
+            end_idx = start_idx + click_count
+            net_clicks[inst_id] += click_count
+            instance_masks.append(torch.max(mask_pred[start_idx:end_idx], dim=0).values)
         
-        # assert len(num_clicks_per_object) == num_instances
-        num_clicks_per_object_copy = copy.deepcopy(num_clicks_per_object)
-        # handle zero clicks 
-        for i in range(len(num_clicks_per_object_copy)):
-            if num_clicks_per_object_copy[i] == 0:
-                num_clicks_per_object_copy[i]+=1
-        num_clicks_per_object_copy.append(mask_pred.shape[0]-sum(num_clicks_per_object_copy))
-        
-        temp_out = []
-        if num_clicks_per_object_copy[-1] == 0:
-            splited_masks = torch.split(mask_pred, num_clicks_per_object_copy[:-1], dim=0)
-        else:
-            splited_masks = torch.split(mask_pred, num_clicks_per_object_copy, dim=0)
-        for m in splited_masks:
-            temp_out.append(torch.max(m, dim=0).values)
-        
-        mask_pred = torch.stack(temp_out)
-        mask_pred = torch.argmax(mask_pred,0)
-        
+        # bg masks
+        instance_masks.append(torch.max(mask_pred[query_break_indices[-1]:], dim=0).values)
+
+        instance_masks = torch.stack(instance_masks)
+        instance_masks = torch.argmax(instance_masks,0)
+
         if num_instances > 0:
             if num_instances > 25:
                 raise
             m = []
             for i in range(num_instances):
-                m.append((mask_pred == i).float())
+                m.append((instance_masks == i).float())
             
-            mask_pred = torch.stack(m)
+            instance_masks = torch.stack(m)
         else:
-            assert mask_pred.ndim == 2
+            assert instance_masks.ndim == 2
      
-        return mask_pred
+        return instance_masks, net_clicks
