@@ -67,8 +67,6 @@ class DynamiteModel(nn.Module):
         
         # debug
         self.debug = debug
-        self.save_dir = save_dir
-        os.makedirs(save_dir, exist_ok=True)
         if self.debug:
             self.save_dir = save_dir
             os.makedirs(save_dir, exist_ok=True)
@@ -198,10 +196,6 @@ class DynamiteModel(nn.Module):
                 clip_fs = self.backbone(clip_ims.tensor)
                 features.append(clip_fs)
 
-        sample_name = inputs[0]["meta"]["seq_name"] + "_".join([str(idx) for idx in inputs[0]["meta"]["frame_indices"]]) # debug
-        sample_name = sample_name.replace('/', '-')
-        self.sample_save_dir = os.path.join(self.save_dir, sample_name)
-        os.makedirs(self.sample_save_dir, exist_ok=True)
         if self.debug:
             sample_name = inputs[0]["meta"]["seq_name"] + "_".join([str(idx) for idx in inputs[0]["meta"]["frame_indices"]]) # debug
             sample_name = sample_name.replace('/', '-')
