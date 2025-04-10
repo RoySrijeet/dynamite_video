@@ -67,8 +67,8 @@ class DynamiteModel(nn.Module):
         
         # debug
         self.debug = debug
-        self.save_dir = save_dir
-        os.makedirs(save_dir, exist_ok=True)
+        # self.save_dir = save_dir
+        # os.makedirs(save_dir, exist_ok=True)
         if self.debug:
             self.save_dir = save_dir
             os.makedirs(save_dir, exist_ok=True)
