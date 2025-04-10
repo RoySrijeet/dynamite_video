@@ -407,7 +407,7 @@ class DynamiteModel(nn.Module):
             end_idx = start_idx + click_count
             net_clicks[inst_id] += click_count
             instance_masks.append(torch.max(mask_pred[start_idx:end_idx], dim=0).values)
-        
+        num_instances = len(instance_masks)
         # bg masks
         instance_masks.append(torch.max(mask_pred[query_break_indices[-1]:], dim=0).values)
 
