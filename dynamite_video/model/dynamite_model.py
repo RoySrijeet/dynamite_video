@@ -5,7 +5,7 @@ import os
 import copy
 import torch
 import pickle
-
+import numpy as np
 from torch import nn
 from torch.nn import functional as F
 from typing import Tuple
@@ -67,6 +67,8 @@ class DynamiteModel(nn.Module):
         
         # debug
         self.debug = debug
+        self.save_dir = save_dir
+        os.makedirs(save_dir, exist_ok=True)
         if self.debug:
             self.save_dir = save_dir
             os.makedirs(save_dir, exist_ok=True)
@@ -240,6 +242,11 @@ class DynamiteModel(nn.Module):
         else:
             # iterative evaluation - for each batch (a clip) we only compute image features and 
             # mask features once and pass them as arguments to use them again in the next round
+            #if self.debug:
+            sample_name = inputs[0]["meta"]["seq_name"] + "_".join([str(idx) for idx in inputs[0]["meta"]["frame_indices"]]) # debug
+            sample_name = sample_name.replace('/', '-')
+            self.sample_save_dir = os.path.join(self.save_dir, sample_name)
+            os.makedirs(self.sample_save_dir, exist_ok=True)
 
             (outputs, mask_features, multi_scale_features, num_clicks_per_object) = self.sem_seg_head(
                                                                                             inputs[0],
@@ -255,6 +262,7 @@ class DynamiteModel(nn.Module):
             # if self.debug:
             torch.save(outputs["pred_masks"], os.path.join(self.sample_save_dir, f"raw_predictions.pth"))
             processed_results = self.process_results(inputs[0], images[0], outputs, num_instances[0], num_clicks_per_object)
+            torch.save(processed_results, os.path.join(self.sample_save_dir, f"processed_predictions.pth"))
             if self.iterative_evaluation:
                 return (processed_results, outputs, images,  num_instances, features, mask_features,
                         multi_scale_features, num_clicks_per_object, fg_coords, bg_coords)
@@ -337,12 +345,19 @@ class DynamiteModel(nn.Module):
         return targets
 
 
-    def process_results(self, inputs, images, outputs, num_instances, num_clicks_per_object):
-        """TODO for EVAL - Query Stacking
+    def process_results(
+            self, 
+            data, 
+            images, 
+            outputs, 
+            num_instances, 
+            num_clicks_per_object
+    ):
+        """
         Process results after one forward pass through the iterative evaluation
 
         Args:
-            inputs: current clip
+            data: input from dataloader for current clip
             images: d2 ImageList, [T, 3, H, W] tensors of the images in the clip
             outputs: prediction 
             num_instances: List [n_1, n_2, ..., n_T] where n_i is the #instances in the i-th frame
@@ -359,51 +374,55 @@ class DynamiteModel(nn.Module):
         )
         del outputs
 
-        processed_results = []
-        
-        for mask_pred_per_image, image_size, inst_per_image, clicks_per_image in zip(mask_pred_results, images.image_sizes, num_instances, num_clicks_per_object):
-            height, width = image_size[0], image_size[1]
+        # padding mask
+        # padding_mask = torch.from_numpy(np.logical_not(data["padding_mask"])).to(mask_pred_results.device)
 
-            mask_pred_per_image = retry_if_cuda_oom(sem_seg_postprocess)(mask_pred_per_image, image_size, height, width)
+        # add padding clicks to the count
+        num_clicks_per_object_copy = copy.deepcopy(num_clicks_per_object)
+        for fr_idx in range(len(num_clicks_per_object_copy)):
+            for inst_id in range(len(num_clicks_per_object_copy[fr_idx])):
+                if num_clicks_per_object_copy[fr_idx][inst_id] == 0:
+                    num_clicks_per_object_copy[fr_idx][inst_id]+=1
+        query_break_indices = np.sum(np.array(num_clicks_per_object_copy), axis=0).cumsum().tolist()
+        query_break_indices.insert(0,0)
+        
+        net_clicks = [0 for _ in range(len(query_break_indices)-1)]
+        processed_results = []
+        for mask_pred_per_image, image_size, num_instances_per_image, clicks_per_image in zip(mask_pred_results, images.image_sizes, num_instances, num_clicks_per_object_copy):
+            mask_pred_per_image = retry_if_cuda_oom(sem_seg_postprocess)(mask_pred_per_image, image_size, image_size[0], image_size[1])
 
             # interactive instance segmentation inference
-            instance_r = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image, inst_per_image, clicks_per_image)
-            processed_results.append(instance_r)
+            processed_r, net_clicks = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image, num_instances_per_image, clicks_per_image, query_break_indices, net_clicks)
+            processed_results.append(processed_r)
 
         processed_results = torch.stack(processed_results)
         return processed_results
     
     
-    def interactive_instance_inference(self, mask_pred, num_instances, num_clicks_per_object):
-        """TODO for EVAL - Query stacking"""
+    def interactive_instance_inference(self, mask_pred, num_instances, clicks_per_image, query_break_indices, net_clicks):
 
-        num_clicks_per_object_copy = copy.deepcopy(num_clicks_per_object)
-        # handle zero clicks 
-        for i in range(len(num_clicks_per_object_copy)):
-            if num_clicks_per_object_copy[i] == 0:
-                num_clicks_per_object_copy[i]+=1
-        num_clicks_per_object_copy.append(mask_pred.shape[0]-sum(num_clicks_per_object_copy))
+        instance_masks = []
+        for inst_id, click_count in enumerate(clicks_per_image):
+            start_idx = query_break_indices[inst_id] + net_clicks[inst_id]
+            end_idx = start_idx + click_count
+            net_clicks[inst_id] += click_count
+            instance_masks.append(torch.max(mask_pred[start_idx:end_idx], dim=0).values)
         
-        temp_out = []
-        if num_clicks_per_object_copy[-1] == 0:
-            splited_masks = torch.split(mask_pred, num_clicks_per_object_copy[:-1], dim=0)
-        else:
-            splited_masks = torch.split(mask_pred, num_clicks_per_object_copy, dim=0)
-        for m in splited_masks:
-            temp_out.append(torch.max(m, dim=0).values)
-        
-        mask_pred = torch.stack(temp_out)
-        mask_pred = torch.argmax(mask_pred,0)
-        
+        # bg masks
+        instance_masks.append(torch.max(mask_pred[query_break_indices[-1]:], dim=0).values)
+
+        instance_masks = torch.stack(instance_masks)
+        instance_masks = torch.argmax(instance_masks,0)
+
         if num_instances > 0:
-            # if num_instances > 25:
-            #     raise 
+            if num_instances > 25:
+                raise
             m = []
             for i in range(num_instances):
-                m.append((mask_pred == i).float())
+                m.append((instance_masks == i).float())
             
-            mask_pred = torch.stack(m)
+            instance_masks = torch.stack(m)
         else:
-            assert mask_pred.ndim == 2
+            assert instance_masks.ndim == 2
      
-        return mask_pred
+        return instance_masks, net_clicks
