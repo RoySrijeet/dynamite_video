@@ -132,37 +132,76 @@ def get_spatiotemporal_embeddings(pos_tensor, positional_embeddings, hidden_dim=
         if positional_embeddings == "temporal":
             dim_t = torch.arange(hidden_dim, dtype=torch.float, device=pos_tensor.device)
             dim_t = 10000 ** (2 * torch.div(dim_t, 2, rounding_mode='floor') / hidden_dim)
-            t_embed = pos_tensor[:, 2] * scale
-            pos_t = t_embed[:, None] / dim_t
-            pos_t[:, 0::2][torch.where(pos_t[:, 0::2] < 0)] = 0.0
-            pos_t[:, 1::2][torch.where(pos_t[:, 1::2] < 0)] = math.pi/2
-            pos_t = torch.stack((pos_t[:, 0::2].sin(), pos_t[:, 1::2].cos()), dim=2).flatten(1)
+            t_embed = pos_tensor[:, :, 2] * scale
+            pos_t = t_embed[:, :, None] / dim_t
+            pos_t[:, :, 0::2][torch.where(pos_t[:, :, 0::2] < 0)] = 0.0
+            pos_t[:, :, 1::2][torch.where(pos_t[:, :, 1::2] < 0)] = math.pi/2
+            pos_t = torch.stack((pos_t[:, :, 0::2].sin(), pos_t[:, :, 1::2].cos()), dim=3).flatten(2)
             return pos_t
         hidden_dim = hidden_dim // 2    # 256-> 128
         dim_t = torch.arange(hidden_dim, dtype=torch.float, device=pos_tensor.device)
         dim_t = 10000 ** (2 * torch.div(dim_t, 2, rounding_mode='floor') / hidden_dim)
-        x_embed = pos_tensor[:, 1] * scale
-        y_embed = pos_tensor[:, 0] * scale
-        pos_x = x_embed[:, None] / dim_t
-        pos_y = y_embed[:, None] / dim_t
-        pos_x[:, 0::2][torch.where(pos_x[:, 0::2] < 0)] = 0.0
-        pos_x[:, 1::2][torch.where(pos_x[:, 1::2] < 0)] = math.pi/2
-        pos_y[:, 0::2][torch.where(pos_y[:, 0::2] < 0)] = 0.0
-        pos_y[:, 1::2][torch.where(pos_y[:, 1::2] < 0)] = math.pi/2
-        pos_x = torch.stack((pos_x[:, 0::2].sin(), pos_x[:, 1::2].cos()), dim=2).flatten(1)
-        pos_y = torch.stack((pos_y[:, 0::2].sin(), pos_y[:, 1::2].cos()), dim=2).flatten(1)
+        x_embed = pos_tensor[:, :, 1] * scale
+        y_embed = pos_tensor[:, :, 0] * scale
+        pos_x = x_embed[:, :, None] / dim_t
+        pos_y = y_embed[:, :, None] / dim_t
+        pos_x[:, :, 0::2][torch.where(pos_x[:, :, 0::2] < 0)] = 0.0
+        pos_x[:, :, 1::2][torch.where(pos_x[:, :, 1::2] < 0)] = math.pi/2
+        pos_y[:, :, 0::2][torch.where(pos_y[:, :, 0::2] < 0)] = 0.0
+        pos_y[:, :, 1::2][torch.where(pos_y[:, :, 1::2] < 0)] = math.pi/2
+        pos_x = torch.stack((pos_x[:, :, 0::2].sin(), pos_x[:, :, 1::2].cos()), dim=3).flatten(2)
+        pos_y = torch.stack((pos_y[:, :, 0::2].sin(), pos_y[:, :, 1::2].cos()), dim=3).flatten(2)
 
         if positional_embeddings == "spatial":
-            return torch.cat((pos_y, pos_x), dim=1)
+            return torch.cat((pos_y, pos_x), dim=2)
         elif positional_embeddings == "spatio_temporal":
-            t_embed = pos_tensor[:, 2] * scale
-            pos_t = t_embed[:, None] / dim_t
-            pos_t[:, 0::2][torch.where(pos_t[:, 0::2] < 0)] = 0.0
-            pos_t[:, 1::2][torch.where(pos_t[:, 1::2] < 0)] = math.pi/2
-            pos_t = torch.stack((pos_t[:, 0::2].sin(), pos_t[:, 1::2].cos()), dim=2).flatten(1)
+            t_embed = pos_tensor[:, :, 2] * scale
+            pos_t = t_embed[:, :, None] / dim_t
+            pos_t[:, :, 0::2][torch.where(pos_t[:, :, 0::2] < 0)] = 0.0
+            pos_t[:, :, 1::2][torch.where(pos_t[:, :, 1::2] < 0)] = math.pi/2
+            pos_t = torch.stack((pos_t[:, :, 0::2].sin(), pos_t[:, :, 1::2].cos()), dim=3).flatten(2)
             
-            pos = torch.cat((pos_y, pos_x, pos_t), dim=1)
+            pos = torch.cat((pos_y, pos_x, pos_t), dim=2)
             return pos
+
+
+# def get_spatiotemporal_embeddings(pos_tensor, positional_embeddings, hidden_dim=256):
+        
+#         scale = 2 * math.pi
+#         if positional_embeddings == "temporal":
+#             dim_t = torch.arange(hidden_dim, dtype=torch.float, device=pos_tensor.device)
+#             dim_t = 10000 ** (2 * torch.div(dim_t, 2, rounding_mode='floor') / hidden_dim)
+#             t_embed = pos_tensor[:, 2] * scale
+#             pos_t = t_embed[:, None] / dim_t
+#             pos_t[:, 0::2][torch.where(pos_t[:, 0::2] < 0)] = 0.0
+#             pos_t[:, 1::2][torch.where(pos_t[:, 1::2] < 0)] = math.pi/2
+#             pos_t = torch.stack((pos_t[:, 0::2].sin(), pos_t[:, 1::2].cos()), dim=2).flatten(1)
+#             return pos_t
+#         hidden_dim = hidden_dim // 2    # 256-> 128
+#         dim_t = torch.arange(hidden_dim, dtype=torch.float, device=pos_tensor.device)
+#         dim_t = 10000 ** (2 * torch.div(dim_t, 2, rounding_mode='floor') / hidden_dim)
+#         x_embed = pos_tensor[:, 1] * scale
+#         y_embed = pos_tensor[:, 0] * scale
+#         pos_x = x_embed[:, None] / dim_t
+#         pos_y = y_embed[:, None] / dim_t
+#         pos_x[:, 0::2][torch.where(pos_x[:, 0::2] < 0)] = 0.0
+#         pos_x[:, 1::2][torch.where(pos_x[:, 1::2] < 0)] = math.pi/2
+#         pos_y[:, 0::2][torch.where(pos_y[:, 0::2] < 0)] = 0.0
+#         pos_y[:, 1::2][torch.where(pos_y[:, 1::2] < 0)] = math.pi/2
+#         pos_x = torch.stack((pos_x[:, 0::2].sin(), pos_x[:, 1::2].cos()), dim=2).flatten(1)
+#         pos_y = torch.stack((pos_y[:, 0::2].sin(), pos_y[:, 1::2].cos()), dim=2).flatten(1)
+
+#         if positional_embeddings == "spatial":
+#             return torch.cat((pos_y, pos_x), dim=1)
+#         elif positional_embeddings == "spatio_temporal":
+#             t_embed = pos_tensor[:, 2] * scale
+#             pos_t = t_embed[:, None] / dim_t
+#             pos_t[:, 0::2][torch.where(pos_t[:, 0::2] < 0)] = 0.0
+#             pos_t[:, 1::2][torch.where(pos_t[:, 1::2] < 0)] = math.pi/2
+#             pos_t = torch.stack((pos_t[:, 0::2].sin(), pos_t[:, 1::2].cos()), dim=2).flatten(1)
+            
+#             pos = torch.cat((pos_y, pos_x, pos_t), dim=1)
+#             return pos
         
 
  

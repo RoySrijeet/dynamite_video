@@ -113,7 +113,6 @@ class DynamiteInteractiveTransformer(nn.Module):
         if self.use_static_bg_queries:
             self.register_parameter("static_bg_pe", nn.Parameter(torch.zeros(self.num_static_bg_queries, hidden_dim), True))
             self.register_parameter("static_bg_query", nn.Parameter(torch.zeros(self.num_static_bg_queries,hidden_dim), True))
-        self.register_parameter("bg_query", nn.Parameter(torch.zeros(hidden_dim), False))
 
         # level embedding (we always use 3 scales)
         self.num_feature_levels = 3
@@ -207,12 +206,6 @@ class DynamiteInteractiveTransformer(nn.Module):
             max_timestamp: list of timestamps of the last clip on each frame of the clip
         """
 
-        if self.debug:
-            sample_name = data["meta"]["seq_name"] + "_".join([str(idx) for idx in data["meta"]["frame_indices"]])
-            sample_name = sample_name.replace('/', '-')
-            self.sample_save_dir = os.path.join(self.save_dir, sample_name)
-            os.makedirs(self.sample_save_dir, exist_ok=True)
-
         # multi_scale_features is a list of multi-scale feature
         assert len(multi_scale_features) == self.num_feature_levels
         
@@ -220,44 +213,25 @@ class DynamiteInteractiveTransformer(nn.Module):
         memory_pe = []
         size_list = []
 
-        if self.debug:
-            features_save_dir = os.path.join(self.sample_save_dir, "memory_features")
-            os.makedirs(features_save_dir, exist_ok=True)
-
         for i in range(self.num_feature_levels):
             size_list.append(multi_scale_features[i].shape[-2:])
+            memory_pe.append(self.pe_layer(multi_scale_features[i], None).flatten(2))
+            memory.append(self.input_proj[i](multi_scale_features[i]).flatten(2) + self.level_embed.weight[i][None, :, None])
 
-            memory_pe_i = self.pe_layer(multi_scale_features[i], None, contiguous=False).flatten(2) # TxDxhw
-            if self.debug:
-                torch.save(memory_pe_i, os.path.join(features_save_dir, f"memory_pe_i_{i}.pth"))
-            memory_pe_i = memory_pe_i.contiguous().view(-1, memory_pe_i.shape[1]).clone() # THWxD
-            memory_pe.append(memory_pe_i)
-            
-            memory_i = self.input_proj[i](multi_scale_features[i]).flatten(2) + self.level_embed.weight[i][None, :, None]  # TxDxhw
-            if self.debug:
-                torch.save(memory_i, os.path.join(features_save_dir, f"memory_i_{i}.pth"))
-            memory_i = memory_i.contiguous().view(-1, memory_i.shape[1]).clone() # THWxD
-            memory.append(memory_i)
+            # flatten NxCxHxW to HWxNxC
+            memory_pe[-1] = memory_pe[-1].permute(2, 0, 1)  # hwxTxD
+            memory[-1] = memory[-1].permute(2, 0, 1)        # hwxTxD
 
 
         if self.training:
             prev_output = None
             num_iters = random.randint(0, self.max_num_interactions)
-            
-            if self.debug:
-                num_iters = random.randint(1, self.max_num_interactions)
 
             save_path = None
             for i in range(num_iters):
 
-                if self.debug:
-                    save_path = os.path.join(self.sample_save_dir, f"iter_{i}")
-                    os.makedirs(save_path, exist_ok=True)
-
-
                 prev_output = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
-                                                            mask_features, fg_coords, bg_coords, max_timestamp, save_path
-                )
+                                                            mask_features, fg_coords, bg_coords, max_timestamp)
                 
                 processed_results = self.process_results(data, images, prev_output, num_instances, num_clicks_per_object)
                                 
@@ -266,25 +240,12 @@ class DynamiteInteractiveTransformer(nn.Module):
                 
                 
                 (num_clicks_per_object,  fg_coords, bg_coords, max_timestamp) = next_coords_info
-                if self.debug:
-                    with open(os.path.join(save_path, "next_coords_info.pkl"), "wb") as f:
-                        pickle.dump(next_coords_info, f)
-                       
-
-            if self.debug:
-                save_path = os.path.join(self.sample_save_dir, f"iter_{num_iters}")
-                os.makedirs(save_path, exist_ok=True)
 
             outputs = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
-                                                   mask_features, fg_coords, bg_coords, max_timestamp, save_path
-                    )
+                                                   mask_features, fg_coords, bg_coords, max_timestamp)
         else:
-            if self.debug:
-                save_path = self.sample_save_dir
-            else:
-                save_path=None
             outputs = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
-                                                   mask_features, fg_coords, bg_coords, max_timestamp, save_path)
+                                                   mask_features, fg_coords, bg_coords, max_timestamp)
         return outputs, num_clicks_per_object
 
     
@@ -305,18 +266,21 @@ class DynamiteInteractiveTransformer(nn.Module):
                 feature scale, (h,w) tuple
         """
 
-        decoder_output = self.layer_norm(output)
+        decoder_output = self.layer_norm(output).transpose(0,1)
         mask_embed = self.mask_embed(decoder_output)
       
-        outputs_mask = torch.einsum("qc,bchw->bqhw", mask_embed, mask_features) # TxQxHxW
+        outputs_mask = torch.einsum("bqc,bchw->bqhw", mask_embed, mask_features) # TxQxHxW
 
         attn_mask = F.interpolate(outputs_mask, size=attn_mask_target_size, mode="bilinear", align_corners=False)   # TxQxhxw
         # must use bool type
         # If a BoolTensor is provided, positions with ``True`` are not allowed to attend while ``False`` values will be unchanged.
         
         # T,Q,h,w -(sigm)> T,Q,h,w -(flat)> T,Q,(hw) -(transpose)> T,(hw),Q -(flat)> (Thw),Q -(unsqueeze)> 1,(Thw),Q -(repeat)> M,(Thw),Q
-        attn_mask = (attn_mask.sigmoid().flatten(2).transpose(1,2).flatten(0,1).unsqueeze(0).repeat(self.num_heads,1,1) < 0.5).bool()    # M,(Thw),Q
-        attn_mask = attn_mask.transpose(1,2).detach()   # M,Q,Thw
+        # attn_mask = (attn_mask.sigmoid().flatten(2).transpose(1,2).flatten(0,1).unsqueeze(0).repeat(self.num_heads,1,1) < 0.5).bool()    # M,(Thw),Q
+        # attn_mask = attn_mask.transpose(1,2).detach()   # M,Q,Thw
+
+        attn_mask = (attn_mask.sigmoid().flatten(2).unsqueeze(1).repeat(1, self.num_heads, 1, 1).flatten(0, 1) < 0.5).bool()
+        attn_mask = attn_mask.detach()
 
         return outputs_mask, attn_mask, mask_embed
 
@@ -332,12 +296,12 @@ class DynamiteInteractiveTransformer(nn.Module):
             fg_coords=None, 
             bg_coords=None, 
             max_timestamp=None,
-            save_path=None,
     ):
         """
         Meta
         """
-
+        
+        _, T, _ = memory[0].shape           # hw, T, D
         B, C, H, W = mask_features.shape
         height = 4*H
         width = 4*W
@@ -348,41 +312,28 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                     fg_coords, 
                                                     bg_coords, 
                                                     (height, width), 
-                                                    max_timestamp=max_timestamp
-                                                ) # QxD, Qx3
-        query_embed = repeat(self.query_embed, "C -> Q C", Q=descriptors.shape[0]) # QxD
-        # if save_path is not None:
-            # torch.save(descriptors, os.path.join(save_path, "raw_descriptors_iterative_batch_forward.pth"))
-            # torch.save(normalized_click_coords, os.path.join(save_path, "normalized_click_coords_iterative_batch_forward.pth"))
-            # torch.save(query_embed, os.path.join(save_path, "raw_query_embed_iterative_batch_forward.pth"))
+                                                    max_timestamp=max_timestamp,
+                                                    use_static_bg_queries=self.use_static_bg_queries,
+                                                ) # TxQxD, TxQx3
+        
+        query_embed = repeat(self.query_embed, "C -> Q N C", N=T, Q=descriptors.shape[1])  # QxTxD
 
         if self.positional_embeddings:
-            pos_coord_embed = get_spatiotemporal_embeddings(normalized_click_coords, self.positional_embeddings, descriptors.shape[1]) # QxD'
-            # if save_path is not None:
-            #     torch.save(pos_coord_embed, os.path.join(save_path, "raw_pos_coord_embed_iterative_batch_forward.pth"))
-            pos_coord_embed = self.ca_qpos_sine_proj(pos_coord_embed.to(query_embed.dtype)) # QxD
+            pos_coord_embed = get_spatiotemporal_embeddings(normalized_click_coords.permute(1,0,2), self.positional_embeddings, descriptors.shape[2]) # QxTxD'
+            pos_coord_embed = self.ca_qpos_sine_proj(pos_coord_embed.to(query_embed.dtype)) # QxTxD
             query_embed = query_embed + pos_coord_embed # QxD
-            # if save_path is not None:
-                # torch.save(pos_coord_embed, os.path.join(save_path, "ca_qpos_sine_proj_pos_coord_embed_iterative_batch_forward.pth"))
-                # torch.save(query_embed, os.path.join(save_path, "query_embed_w_pos_coord_embed_iterative_batch_forward.pth"))
 
         if self.use_static_bg_queries:
-            query_embed = torch.cat((query_embed, self.static_bg_pe), dim=0)      # QxD
-            descriptors = torch.cat((descriptors, self.static_bg_query), dim=0)   # QxD
-            # if save_path is not None:
-            #     torch.save(descriptors, os.path.join(save_path, "descriptors_w_static_bg_iterative_batch_forward.pth"))
-            #     torch.save(query_embed, os.path.join(save_path, "query_embed_w_static_bg_iterative_batch_forward.pth"))
+            static_bg_pe = repeat(self.static_bg_pe, "Bg C -> Bg N C", N=T)
+            query_embed = torch.cat((query_embed, static_bg_pe), dim=0)      # QxTxD
+            static_bg_queries = repeat(self.static_bg_query, "Bg C -> N Bg C", N=T)
+            descriptors = torch.cat((descriptors, static_bg_queries), dim=1)   # TxQxD
     
-        output = self.queries_nonlinear_projection(descriptors)
-        if save_path is not None:
-            torch.save(output, os.path.join(save_path, "projected_descriptors_iterative_batch_forward.pth"))
+        output = self.queries_nonlinear_projection(descriptors).permute(1,0,2)
         predictions_mask = []
        
         # prediction heads on learnable query features
         outputs_mask, attn_mask, raw_mask_embed = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[0])
-        if save_path is not None:
-            torch.save(outputs_mask, os.path.join(save_path, "outputs_mask_pre_encoder.pth"))
-            torch.save(raw_mask_embed, os.path.join(save_path, "mask_embed_pre_encoder.pth"))
             
         
         predictions_mask.append(outputs_mask)
@@ -392,12 +343,12 @@ class DynamiteInteractiveTransformer(nn.Module):
             attn_mask[torch.where(attn_mask.sum(-1) == attn_mask.shape[-1])] = False
             # attention: cross-attention first
             output = self.encoder.cross_attention_layers[i](
-                                                            tgt=output,                     # QxD
+                                                            tgt=output,                     # QxTxD
                                                             memory=memory[level_index],     # (hw)xTxD
                                                             memory_mask=attn_mask,          # (T*#attn_heads)xQx(hw)
                                                             memory_key_padding_mask=None,   # here we do not apply masking on padded region
                                                             pos=memory_pe[level_index],     # (hw)xTxD pos emb for memory
-                                                            query_pos=query_embed           # QxD pos emb for query
+                                                            query_pos=query_embed           # QxTxD pos emb for query
                                                         )
 
             output = self.encoder.self_attention_layers[i](
@@ -412,10 +363,6 @@ class DynamiteInteractiveTransformer(nn.Module):
             )
 
             outputs_mask, attn_mask, raw_mask_embed = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
-            
-            if save_path is not None:
-                torch.save(outputs_mask, os.path.join(save_path, f"outputs_mask_encoder_layer_{i}.pth"))
-                torch.save(raw_mask_embed, os.path.join(save_path, f"mask_embed_encoder_layer_{i}.pth"))
 
             predictions_mask.append(outputs_mask)
 
@@ -426,13 +373,8 @@ class DynamiteInteractiveTransformer(nn.Module):
                 mask_features = F.interpolate(mask_features, scale_factor=scale_factor, mode='bilinear', align_corners=False)
            
             mask_features = self.decoder((mask_features, output, query_embed))
-            mask_features = einops.rearrange(mask_features,"(B H W) C -> B C H W", H=H, W=W, B=B).contiguous()
+            mask_features = einops.rearrange(mask_features,"(H W) B C -> B C H W", H=H, W=W, B=B).contiguous()
             outputs_mask, attn_mask, raw_mask_embed = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
-            
-            if save_path is not None:
-                torch.save(mask_features, os.path.join(save_path, f"decoder_output_rearranged.pth"))
-                torch.save(outputs_mask, os.path.join(save_path, f"outputs_mask_decoder.pth"))
-                torch.save(raw_mask_embed, os.path.join(save_path, f"mask_embed_decoder.pth"))
             
             predictions_mask.append(outputs_mask)
 
@@ -468,7 +410,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             num_clicks_per_object: count of clicks on each instance in each frame
         """
         
-        mask_pred_results = outputs["pred_masks"]   # [T,C,H,W]
+        mask_pred_results = outputs["pred_masks"]   # [T,Q,H,W]
         # upsample masks
         mask_pred_results = F.interpolate(
             mask_pred_results,
@@ -487,42 +429,38 @@ class DynamiteInteractiveTransformer(nn.Module):
             for inst_id in range(len(num_clicks_per_object_copy[fr_idx])):
                 if num_clicks_per_object_copy[fr_idx][inst_id] == 0:
                     num_clicks_per_object_copy[fr_idx][inst_id]+=1
-        query_break_indices = np.sum(np.array(num_clicks_per_object_copy), axis=0).cumsum().tolist()
-        query_break_indices.insert(0,0)
-        
-        net_clicks = [0 for _ in range(len(query_break_indices)-1)]
+
         processed_results = []
-        for mask_pred_per_image, num_instances_per_image, clicks_per_image in zip(mask_pred_results, num_instances, num_clicks_per_object_copy):
-            processed_r, net_clicks = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image * padding_mask, num_instances_per_image, clicks_per_image, query_break_indices, net_clicks)
+        for mask_pred_per_image, clicks_per_image in zip(mask_pred_results, num_clicks_per_object_copy):
+            processed_r = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image * padding_mask, max(num_instances), clicks_per_image)
             processed_results.append(processed_r)
 
         return processed_results
 
     
-    def interactive_instance_inference(self, mask_pred, num_instances, clicks_per_image, query_break_indices, net_clicks):
+    def interactive_instance_inference(self, mask_pred, num_instances, clicks_per_image):
 
-        instance_masks = []
-        for inst_id, click_count in enumerate(clicks_per_image):
-            start_idx = query_break_indices[inst_id] + net_clicks[inst_id]
-            end_idx = start_idx + click_count
-            net_clicks[inst_id] += click_count
-            instance_masks.append(torch.max(mask_pred[start_idx:end_idx], dim=0).values)
-        num_instances = len(instance_masks)
-        # bg masks
-        instance_masks.append(torch.max(mask_pred[query_break_indices[-1]:], dim=0).values)
+        assert len(clicks_per_image) == num_instances
+        image_size = mask_pred.shape[-2:]
 
-        instance_masks = torch.stack(instance_masks)
-        instance_masks = torch.argmax(instance_masks,0)
+        # bg queries
+        clicks_per_image.append(mask_pred.shape[0] - sum(clicks_per_image))
 
-        if num_instances > 0:
-            if num_instances > 25:
-                raise
-            m = []
-            for i in range(num_instances):
-                m.append((instance_masks == i).float())
-            
-            instance_masks = torch.stack(m)
+        temp_out = []
+        if clicks_per_image[-1] == 0:
+            clicks_per_image = torch.split(mask_pred, clicks_per_image[:-1], dim=0)
         else:
-            assert instance_masks.ndim == 2
+            splited_masks = torch.split(mask_pred, clicks_per_image, dim=0)
+        for m in splited_masks:
+            temp_out.append(torch.max(m, dim=0).values)
+        
+        mask_pred = torch.stack(temp_out)
+
+        mask_pred = torch.argmax(mask_pred,0)
+        m = []
+        for i in range(num_instances):
+            m.append((mask_pred == i).float())
+        
+        mask_pred = torch.stack(m)
      
-        return instance_masks, net_clicks
+        return mask_pred

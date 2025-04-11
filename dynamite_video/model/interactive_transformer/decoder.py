@@ -43,10 +43,10 @@ class Decoder(nn.Module):
         mask_features, output, query_embed = x
         with torch.no_grad():
             pos_encodings = self.pe_mask_features(mask_features)
-            pos_encodings = einops.rearrange(pos_encodings,"B C H W -> (B H W) C")
+            pos_encodings = einops.rearrange(pos_encodings,"B C H W -> (H W) B C")
 
         B, C, H, W = mask_features.shape
-        mask_features = einops.rearrange(mask_features,"B C H W -> (B H W) C")      # (H W) B C")
+        mask_features = einops.rearrange(mask_features,"B C H W -> (H W) B C")      # (H W) B C")
 
         #output is QxC
         for i in range(self.num_layers):
