@@ -422,8 +422,5 @@ class DAVISInferenceDataset(InferenceDataset):
             metadata["num_overlapping_frames"] = self.num_overlapping_frames
 
             sequence_annotations.append(metadata)
-            
-            # TODO - remove
-            # break
 
         return sequence_annotations

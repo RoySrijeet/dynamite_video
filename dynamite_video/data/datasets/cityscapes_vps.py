@@ -115,10 +115,6 @@ class CITYSCAPESVPSTrainingDataset(TrainingDataset):
             seq.pop("semantic_segmentations")
             sequences.append(seq)
 
-            # TODO - remove
-            if len(sequences) == 2:
-                break
-
         # store category id to name mapping
         meta_info = json_content["meta"]["category_labels"]
         meta_info = {

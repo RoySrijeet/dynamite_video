@@ -135,10 +135,6 @@ class PUMAVOSTrainingDataset(TrainingDataset):
 
             sequence_annotations.append(entry)
 
-            # TODO - remove
-            if len(sequence_annotations) == 2:
-                break
-
         annotations_content = {}
         # there is no explicit categories present in PUMAVOS
         annotations_content["meta"] = {"category_labels": {1: 'object'}}

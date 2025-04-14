@@ -46,9 +46,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         pre_norm: bool,
         mask_dim: int,
         enforce_input_project: bool,
-        positional_embeddings: str,
-        debug: bool,
-        save_dir: str,  # debug
+        positional_embeddings: str
     ):
         """
         Args:
@@ -128,11 +126,6 @@ class DynamiteInteractiveTransformer(nn.Module):
         self.mask_embed = MLP(hidden_dim, hidden_dim, mask_dim, 3)
         self._reset_parameters()
 
-        self.debug = debug
-        if self.debug:
-            self.save_dir = save_dir
-            os.makedirs(self.save_dir, exist_ok=True)
-
     
     def _reset_parameters(self):
         nn.init.normal_(self.query_embed)
@@ -173,9 +166,6 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         ret["mask_dim"] = cfg.MODEL.SEM_SEG_HEAD.MASK_DIM
 
-        # debug
-        ret["debug"] = cfg.DEBUG
-        ret["save_dir"] = os.path.join(cfg.OUTPUT_DIR, "debug")
         return ret
 
 
