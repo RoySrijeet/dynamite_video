@@ -24,9 +24,7 @@ class DynamiteHead(nn.Module):
         pixel_decoder: nn.Module,
         # extra parameters
         interactive_transformer: nn.Module,
-        transformer_in_feature: str,
-        debug: bool,
-        save_dir: str,
+        transformer_in_feature: str
     ):
         """
         NOTE: this interface is experimental.
@@ -47,11 +45,6 @@ class DynamiteHead(nn.Module):
 
         self.transformer_in_feature = transformer_in_feature
 
-        self.debug = debug
-        if self.debug:
-            self.save_dir = save_dir
-            os.makedirs(save_dir, exist_ok=True)
-
 
     @classmethod
     def from_config(cls, cfg, input_shape: Dict[str, ShapeSpec]):
@@ -69,9 +62,6 @@ class DynamiteHead(nn.Module):
                 cfg,
                 interactive_transformer_in_channels,
             ),
-
-            "debug": cfg.DEBUG,
-            "save_dir": os.path.join(cfg.OUTPUT_DIR, "debug")
         }
 
     def forward(
@@ -104,14 +94,6 @@ class DynamiteHead(nn.Module):
         
         if (mask_features is None) or (multi_scale_features is None):
             mask_features, _, multi_scale_features = self.pixel_decoder.forward_features(features)
-
-            if self.debug:
-                sample_name = data["meta"]["seq_name"] + "_".join([str(idx) for idx in data["meta"]["frame_indices"]]) # debug
-                sample_name = sample_name.replace('/', '-')
-                self.sample_save_dir = os.path.join(self.save_dir, sample_name)
-                os.makedirs(self.sample_save_dir, exist_ok=True)
-                torch.save(mask_features, os.path.join(self.sample_save_dir, f"pixel_decoder_mask_features.pth"))
-                torch.save(multi_scale_features, os.path.join(self.sample_save_dir, f"pixel_decoder_multi_scale_features.pth"))
 
         if self.transformer_in_feature == "multi_scale_pixel_decoder":
             predictions, num_clicks_per_object = self.interactive_transformer(data, images, num_instances, multi_scale_features,

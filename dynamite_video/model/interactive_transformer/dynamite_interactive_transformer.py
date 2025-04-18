@@ -217,7 +217,6 @@ class DynamiteInteractiveTransformer(nn.Module):
             prev_output = None
             num_iters = random.randint(0, self.max_num_interactions)
 
-            save_path = None
             for i in range(num_iters):
 
                 prev_output = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
