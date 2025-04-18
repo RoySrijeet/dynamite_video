@@ -143,7 +143,6 @@ class DAVISTrainingDataset(TrainingDataset):
         # there is no explicit categories present in DAVIS
         annotations_content["meta"] = {"category_labels": {1: 'object'}}
         annotations_content["sequences"] = sequences
-        print(f"{len(sequences)} sequences loaded from DAVIS")
         del content
 
         return annotations_content

@@ -46,7 +46,9 @@ def build_training_dataset(cfg):
     
     datasets = []
     for ds_name, ds_num_samples in zip(dataset_list, dataset_num_samples):
+        logger.info(f"Loading samples from {ds_name}...")
         datasets.append(TRAINING_DATASET_BUILDERS[ds_name](cfg, ds_num_samples))
+        logger.info(f"Done!")
 
     return listify(datasets)
     
