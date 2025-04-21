@@ -1,3 +1,4 @@
+import torch
 import numpy as np
 
 from dynamite_video.data.utils.data_utils import (
@@ -125,14 +126,14 @@ class TrainingMapper:
 
 
         return {
-            "images": images,
-            "instance_masks": masks,
-            "semantic_masks": semantic_masks,
-            "padding_mask": padding_mask,
-            "bg_masks": bg_masks,
+            "images": torch.as_tensor(images, dtype=torch.uint8),
+            "instance_masks": torch.as_tensor(masks, dtype=torch.uint8),
+            "semantic_masks": torch.as_tensor(semantic_masks, dtype=torch.uint8),
+            "padding_mask": torch.as_tensor(padding_mask, dtype=torch.uint8),
+            "bg_masks": torch.as_tensor(bg_masks, dtype=torch.uint8),
             "instance_ids": instance_ids,
             "num_instances_per_frame": num_instances_per_frame,
-            "frame_instance_occupancy": frame_instance_occupancy,
+            "frame_instance_occupancy": dict(frame_instance_occupancy),
             "ref_frame_index": 0,
             "num_clicks_per_object": num_clicks_per_object,
             "fg_coords_list": fg_coords_list,

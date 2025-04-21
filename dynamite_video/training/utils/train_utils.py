@@ -36,11 +36,11 @@ def get_next_clicks(data, pred_output, timestamp, batched_num_clicks_per_object=
     
     # OPTIMIZATION
     # directly take data as input as they are already on the device
-    gt_masks_batch = [x for x in data["instance_masks"]]
+    gt_masks_batch = [x.cpu().numpy() for x in data["instance_masks"]]
     pred_masks_batch = [x.cpu().numpy() for x in pred_output]
-    semantic_maps_batch = [x for x in data['semantic_masks']]
+    semantic_maps_batch = [x.cpu().numpy() for x in data['semantic_masks']]
 
-    padding_mask = data["padding_mask"]
+    padding_mask = data["padding_mask"].cpu().numpy()
     
     for i, (gt_masks_per_image, pred_masks_per_image, semantic_map) in enumerate(zip(gt_masks_batch, pred_masks_batch, semantic_maps_batch)):
         

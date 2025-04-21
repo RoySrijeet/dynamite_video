@@ -410,7 +410,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         del outputs
 
         # padding mask
-        padding_mask = torch.from_numpy(np.logical_not(data["padding_mask"])).to(mask_pred_results.device)
+        padding_mask = torch.logical_not(data["padding_mask"]).to(mask_pred_results.device)
 
         # add padding clicks to the count
         num_clicks_per_object_copy = copy.deepcopy(num_clicks_per_object)

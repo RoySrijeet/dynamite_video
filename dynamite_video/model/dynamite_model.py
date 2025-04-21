@@ -264,7 +264,7 @@ class DynamiteModel(nn.Module):
 
         for clip in inputs:
             # convert each frame in the clip to `torch.Tensor`
-            images_sample = [torch.from_numpy(x).to(self.device) for x in clip["images"]]
+            images_sample = [x.to(self.device) for x in clip["images"]]
             # normalize each frame
             images_sample = [(x - self.pixel_mean) / self.pixel_std for x in images_sample]
             # store the frames as detectron2.ImageList
@@ -301,9 +301,9 @@ class DynamiteModel(nn.Module):
             clip_targets = []
             for i in range(clip["images"].shape[0]):
                 labels = [0] * clip["num_instances_per_frame"][i]
-                inst_mask = torch.from_numpy(clip["instance_masks"][i]).to(self.device)
-                bg_mask = torch.from_numpy(clip["bg_masks"][i]).to(self.device)
-                padding_mask = torch.from_numpy(clip["padding_mask"]).to(self.device)
+                inst_mask = clip["instance_masks"][i].to(self.device)
+                bg_mask = clip["bg_masks"][i].to(self.device)
+                padding_mask = clip["padding_mask"].to(self.device)
                 clip_targets.append({
                     "labels": labels,
                     "masks": inst_mask,
@@ -344,7 +344,7 @@ class DynamiteModel(nn.Module):
         del outputs
 
         # padding mask
-        # padding_mask = torch.from_numpy(np.logical_not(data["padding_mask"])).to(mask_pred_results.device)
+        # padding_mask = torch.logical_not(data["padding_mask"]).to(mask_pred_results.device)
 
         # add padding clicks to the count
         num_clicks_per_object_copy = copy.deepcopy(num_clicks_per_object)
