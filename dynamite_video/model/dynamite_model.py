@@ -323,17 +323,15 @@ class DynamiteModel(nn.Module):
             num_clicks_per_object
     ):
         """
-        Process results after one forward pass through the iterative evaluation
-
         Args:
             data: input from dataloader for current clip
-            images: d2 ImageList, [T, 3, H, W] tensors of the images in the clip
+            images: [T, 3, H, W] tensors of the images in the clip (d2 ImageList)
             outputs: prediction 
             num_instances: List [n_1, n_2, ..., n_T] where n_i is the #instances in the i-th frame
             num_clicks_per_object: count of clicks on each instance in each frame
         """
-       
-        mask_pred_results = outputs["pred_masks"]
+        
+        mask_pred_results = outputs["pred_masks"]   # [T,Q,H,W]
         # upsample masks
         mask_pred_results = F.interpolate(
             mask_pred_results,
@@ -352,46 +350,39 @@ class DynamiteModel(nn.Module):
             for inst_id in range(len(num_clicks_per_object_copy[fr_idx])):
                 if num_clicks_per_object_copy[fr_idx][inst_id] == 0:
                     num_clicks_per_object_copy[fr_idx][inst_id]+=1
-        query_break_indices = np.sum(np.array(num_clicks_per_object_copy), axis=0).cumsum().tolist()
-        query_break_indices.insert(0,0)
-        
-        net_clicks = [0 for _ in range(len(query_break_indices)-1)]
-        processed_results = []
-        for mask_pred_per_image, image_size, num_instances_per_image, clicks_per_image in zip(mask_pred_results, images.image_sizes, num_instances, num_clicks_per_object_copy):
-            mask_pred_per_image = retry_if_cuda_oom(sem_seg_postprocess)(mask_pred_per_image, image_size, image_size[0], image_size[1])
 
-            # interactive instance segmentation inference
-            processed_r, net_clicks = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image, num_instances_per_image, clicks_per_image, query_break_indices, net_clicks)
+        processed_results = []
+        for mask_pred_per_image, image_size, clicks_per_image in zip(mask_pred_results, images.image_sizes, num_clicks_per_object_copy):
+            mask_pred_per_image = retry_if_cuda_oom(sem_seg_postprocess)(mask_pred_per_image, image_size, image_size[0], image_size[1])
+            processed_r = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image, max(num_instances), clicks_per_image)
             processed_results.append(processed_r)
 
-        processed_results = torch.stack(processed_results)
         return processed_results
+
     
-    
-    def interactive_instance_inference(self, mask_pred, num_instances, clicks_per_image, query_break_indices, net_clicks):
+    def interactive_instance_inference(self, mask_pred, num_instances, clicks_per_image):
 
-        instance_masks = []
-        for inst_id, click_count in enumerate(clicks_per_image):
-            start_idx = query_break_indices[inst_id] + net_clicks[inst_id]
-            end_idx = start_idx + click_count
-            net_clicks[inst_id] += click_count
-            instance_masks.append(torch.max(mask_pred[start_idx:end_idx], dim=0).values)
-        num_instances = len(instance_masks)
-        # bg masks
-        instance_masks.append(torch.max(mask_pred[query_break_indices[-1]:], dim=0).values)
+        assert len(clicks_per_image) == num_instances
+        image_size = mask_pred.shape[-2:]
 
-        instance_masks = torch.stack(instance_masks)
-        instance_masks = torch.argmax(instance_masks,0)
+        # bg queries
+        clicks_per_image.append(mask_pred.shape[0] - sum(clicks_per_image))
 
-        if num_instances > 0:
-            if num_instances > 25:
-                raise
-            m = []
-            for i in range(num_instances):
-                m.append((instance_masks == i).float())
-            
-            instance_masks = torch.stack(m)
+        temp_out = []
+        if clicks_per_image[-1] == 0:
+            clicks_per_image = torch.split(mask_pred, clicks_per_image[:-1], dim=0)
         else:
-            assert instance_masks.ndim == 2
+            splited_masks = torch.split(mask_pred, clicks_per_image, dim=0)
+        for m in splited_masks:
+            temp_out.append(torch.max(m, dim=0).values)
+        
+        mask_pred = torch.stack(temp_out)
+
+        mask_pred = torch.argmax(mask_pred,0)
+        m = []
+        for i in range(num_instances):
+            m.append((mask_pred == i).float())
+        
+        mask_pred = torch.stack(m)
      
-        return instance_masks, net_clicks
+        return mask_pred
