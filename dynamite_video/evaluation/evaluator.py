@@ -26,7 +26,7 @@ class Evaluator(DefaultTrainer):
         max_interactions = args.max_interactions
         eval_strategy = args.eval_strategy
         seed_id = args.seed_id
-        vis_path = args.vis_path
+        save_vis = args.save_vis
 
         logger.info("Initiating interactive evaluation with following setup:")
         logger.info(f"Evaluation datasets: {eval_datasets}")
@@ -35,8 +35,8 @@ class Evaluator(DefaultTrainer):
         logger.info(f"Evaluation strategy: {eval_strategy}")
         logger.info(f"Random seed: {seed_id}")
         logger.info(f"Output path: {cfg.OUTPUT_DIR}")
-        if vis_path is not None:
-            logger.info(f"More visualizations saved in: {vis_path}")
+        if save_vis:
+            logger.info(f"Visualizations saved to: {cfg.OUTPUT_DIR}")
 
 
         # assert iou_threshold >= 0.80
@@ -56,8 +56,7 @@ class Evaluator(DefaultTrainer):
                             eval_strategy=eval_strategy,
                             seed_id=seed_id,
                             output_path=cfg.OUTPUT_DIR,
-                            vis_path=vis_path,
-                            debug=cfg.DEBUG,
+                            save_vis=save_vis,
                     )
         
         # save result - TODO
