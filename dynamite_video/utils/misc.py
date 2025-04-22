@@ -261,9 +261,9 @@ def get_cl_arguments():
     )
 
     parser.add_argument(           # eval
-        "--vis-path", 
-        default=None, 
-        help="Path to save visualizations from evaluation."
+        "--save-vis", 
+        action="store_true", 
+        help="Save visualizations of predictions."
     )
 
     args = parser.parse_args()
@@ -271,10 +271,6 @@ def get_cl_arguments():
     # check that experiment directory exists
     assert os.path.isdir(args.expt_dir), f"Path to output directory {args.expt_dir} \
          does not exist"
-    
-    # # get experiment configuration file
-    # expt_config = get_expt_config(args.expt_dir)
-    # args.config_file = expt_config
 
     return args
 
