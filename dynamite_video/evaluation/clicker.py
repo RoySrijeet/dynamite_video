@@ -1,12 +1,16 @@
+import os
 import torch
 import random
 import numpy as np
 
+from PIL import Image
+
 from dynamite_video.data.utils.clicker import get_center_coords
+from dynamite_video.evaluation.eval_utils import davis_palette
 
 class SequenceManager:
     """
-    Click manager
+    Sequence manager
     """
 
     def __init__(self, metadata):
@@ -20,9 +24,9 @@ class SequenceManager:
         
         # arrays
         self.images = metadata["images"]                    # [T,3,H,W]
-        self.instance_masks = metadata["instance_masks"]    # [T,N,H,W]
-        self.semantic_maps = metadata["semantic_maps"]      # [T,H,W]
-        self.bg_masks = metadata["bg_masks"]                # [T,H,W]
+        self.gt_instance_masks = metadata["instance_masks"]    # [T,N,H,W]
+        self.gt_semantic_maps = metadata["semantic_maps"]      # [T,H,W]
+        self.gt_bg_masks = metadata["bg_masks"]                # [T,H,W]
         self.padding_mask = metadata["padding_mask"]        # [H,W]
         
         # in which frame did each instance first appear
@@ -61,6 +65,7 @@ class SequenceManager:
         self.get_gt_clicks()
         
         self.pred_masks = [[] for _ in range(self.sequence_length)]
+        self.pred_semantic_maps = [[] for _ in range(self.sequence_length)]
 
     
     @property
@@ -81,7 +86,7 @@ class SequenceManager:
             # Instance with ID `inst_id` first appeared in frame at index `fr_idx``
             
             # binary segmentation mask (ground truth)
-            inst_mask = self.instance_masks[fr_idx][inst_id-1]
+            inst_mask = self.gt_instance_masks[fr_idx][inst_id-1]
 
             # center coordinates of the foreground mask
             center_coords = get_center_coords(inst_mask)
@@ -105,14 +110,24 @@ class SequenceManager:
         Returns:
             clip: dict. The format should be consistent with that of the batch input for 
                 training pass, i.e., inputs argument in `DynamiteModel.forward()`
+                The dictionary contains the following keys:
+                * images: (T,3,H,W) RGB image tensors
+                * num_instances_per_frame: list specifying #instances in each frame
+                * num_clicks_per_object: #clicks sampled on each foreground object, in each frame
+                * max_timestamp_list: timestamp of the latest click sampled in each frame
+                * fg_coords_list: list of foreground clicks
+                * bg_coords_list: list of background clicks
+                * seq_name: name of the parent sequence
+                * frame_indices: global indices of the clip (w.r.t. the whole sequence)
         """
         clip = {
-                "meta": {"seq_name": self.sequence_id,"frame_indices": indices,}
+                "seq_name": self.sequence_id,
+                "frame_indices": indices,
+                "images": torch.as_tensor(self.images[indices[0]:indices[-1]+1], dtype=torch.uint8),
+                "num_instances_per_frame": [len(self.instances_per_frame[fr_idx]) for fr_idx in indices],
+                "num_clicks_per_object": self.num_clicks_per_object[indices[0]:indices[-1]+1],
+                "max_timestamp_list": self.max_timestamps[indices[0]:indices[-1]+1]
         }
-        clip["images"] = self.images[indices[0]:indices[-1]+1]
-        clip["num_instances_per_frame"] = [len(self.instances_per_frame[fr_idx]) for fr_idx in indices]
-        clip["num_clicks_per_object"] = self.num_clicks_per_object[indices[0]:indices[-1]+1]
-        clip["max_timestamp_list"] = self.max_timestamps[indices[0]:indices[-1]+1]
 
         # in case no foreground clicks are found on a given instance, simulate 
         # some from the predicted masks of the overlapping frames
@@ -122,16 +137,17 @@ class SequenceManager:
             overlapping_frame_preds = torch.stack(self.pred_masks[overlapping_frame_indices[0]:overlapping_frame_indices[-1]+1])
             t = max(clip["max_timestamp_list"]) + 1
 
-            # instances that didn't get a click
             click_counts = np.sum(clip["num_clicks_per_object"], axis=0)
             for inst_id, cc in enumerate(click_counts):
+                # instances that didn't get a click
                 if cc>0:
                     continue
                 inst_masks = overlapping_frame_preds[:,inst_id]
                 choice_range = list(range(inst_masks.shape[0]))
                 while True:
                     if len(choice_range) == 0:
-                        break
+                        return None # for at least one instance, no prediction was found in the overlapping frames
+                    
                     # randomly select one of the overlapping frames to sample a foreground click from
                     choice = random.sample(choice_range, 1)[0]
                     choice_range.remove(choice)
@@ -153,11 +169,66 @@ class SequenceManager:
         return clip
     
 
-    def save_pred_masks(self, pred_masks, indices):
+    def store_pred_masks(self, pred_masks, indices):
+        """
+        Store predicted masks of a clip
+
+        Args:
+            pred_masks: predicted masks, list of [T,H,W] tensors where T=length of the clip
+            indices: list of indices (w.r.t. the whole sequence) specifying the clip
+        """
         for idx, pred in zip(indices, pred_masks):
             self.pred_masks[idx] = pred
+
     
+    def store_predicted_semantic_maps(self, indices=None):
+        """
+        Convert model-returned instance binary masks to semantic maps
+        """
+        out_masks_ = []
+        H,W = self.pred_masks[0].shape[-2:]
+
+        if indices is None:
+            pred_masks = self.pred_masks
+        else:
+            pred_masks = self.pred_masks[indices[0]:indices[-1]+1]
+
+        for idx in range(len(pred_masks)):
+            dummy_ = np.zeros((H,W))
+            for k in self.instances:
+                dummy_ += pred_masks[idx][self.orig_to_serial_ids[k]-1].numpy() * k
+            out_masks_.append(dummy_)
         
+        if indices is None:
+            self.pred_semantic_maps = np.stack(out_masks_, axis=0)
+        else:
+            for i, idx in enumerate(range(indices[0], indices[-1] + 1)):
+                self.pred_semantic_maps[idx] = out_masks_[i]
+
+        
+    def save_visualization(self, vis_path, round_num=0, indices=None):
+        """
+        Save predicted mask visualization to the disc
+
+        Args:
+            vis_path: str, path to the directory where visualizations are to be saved
+            round_num: int, current round number
+            indices: (optional) list, save visualizations for specified indices # TODO
+        """
+        vis_path = os.path.join(vis_path, self.sequence_id)
+        os.makedirs(vis_path, exist_ok=True)
+        
+        vis_path = os.path.join(vis_path, str(round_num))
+        if os.path.isdir(vis_path):
+            print(f"Warning! Overwriting some files in {vis_path}") # TODO - use logger warning
+        else:
+            os.makedirs(vis_path)
+        
+        for fr_idx, fr_msk in enumerate(self.pred_semantic_maps):
+            m = Image.fromarray(fr_msk.astype(np.uint8))
+            m.putpalette(davis_palette)
+            m.save(os.path.join(vis_path, f"mask_{fr_idx}.png"))
+
 
 
 
