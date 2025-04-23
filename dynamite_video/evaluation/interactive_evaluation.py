@@ -60,7 +60,7 @@ def evaluate(model,
     total_data_time = 0 
     total_compute_time = 0
 
-    max_rounds = 2
+    max_rounds = 3
     
     with ExitStack() as stack:
         if isinstance(model, nn.Module):
@@ -74,64 +74,95 @@ def evaluate(model,
             # a fresh model for each sequence
             predictor = Predictor(model)
             manager = SequenceManager(sequence)
+
+            # number of unique instances across the whole sequence
             num_instances = len(manager.instances)
-
-            # round 0
-            round_num = 0
-            for clip_idx, indices in enumerate(sequence["indices"]):
-                
-                # extract a clip with first set of foreground clicks
-                inputs = manager.extract_clip(indices)
-                # obtain prediction
-                pred_masks = predictor.get_prediction([inputs])
-
-                manager.store_pred_masks(pred_masks, indices)
+            # ground truth semantic maps [T,H,W] of the sequence frames
+            gt_semantic_maps = manager.gt_semantic_maps
             
-            pred_masks = manager.store_predicted_semantic_maps()
-            if save_vis:
-                manager.save_visualization(vis_path, round_num)
-
+            # click budget per frame
             max_iters_for_image = max_interactions * num_instances
 
-            jaccard_mean, jaccard_instances = batched_jaccard(manager.gt_semantic_maps, manager.pred_semantic_maps, average_over_objects=True, nb_objects=num_instances)
-            contour_mean, contour_instances = batched_f_measure(manager.gt_semantic_maps, manager.pred_semantic_maps, average_over_objects=True, nb_objects=num_instances)
-
-            j_and_f = 0.5*jaccard_mean + 0.5*contour_mean
-            j_and_f = j_and_f.tolist()
-            seq_avg_jf = sum(j_and_f)/len(j_and_f)
-
-            iou_for_sequence = jaccard_mean.tolist()
-            seq_avg_iou = sum(iou_for_sequence)/len(iou_for_sequence)
-            print(f'[PROPAGATION INFO][SEQ:{manager.sequence_id}][ROUND:{round_num}] Prediction results: Average IoU: {seq_avg_iou}, Average J&F: {seq_avg_jf}')
-
-            frame_list = [i for i in range(manager.sequence_length)]
+            # round 1 starts from the first frame
+            round_num = 1
+            lowest_frame_index = 0
+            
+            # Given latest prediction:
+            # 1. find the frame with the worst instance segmentation map
+            # 2. get corrective clicks on the instance
+            # 3. pass through the model
             while True:
-                min_iou_index = np.unravel_index(np.argmin(jaccard_instances, axis=None), jaccard_instances.shape)
-                min_iou = jaccard_instances[min_iou_index]
-                print(f'[EVALUATOR INFO][SEQ:{manager.sequence_id}][ROUND:{round_num}] Weakest frame (instance): idx: {min_iou_index}, value: {min_iou}')                        
-                if min_iou < iou_threshold:                                                         # 1. whether all frames meet IoU threshold
-                    if round_num == max_rounds:                                                     # 2. whether round budget is over
-                        print(f'[STOPPING CRITERIA][SEQ:{manager.sequence_id}][ROUND:{round_num}] Maximum round limit ({max_rounds}) reached!')
+                
+                clip_indices = manager.create_clip_indices(start=lowest_frame_index)
+                
+                # forward prediction
+                for indices in clip_indices:
+
+                    # extract a clip with first set of foreground clicks
+                    inputs = manager.extract_clip(indices)
+
+                    # obtain predicted instance-wise binary segmentation masks
+                    pred_masks = predictor.get_prediction([inputs])
+                    # store predictions
+                    manager.store_pred_masks(pred_masks, indices)
+                
+                # convert predicted binary masks to semantic maps, which is to be used for finding the next frame
+                pred_masks = manager.store_predicted_semantic_maps()
+                
+                if save_vis:
+                    manager.save_visualization(vis_path, round_num)
+                
+                # calculate J&F
+                jaccard_mean, jaccard_instances = batched_jaccard(gt_semantic_maps, manager.pred_semantic_maps, average_over_objects=True, nb_objects=num_instances)
+                contour_mean, _ = batched_f_measure(gt_semantic_maps, manager.pred_semantic_maps, average_over_objects=True, nb_objects=num_instances)
+                j_and_f = 0.5*jaccard_mean + 0.5*contour_mean
+                logger.info(f'{manager.sequence_id}, Round {round_num}:: Scores: Average IoU: {jaccard_mean.mean()}, Average J&F: {j_and_f.mean()}')
+
+                # find the frame with worst instance-level IoU
+                frame_list = np.arange(manager.sequence_length)
+                while True:
+                    # Stopping criterion 1: check whether round budget is over
+                    if round_num == max_rounds:
+                        logger.info(f'{manager.sequence_id}, Round {round_num}:: Maximum round limit ({max_rounds}) reached!')
                         lowest_frame_index = -1
                         break
-                    lowest_frame_index = int(min_iou_index[0])
-                    print(f'[EVALUATOR INFO][SEQ:{manager.sequence_id}][ROUND:{round_num}] Next index to refine: {lowest_frame_index}, IoU: {min_iou}')
-                    break
-                    # if num_interactions_for_sequence[lowest_frame_index] >= max_iters_for_image:     # if interaction budget is over for a frame, look for another frame             
-                    #     print(f'[STOPPING CRITERIA][SEQ:{manager.sequence_id}][ROUND:{round_num}] Budget over - skipping frame {lowest_frame_index}.')
-                    #     frame_list.remove(lowest_frame_index)
-                    #     jaccard_instances[min_iou_index[0]] = 99.
-                    #     if len(frame_list)==0:                                                         # 3. whether interaction budget is over for all frames
-                    #         lowest_frame_index = -1
-                    #         print(f'[STOPPING CRITERIA][SEQ:{manager.sequence_id}][ROUND:{round_num}] Ran out of click budget for all frames!')
-                    #         break
-                    # else:
-                    #     break
-                else:
-                    lowest_frame_index = -1
-                    print(f'[STOPPING CRITERIA][SEQ:{manager.sequence_id}][ROUND:{round_num}] All frames meet IoU requirement!')
+
+                    # weakest frame and instance
+                    min_iou_index = np.unravel_index(np.argmin(jaccard_instances, axis=None), jaccard_instances.shape)
+                    min_iou = jaccard_instances[min_iou_index]
+                    logger.info(f'{manager.sequence_id}, Round {round_num}:: Next frame to refine: {min_iou_index[0]}, instance: {min_iou_index[1]}, value: {min_iou}')
+                    
+                    # Stopping criterion 2: check whether all frames meet IoU threshold
+                    if min_iou >= iou_threshold:
+                        lowest_frame_index = -1
+                        logger.info(f'{manager.sequence_id}, Round {round_num}:: All frames meet IoU requirement!')
+                        break
+                    else:
+                        lowest_frame_index = min_iou_index[0]
+                        lowest_instance_id = min_iou_index[1]
+                        
+                        # Check remaining click budget for candidate frame; if not left, find the next weakest frame
+                        if manager.num_clicks_per_frame[lowest_frame_index] >= max_iters_for_image:
+                            logger.info(f'{manager.sequence_id}, Round {round_num}:: Skipping frame {lowest_frame_index} - click budget over!')
+                            np.delete(frame_list, lowest_frame_index)
+                            jaccard_instances[min_iou_index[0]] = 99.
+                            
+                            # Stopping criterion 3: click budget over for all frames
+                            if len(frame_list)==0:
+                                lowest_frame_index = -1
+                                logger.info(f'{manager.sequence_id}, Round {round_num}:: Ran out of click budget for all frames!')
+                                break
+                        else:
+                            break
+                
+                # hit one of the stopping criteria
+                if lowest_frame_index == -1:
                     break
 
+                round_num += 1
+
+                # get corrective clicks
+                clicks = manager.get_corrective_click(frame_idx=lowest_frame_index, inst_id=lowest_instance_id)
 
 
 

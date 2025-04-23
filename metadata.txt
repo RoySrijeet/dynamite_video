@@ -20,9 +20,15 @@ git checkout v0.6           # current version as of 18.01.2025
 python -m pip install -e .
 
 # make MSDA without GPU
-TORCH_CUDA_ARCH_LIST='8.0' FORCE_CUDA=1 python setup.py build install
+TORCH_CUDA_ARCH_LIST='8.9 8.6 8.0 7.5' FORCE_CUDA=1 python setup.py build install
 # or with CUDA_HOME set (module load cuda/12.4)
 sh make.sh      # in pixel_decoder/ops dir
+
+TORCH_CUDA_ARCH_LIST
+# 8.6 for a40
+# 8.0 a100
+# 7.5 Titan RTX
+# 8.9 H100
 
 
 NOTES: 

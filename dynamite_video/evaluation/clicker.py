@@ -60,6 +60,8 @@ class SequenceManager:
         self.max_timestamps = [0 for _ in range(self.sequence_length)]
         # num clicks on each object in each frame
         self.num_clicks_per_object = np.zeros((self.sequence_length, self.num_instances)).astype('int').tolist()
+        # num clicks per frame
+        self.num_clicks_per_frame = [0 for _ in range(self.sequence_length)]
 
         # get initial clicks on object center
         self.get_gt_clicks()
@@ -97,15 +99,61 @@ class SequenceManager:
             self.max_timestamps[fr_idx] = t
             t+=1
 
+    def get_corrective_click(self, frame_idx, inst_id, padding=True):
+        ...
 
-    
-    def extract_clip(self, indices):
+
+    def create_clip_indices(self, start):
         """
-        Given a list of frame indices, extract a clip consisting of these indices 
-        from the whole sequence
+        Given a start index, generate list of indices of clips from the sequence.
+        If the start index is in the middle of the sequence, it generates clips in
+        both forward and backward directions.
 
         Args:
-            indices: list(int)
+            start: int, index of the first frame of the first clip
+
+        Returns:
+            indices: list of indices of clips
+        """
+        start_copy = start
+        indices = []
+        step = self.clip_length - self.num_overlapping_frames
+        if start < self.sequence_length - 1:
+            while start + self.clip_length <= self.sequence_length:
+                indices.append(tuple(range(start, start + self.clip_length)))
+                start += step
+            if len(indices) > 0 and indices[-1][-1] != self.sequence_length - 1:
+                indices.append(tuple(range(indices[-1][-1] - self.num_overlapping_frames+1, self.sequence_length)))
+            elif len(indices) == 0:
+                indices.append(tuple(range(start, self.sequence_length)))
+
+        # generate clips that go back in time
+        if start_copy>0:
+            bwd = []
+            start_copy = min(start_copy+self.num_overlapping_frames-1, self.sequence_length-1)
+            while start_copy - self.clip_length >= 0:
+                bwd.append(tuple(range(start_copy, start_copy-self.clip_length, -1)))
+                start_copy -= step
+            if len(bwd) > 0 and bwd[-1][-1] != 0:
+                bwd.append(tuple(range(bwd[-1][-1] + self.num_overlapping_frames-1, -1, -1)))
+            elif len(bwd) == 0:
+                bwd.append(tuple(range(start_copy, -1, -1)))
+            indices.extend(bwd)
+        return indices
+    
+    
+    def extract_clip(self, _indices):
+        """
+        Given a list of frame indices, extract a clip consisting of these indices 
+        from the whole sequence.
+
+        Indices may be incremental or decremental. In case of the latter, the clip
+        is temporally reversed. The reversed indices are important in finding the
+        overlapping frames, but for the rest of the workflow the indices are reversed
+        once more (turning them incremental)
+
+        Args:
+            _indices: list(int)
 
         Returns:
             clip: dict. The format should be consistent with that of the batch input for 
@@ -120,6 +168,12 @@ class SequenceManager:
                 * seq_name: name of the parent sequence
                 * frame_indices: global indices of the clip (w.r.t. the whole sequence)
         """
+        indices = _indices
+        if indices[1]<indices[0]:
+            indices = _indices[::-1]
+        # indices - always incremental
+        # _indices - true order
+        
         clip = {
                 "seq_name": self.sequence_id,
                 "frame_indices": indices,
@@ -133,7 +187,7 @@ class SequenceManager:
         # some from the predicted masks of the overlapping frames
         if not all(np.sum(clip["num_clicks_per_object"], axis=0)):
             
-            overlapping_frame_indices = indices[:self.num_overlapping_frames]
+            overlapping_frame_indices = sorted(_indices[:self.num_overlapping_frames])
             overlapping_frame_preds = torch.stack(self.pred_masks[overlapping_frame_indices[0]:overlapping_frame_indices[-1]+1])
             t = max(clip["max_timestamp_list"]) + 1
 
@@ -146,7 +200,13 @@ class SequenceManager:
                 choice_range = list(range(inst_masks.shape[0]))
                 while True:
                     if len(choice_range) == 0:
-                        return None # for at least one instance, no prediction was found in the overlapping frames
+                        # for at least one instance, no prediction was found in the overlapping frames
+                        # obtain a click from ground truth mask
+                        center_coords = get_center_coords(self.gt_instance_masks[overlapping_frame_indices[0]][inst_id])
+                        self.fg_coords_list[overlapping_frame_indices[0]][inst_id].append([center_coords[0], center_coords[1], inst_id, overlapping_frame_indices[0], t])
+                        self.num_clicks_per_object[overlapping_frame_indices[0]][inst_id] += 1
+                        self.max_timestamps[overlapping_frame_indices[0]] = t
+                        break
                     
                     # randomly select one of the overlapping frames to sample a foreground click from
                     choice = random.sample(choice_range, 1)[0]
@@ -165,6 +225,9 @@ class SequenceManager:
         
         clip["fg_coords_list"] = self.fg_coords_list[indices[0]:indices[-1]+1]
         clip["bg_coords_list"] = self.bg_coords_list[indices[0]:indices[-1]+1]
+
+        for idx, fg_click_count, bg_click in zip(indices, clip["num_clicks_per_object"], clip["bg_coords_list"]):
+            self.num_clicks_per_frame[idx] += sum(fg_click_count) + len(bg_click)
         
         return clip
     
@@ -228,8 +291,3 @@ class SequenceManager:
             m = Image.fromarray(fr_msk.astype(np.uint8))
             m.putpalette(davis_palette)
             m.save(os.path.join(vis_path, f"mask_{fr_idx}.png"))
-
-
-
-
-    

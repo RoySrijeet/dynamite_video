@@ -139,4 +139,4 @@ debug
 notebooks
 jobscripts
 detectron2
-experiments
+experiments*
