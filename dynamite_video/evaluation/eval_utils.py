@@ -1,5 +1,25 @@
 import numpy as np
 
+
+def create_circular_mask(h, w, centers, radius):
+    """
+    create a circular mask of radius `radius` about the coordinates
+    specified by `centers`
+    """
+
+    assert centers is not None
+    assert radius is not None
+
+    mask=np.zeros((h,w), dtype=bool) 
+    for center in centers:
+
+        Y, X = np.ogrid[:h, :w]
+        dist_from_center = np.sqrt((X - center[1])**2 + (Y-center[0])**2)
+
+        mask = mask | (dist_from_center <= radius)
+    return mask.astype(np.uint8)
+
+
 def get_palette(num_cls):
     palette = np.zeros(3 * num_cls, dtype=np.int32)
 

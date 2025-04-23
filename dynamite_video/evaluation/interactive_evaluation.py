@@ -11,7 +11,7 @@ from contextlib import ExitStack, contextmanager
 from detectron2.utils import comm
 from detectron2.utils.logger import setup_logger
 
-from dynamite_video.evaluation.clicker import SequenceManager
+from dynamite_video.evaluation.manager import SequenceManager
 from dynamite_video.evaluation.metrics import batched_f_measure, batched_jaccard
 
 
@@ -53,12 +53,8 @@ def evaluate(model,
         vis_path = os.path.join(output_path, "vis")
         os.makedirs(vis_path, exist_ok=True)
     
-    logger = setup_logger(output=output_path, distributed_rank=comm.get_rank(), name=__name__)
+    logger = setup_logger(output=output_path, distributed_rank=comm.get_rank(), name="Interactive Evaluation")
     logger.info(f"Starting inference on {len(dataset)} sequences...")
-    
-    start_time = time.perf_counter()
-    total_data_time = 0 
-    total_compute_time = 0
 
     max_rounds = 3
     
@@ -75,46 +71,43 @@ def evaluate(model,
             predictor = Predictor(model)
             manager = SequenceManager(sequence)
 
-            # number of unique instances across the whole sequence
-            num_instances = len(manager.instances)
             # ground truth semantic maps [T,H,W] of the sequence frames
             gt_semantic_maps = manager.gt_semantic_maps
-            
             # click budget per frame
-            max_iters_for_image = max_interactions * num_instances
+            max_iters_for_image = max_interactions * manager.num_instances
+            
+            ####### Rounds #######
+            # 1. Obtain predicted masks across the whole sequence
+            # 2. Find the frame with the worst instance segmentation map
+            # 3. Get corrective clicks on that frame/instance
+            # Repeat
+            ######################
 
             # round 1 starts from the first frame
             round_num = 1
             lowest_frame_index = 0
-            
-            # Given latest prediction:
-            # 1. find the frame with the worst instance segmentation map
-            # 2. get corrective clicks on the instance
-            # 3. pass through the model
             while True:
                 
+                # generate indices of shorter clips from whole sequence
                 clip_indices = manager.create_clip_indices(start=lowest_frame_index)
                 
                 # forward prediction
                 for indices in clip_indices:
-
                     # extract a clip with first set of foreground clicks
                     inputs = manager.extract_clip(indices)
-
                     # obtain predicted instance-wise binary segmentation masks
                     pred_masks = predictor.get_prediction([inputs])
-                    # store predictions
                     manager.store_pred_masks(pred_masks, indices)
                 
-                # convert predicted binary masks to semantic maps, which is to be used for finding the next frame
-                pred_masks = manager.store_predicted_semantic_maps()
+                # convert predicted binary masks to semantic maps
+                manager.store_predicted_semantic_maps()
                 
                 if save_vis:
                     manager.save_visualization(vis_path, round_num)
                 
                 # calculate J&F
-                jaccard_mean, jaccard_instances = batched_jaccard(gt_semantic_maps, manager.pred_semantic_maps, average_over_objects=True, nb_objects=num_instances)
-                contour_mean, _ = batched_f_measure(gt_semantic_maps, manager.pred_semantic_maps, average_over_objects=True, nb_objects=num_instances)
+                jaccard_mean, jaccard_instances = batched_jaccard(gt_semantic_maps, manager.pred_semantic_maps, average_over_objects=True, nb_objects=manager.num_instances)
+                contour_mean, _ = batched_f_measure(gt_semantic_maps, manager.pred_semantic_maps, average_over_objects=True, nb_objects=manager.num_instances)
                 j_and_f = 0.5*jaccard_mean + 0.5*contour_mean
                 logger.info(f'{manager.sequence_id}, Round {round_num}:: Scores: Average IoU: {jaccard_mean.mean()}, Average J&F: {j_and_f.mean()}')
 
@@ -162,7 +155,8 @@ def evaluate(model,
                 round_num += 1
 
                 # get corrective clicks
-                clicks = manager.get_corrective_click(frame_idx=lowest_frame_index, inst_id=lowest_instance_id)
+                refined_obj_index = manager.get_corrective_click(frame_idx=lowest_frame_index, inst_id=lowest_instance_id)
+                logger.info(f'{manager.sequence_id}, Round {round_num}:: Sampled a click on instance {refined_obj_index+1} in frame {lowest_frame_index}')
 
 
 

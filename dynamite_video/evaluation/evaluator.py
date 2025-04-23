@@ -19,7 +19,7 @@ class Evaluator(DefaultTrainer):
         """
         
         
-        logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name=__name__)
+        logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="Evaluator")
 
         eval_datasets = args.eval_datasets
         iou_threshold = args.iou_threshold
