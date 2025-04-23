@@ -271,7 +271,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         attn_mask = (attn_mask.sigmoid().flatten(2).unsqueeze(1).repeat(1, self.num_heads, 1, 1).flatten(0, 1) < 0.5).bool()
         attn_mask = attn_mask.detach()
 
-        return outputs_mask, attn_mask, mask_embed
+        return outputs_mask, attn_mask
 
       
     
@@ -322,7 +322,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         predictions_mask = []
        
         # prediction heads on learnable query features
-        outputs_mask, attn_mask, raw_mask_embed = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[0])
+        outputs_mask, attn_mask = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[0])
             
         
         predictions_mask.append(outputs_mask)
@@ -351,7 +351,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                 output
             )
 
-            outputs_mask, attn_mask, raw_mask_embed = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
+            outputs_mask, attn_mask = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
 
             predictions_mask.append(outputs_mask)
 
@@ -363,7 +363,7 @@ class DynamiteInteractiveTransformer(nn.Module):
            
             mask_features = self.decoder((mask_features, output, query_embed))
             mask_features = einops.rearrange(mask_features,"(H W) B C -> B C H W", H=H, W=W, B=B).contiguous()
-            outputs_mask, attn_mask, raw_mask_embed = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
+            outputs_mask, attn_mask = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
             
             predictions_mask.append(outputs_mask)
 

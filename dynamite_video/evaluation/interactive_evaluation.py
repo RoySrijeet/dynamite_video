@@ -64,8 +64,13 @@ def evaluate(model,
         stack.enter_context(torch.no_grad())
 
         random.seed(123456+seed_id)
+
+        avg = []
         
         for sequence in dataset:
+
+            if sequence["id"] == "india":
+                continue
             
             # a fresh model for each sequence
             predictor = Predictor(model)
@@ -150,6 +155,7 @@ def evaluate(model,
                 
                 # hit one of the stopping criteria
                 if lowest_frame_index == -1:
+                    avg.append([jaccard_mean.mean(), j_and_f.mean()])
                     break
 
                 round_num += 1
@@ -157,7 +163,8 @@ def evaluate(model,
                 # get corrective clicks
                 refined_obj_index = manager.get_corrective_click(frame_idx=lowest_frame_index, inst_id=lowest_instance_id)
                 logger.info(f'{manager.sequence_id}, Round {round_num}:: Sampled a click on instance {refined_obj_index+1} in frame {lowest_frame_index}')
-
+        
+        return avg
 
 
 @contextmanager

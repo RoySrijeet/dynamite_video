@@ -1,3 +1,5 @@
+import numpy as np
+
 from detectron2.utils import comm
 from detectron2.engine import DefaultTrainer
 from detectron2.utils.logger import setup_logger
@@ -59,4 +61,5 @@ class Evaluator(DefaultTrainer):
                             save_vis=save_vis,
                     )
         
-        # save result - TODO
+            # save result
+            mean_score = np.mean(np.asarray(result), axis=1)

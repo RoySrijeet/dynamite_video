@@ -281,11 +281,13 @@ class SequenceManager:
                 while True:
                     if len(choice_range) == 0:
                         # for at least one instance, no prediction was found in the overlapping frames
-                        # obtain a click from ground truth mask
-                        center_coords = get_center_coords(self.gt_instance_masks[overlapping_frame_indices[0]][inst_id])
-                        self.fg_coords_list[overlapping_frame_indices[0]][inst_id].append([center_coords[0], center_coords[1], inst_id, overlapping_frame_indices[0], t])
-                        # self.num_clicks_per_object[overlapping_frame_indices[0]][inst_id] += 1
-                        self.max_timestamps[overlapping_frame_indices[0]] = t
+                        # obtain a click from ground truth mask, if the latter is non-empty
+                        gt_mask = self.gt_instance_masks[overlapping_frame_indices[0]][inst_id]
+                        if gt_mask.any():
+                            center_coords = get_center_coords(gt_mask)
+                            self.fg_coords_list[overlapping_frame_indices[0]][inst_id].append([center_coords[0], center_coords[1], inst_id, overlapping_frame_indices[0], t])
+                            # self.num_clicks_per_object[overlapping_frame_indices[0]][inst_id] += 1
+                            self.max_timestamps[overlapping_frame_indices[0]] = t
                         break
                     
                     # randomly select one of the overlapping frames to sample a foreground click from
