@@ -122,9 +122,9 @@ class SetFinalCriterion(nn.Module):
             for i in range(outputs['pred_masks'].shape[0]):
                 temp_out = []
                 clicks_per_image = copy.deepcopy(num_clicks_per_object[i])
-                for i in range(len(clicks_per_image)):
-                    if clicks_per_image[i] == 0:
-                        clicks_per_image[i] += 1
+                for fr_i in range(len(clicks_per_image)):
+                    if clicks_per_image[fr_i] == 0:
+                        clicks_per_image[fr_i] += 1
                 clicks_per_image.append(outputs['pred_masks'][i].shape[0] - sum(clicks_per_image))
                 splited_masks = torch.split(outputs['pred_masks'][i], clicks_per_image, dim=0)
                 for m in splited_masks:

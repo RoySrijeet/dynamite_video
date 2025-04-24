@@ -209,8 +209,8 @@ class DynamiteInteractiveTransformer(nn.Module):
             memory.append(self.input_proj[i](multi_scale_features[i]).flatten(2) + self.level_embed.weight[i][None, :, None])
 
             # flatten NxCxHxW to HWxNxC
-            memory_pe[-1] = memory_pe[-1].permute(2, 0, 1)  # hwxTxD
-            memory[-1] = memory[-1].permute(2, 0, 1)        # hwxTxD
+            memory_pe[-1] = memory_pe[-1].permute(2, 0, 1)  # TxDxhw -> hwxTxD
+            memory[-1] = memory[-1].permute(2, 0, 1)        # TxDxhw -> hwxTxD
 
 
         if self.training:
@@ -310,7 +310,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         if self.positional_embeddings:
             pos_coord_embed = get_spatiotemporal_embeddings(normalized_click_coords.permute(1,0,2), self.positional_embeddings, descriptors.shape[2]) # QxTxD'
             pos_coord_embed = self.ca_qpos_sine_proj(pos_coord_embed.to(query_embed.dtype)) # QxTxD
-            query_embed = query_embed + pos_coord_embed # QxD
+            query_embed = query_embed + pos_coord_embed # QxTxD
 
         if self.use_static_bg_queries:
             static_bg_pe = repeat(self.static_bg_pe, "Bg C -> Bg N C", N=T)
@@ -395,7 +395,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             data: input from dataloader for current clip
             images: [T, 3, H, W] tensors of the images in the clip (d2 ImageList)
             outputs: prediction 
-            num_instances: List [n_1, n_2, ..., n_T] where n_i is the #instances in the i-th frame
+            num_instances: List of instance IDs in the i-th frame
             num_clicks_per_object: count of clicks on each instance in each frame
         """
         
@@ -429,9 +429,6 @@ class DynamiteInteractiveTransformer(nn.Module):
     
     def interactive_instance_inference(self, mask_pred, num_instances, clicks_per_image):
 
-        assert len(clicks_per_image) == num_instances
-        image_size = mask_pred.shape[-2:]
-
         # bg queries
         clicks_per_image.append(mask_pred.shape[0] - sum(clicks_per_image))
 
@@ -443,7 +440,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         for m in splited_masks:
             temp_out.append(torch.max(m, dim=0).values)
         
-        mask_pred = torch.stack(temp_out)
+        mask_pred = torch.stack(temp_out)       # (N+1)xHxW
 
         mask_pred = torch.argmax(mask_pred,0)
         m = []
