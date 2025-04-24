@@ -62,4 +62,5 @@ class Evaluator(DefaultTrainer):
                     )
         
             # save result
-            mean_score = np.mean(np.asarray(result), axis=1)
+            mean_score = np.mean(np.asarray(result), axis=0)
+            logger.info(f"Mean scores, {dataset_name}  [IoU, J&F]: {mean_score}")

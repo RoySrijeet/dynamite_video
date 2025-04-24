@@ -84,7 +84,7 @@ def load_config(args):
 
     if args.resume or args.eval_only:
         # check if checkpoint directory contains config file
-        ckpt_folder = os.path.dirname(args.resume) if args.resume else args.expt_dir
+        ckpt_folder = args.expt_dir #os.path.dirname(args.resume) if args.resume else args.expt_dir
         path_to_ckpt_config = os.path.join(ckpt_folder, "config.yaml")
         assert os.path.exists(path_to_ckpt_config), f"Config file not found! Checkpoint folder \
             ({ckpt_folder}) must contain both .pth and config.yaml files from previous run."
@@ -242,8 +242,7 @@ def get_cl_arguments():
 
     parser.add_argument(
         "--resume", 
-        type=str,
-        required=False,
+        action="store_true",
         help="""
                 Whether to resume from specified checkpoint directory. Resuming means loading all available 
                 states (eg. optimizer and scheduler) and update iteration counter from the checkpoint.

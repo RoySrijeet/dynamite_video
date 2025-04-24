@@ -69,8 +69,8 @@ def evaluate(model,
         
         for sequence in dataset:
 
-            if sequence["id"] == "india":
-                continue
+            # if sequence["id"] in ["india", "kite-surf"]:
+            #     continue
             
             # a fresh model for each sequence
             predictor = Predictor(model)
