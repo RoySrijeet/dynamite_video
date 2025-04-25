@@ -362,9 +362,6 @@ class DynamiteModel(nn.Module):
     
     def interactive_instance_inference(self, mask_pred, num_instances, clicks_per_image):
 
-        assert len(clicks_per_image) == num_instances
-        image_size = mask_pred.shape[-2:]
-
         # bg queries
         clicks_per_image.append(mask_pred.shape[0] - sum(clicks_per_image))
 
