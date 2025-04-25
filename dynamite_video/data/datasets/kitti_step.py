@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Union
 from dynamite_video.utils.paths import Paths
 from dynamite_video.data.datasets.base import TrainingDataset, InferenceDataset
 from dynamite_video.data.generic_video_parser import GenericVideoSequence, parse_generic_video_dataset
+from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks
 
 class KITTISTEPTrainingDataset(TrainingDataset):
     """
@@ -39,7 +40,7 @@ class KITTISTEPTrainingDataset(TrainingDataset):
         super().__init__(cfg, "KITTI_STEP", clip_length, num_samples, fps, frame_sampling_multiplicative_factor)
 
         # path to KITTI_STEP images
-        path_to_images = Paths.to_kitti_step_train_images()
+        path_to_images = Paths.to_kitti_step_trainval_images()
         if not os.path.exists(path_to_images):
             # `path_to_images` could be an fpack file
             path_to_images = f"{path_to_images}.fpack"
@@ -177,5 +178,188 @@ class KITTISTEPTrainingDataset(TrainingDataset):
 
 
 class KITTISTEPInferenceDataset(InferenceDataset):
-    ...
+    """
+    Inference dataset for KITTI-STEP
 
+    NOTE: KITTI-STEP training dataset (21 sequences) is split into train (12) and val (9) datasets.
+    Annotations for KITTI-STEP test dataset (29 different sequences) was not available
+    """
+
+    def __init__(self, cfg):
+        # number of frames in each training sample
+        clip_length = cfg.DATASETS.KITTI_STEP.INFERENCE.CLIP_LENGTH
+        # video fps
+        fps = cfg.DATASETS.KITTI_STEP.INFERENCE.FPS
+        # number of overlapping frames between clips
+        num_overlapping_frames = cfg.DATASETS.KITTI_STEP.INFERENCE.FRAME_OVERLAP
+
+        assert num_overlapping_frames <= clip_length, f"No. of overlapping frames cannot be more than the length of a clip"
+        
+        split = cfg.DATASETS.KITTI_STEP.INFERENCE.SPLIT
+        
+        super().__init__(cfg, "KITTI_STEP", clip_length, fps, num_overlapping_frames, split)
+
+        if self.split == "val":
+            # get paths
+            self.path_to_images = Paths.to_kitti_step_trainval_images()
+            if not os.path.exists(self.path_to_images):
+                # `path_to_images` could be an fpack file
+                self.path_to_images = f"{self.path_to_images}.fpack"
+                assert os.path.exists(self.path_to_images), f"Directory not found: {self.path_to_images}"
+            
+            # get annotations
+            train_annotations_json = Paths.to_kitti_step_train_annotations()
+            with open(train_annotations_json, "rb") as f:
+                train_annotations = json.load(f)
+            f.close()
+            train_ids = []
+            for i in range(len(train_annotations["sequences"])):
+                train_ids.append(train_annotations["sequences"][i]["id"])
+            del train_annotations
+
+            trainval_annotations_json = Paths.to_kitti_step_trainval_annotations()
+            with open(trainval_annotations_json, "rb") as f:
+                trainval_annotations = json.load(f)
+            f.close()
+            val_anno = {"sequences": []}
+            for i in range(len(trainval_annotations["sequences"])):
+                seq_id = trainval_annotations["sequences"][i]["id"]
+                if seq_id in train_ids:
+                    continue
+                val_anno["sequences"].append(trainval_annotations["sequences"][i])
+            val_anno["meta"] = trainval_annotations["meta"]
+            self.annotations = val_anno
+            
+            del trainval_annotations
+
+        else:
+            assert self.split == "test"
+            raise RuntimeError(f"Annotations for KITTI-STEP test split is not available")
+            # get paths
+            self.path_to_images = Paths.to_kitti_step_test_images()
+            if not os.path.exists(path_to_images):
+                # `path_to_images` could be an fpack file
+                path_to_images = f"{path_to_images}.fpack"
+                assert os.path.exists(path_to_images), f"Directory not found: {path_to_images}"
+            
+            # JSON annotation file
+            # N/A
+    
+    def create_inference_dataset(self):
+        """
+        Prepare dataset for evaluation.
+        """
+
+        if self.split != "val":
+            raise RuntimeError(f"Annotations for KITTI-STEP {self.split} split is not available")
+        
+        sequence_annotations = []
+        
+        for seq in self.annotations["sequences"]:
+
+            metadata = {"id": seq['id']}
+
+            # load images
+            image_filepaths = sorted([os.path.join(self.path_to_images, seq['id'], file) for file in os.listdir(os.path.join(self.path_to_images, seq['id'])) if file.endswith('png')])
+            images = self.load_images(image_filepaths)      # [T, H, W, 3]
+
+            metadata["length"] = len(image_filepaths)
+            metadata["orig_dims"] = (images.shape[1], images.shape[2])
+
+            # TODO: excuse the lingo, the following 'instances' are not really instances, rather classes
+            
+            # for each instance (class), store index of the frame where it first appeared
+            instance_discovery = {}
+            
+            for fr_idx, pano_masks in enumerate(seq["semantic_segmentations"]):
+                for class_id, _ in pano_masks.items():
+                    # ignore void class
+                    if class_id == "255": 
+                        continue
+                    if int(class_id) not in instance_discovery.keys():
+                        # encountered an instance (class) for the first time in the sequence
+                        instance_discovery[int(class_id)] = fr_idx
+                    
+            
+            # find all the instances (classes) present in the sequence, so that we can insert empty
+            # masks for the ones that are absent
+            orig_instance_ids = sorted(list(instance_discovery.keys()))
+            orig_to_serial_ids, serial_to_orig_ids = self.serialize_instance_ids(orig_instance_ids)
+            assert orig_instance_ids == list(orig_to_serial_ids.keys())
+            metadata["orig_to_serial_ids"] = orig_to_serial_ids
+            metadata["serial_to_orig_ids"] = serial_to_orig_ids
+
+            metadata["instance_discovery"] = {orig_to_serial_ids[inst_id]: fr_idx 
+                                              for inst_id, fr_idx in instance_discovery.items()}
+
+            # load panoptic masks
+            instance_masks = []
+            semantic_maps = []
+            bg_masks = []
+            # store instance (class) IDs present in each frame
+            instances_per_frame = []
+            for fr_idx, pano_masks in enumerate(seq["semantic_segmentations"]):
+                
+                fr_instance_masks = []
+                fr_semantic_map = np.zeros(metadata["orig_dims"])
+                fr_instance_ids = []
+                
+                # look for a mask of each instance (class) in each frame
+                for inst_id in orig_instance_ids:
+                    
+                    if str(inst_id) in pano_masks.keys():
+                        # if found, decode the RLE mask into an np.ndarray
+                        m = self.decode_mask(pano_masks[str(inst_id)], metadata["orig_dims"])
+                        fr_instance_masks.append(m)
+                        # also save it in a semantic map, with serialized ID
+                        fr_semantic_map[np.where(m==1)] = orig_to_serial_ids[inst_id]
+                        fr_instance_ids.append(orig_to_serial_ids[inst_id])
+                    else:
+                        # if not found, use an empty mask
+                        fr_instance_masks.append(np.zeros_like(fr_semantic_map).astype(np.uint8))
+                
+                instance_masks.append(np.stack(fr_instance_masks))
+                semantic_maps.append(fr_semantic_map)
+                fr_bg_mask = (fr_semantic_map==0).astype(np.uint8)
+                bg_masks.append(fr_bg_mask)
+                instances_per_frame.append(fr_instance_ids)
+
+            instance_masks = np.stack(instance_masks)               # T, N, H, W
+            semantic_maps = np.stack(semantic_maps)                 # T, H, W
+            bg_masks = np.stack(bg_masks)                           # T, H, W
+
+            if self.cfg.INPUT.AUGMENTATION.RESIZE_TEST:
+                # compute target resolution
+                new_height, new_width = compute_resized_dims(
+                    *images.shape[1:3], 
+                    min_dim=self.cfg.INPUT.AUGMENTATION.MIN_DIM_TEST,
+                    max_dim=self.cfg.INPUT.AUGMENTATION.MAX_DIM_TEST,
+                )
+                if (new_height, new_width) != metadata["orig_dims"]:
+                    images = resize_images(images, new_height, new_width)
+                    semantic_maps = resize_masks(semantic_maps, new_height, new_width, binary=False)
+                    instance_masks = resize_masks(instance_masks, new_height, new_width, binary=True)
+                    bg_masks = resize_masks(bg_masks, new_height, new_width, binary=False)
+            
+            # arrange dimensions
+            images = np.transpose(images, (0, 3, 1, 2))   # [T, H, W, 3] -> [T, 3, H, W]
+            if self.cfg.INPUT.RGB:
+                # BGR -> RGB (load_images uses cv2.imread which reads images in BGR mode by default)
+                images = np.flip(images, 1).copy()
+            
+            metadata["images"] = images
+            metadata["bg_masks"] = bg_masks
+            metadata["semantic_maps"] = semantic_maps
+            metadata["instance_masks"] = instance_masks
+
+            # TODO - padding - not applied
+            metadata["padding_mask"] = np.zeros((images.shape[2], images.shape[3])).astype('uint8')
+
+            metadata["instances_per_frame"] = instances_per_frame
+            metadata["clip_length"] = self.clip_length
+            metadata["num_overlapping_frames"] = self.num_overlapping_frames
+            
+            sequence_annotations.append(metadata)
+            break
+        
+        return sequence_annotations

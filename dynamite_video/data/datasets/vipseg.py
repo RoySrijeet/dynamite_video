@@ -41,12 +41,12 @@ class VIPSEGTrainingDataset(TrainingDataset):
 
         # path to VIPSEG images
         path_to_images = Paths.to_vipseg_images()
-        # if not os.path.exists(path_to_images):
-        #     # `path_to_images` could be an fpack file
-        #     path_to_images = f"{path_to_images}.fpack"
-        #     assert os.path.exists(path_to_images), f"Directory not found: {path_to_images}"
+        if not os.path.exists(path_to_images):
+            # `path_to_images` could be an fpack file
+            path_to_images = f"{path_to_images}.fpack"
+            assert os.path.exists(path_to_images), f"Directory not found: {path_to_images}"
         
-        # path to VIPSEG annotations
+        # path to VIPSEG annotation files
         # path_to_annotations = Paths.to_vipseg_annotations()
         # if not os.path.exists(path_to_annotations):
         #     # `path_to_images` could be an fpack file
@@ -54,7 +54,6 @@ class VIPSEGTrainingDataset(TrainingDataset):
         #     assert os.path.exists(path_to_annotations), f"Directory not found: {path_to_annotations}"
 
         # training video info
-        
         annotations_content = self.map_annotations(path_to_images, 
                                                    Paths.to_vipseg_annotations(), 
                                                    Paths.to_vipseg_train_video_info()
@@ -181,5 +180,23 @@ class VIPSEGTrainingDataset(TrainingDataset):
 
 
 class VIPSEGInferenceDataset(InferenceDataset):
-    ...
+    """
+    Inference dataset for VIPSEG ("val" or "test" split)
+    """
+
+    def __init__(self, cfg):
+        # number of frames in each training sample
+        clip_length = cfg.DATASETS.VIPSEG.INFERENCE.CLIP_LENGTH
+        # video fps
+        fps = cfg.DATASETS.VIPSEG.INFERENCE.FPS
+        # number of overlapping frames between clips
+        num_overlapping_frames = cfg.DATASETS.VIPSEG.INFERENCE.FRAME_OVERLAP
+
+        assert num_overlapping_frames <= clip_length, f"No. of overlapping frames cannot be more than the length of a clip"
+        
+        split = cfg.DATASETS.VIPSEG.INFERENCE.SPLIT
+        assert split in ["val", "test"]
+        
+        super().__init__(cfg, "VIPSEG", clip_length, fps, num_overlapping_frames, split)
+
 

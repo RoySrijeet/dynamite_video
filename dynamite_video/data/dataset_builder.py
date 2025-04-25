@@ -18,6 +18,7 @@ TRAINING_DATASET_BUILDERS = {
 EVALUATION_DATASET_BUILDERS = {
     "DAVIS": DAVISInferenceDataset,
     "BURST": BURSTInferenceDataset,
+    "KITTI_STEP": KITTISTEPInferenceDataset,
 }
 
 def build_training_dataset(cfg):

@@ -685,6 +685,16 @@ class InferenceDataset(Dataset):
         orig_to_serial_id = OrderedDict(zip(orig_ids, serial_ids))
         return orig_to_serial_id, serial_to_orig_id
 
+    def decode_mask(self, rle, img_dims=None):
+        """
+        Decode RLE mask to numpy.ndarray
+        """
+        encoded_mask = {
+            "counts": rle.encode("utf-8"),
+            "size": img_dims
+        }
+        return np.ascontiguousarray(mt.decode(encoded_mask)).astype(np.uint8)
+
 
 
     ####################
