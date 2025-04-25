@@ -359,7 +359,7 @@ class DAVISInferenceDataset(InferenceDataset):
             
             metadata["images"] = images
             metadata["bg_masks"] = bg_masks
-            # padding - not applied
+            # TODO - padding - not applied
             metadata["padding_mask"] = np.zeros((images.shape[2], images.shape[3])).astype('uint8')
             
             # serialize instance IDs
@@ -407,16 +407,6 @@ class DAVISInferenceDataset(InferenceDataset):
             metadata["semantic_maps"] = np.stack(semantic_maps_serial)
             metadata["instances_per_frame"] = instances_per_frame
 
-            # clip indices
-            indices = []
-            step = self.clip_length - self.num_overlapping_frames
-            start = 0
-            while start + self.clip_length <= metadata["length"]:
-                indices.append(tuple(range(start, start + self.clip_length)))
-                start += step
-            if indices[-1][-1] != metadata["length"] - 1:
-                indices.append(tuple(range(indices[-1][-1] - self.num_overlapping_frames +1, metadata["length"])))
-            metadata["indices"] = indices
             metadata["clip_length"] = self.clip_length
             metadata["num_overlapping_frames"] = self.num_overlapping_frames
 
