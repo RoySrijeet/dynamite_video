@@ -179,10 +179,10 @@ class Paths:
         return os.path.join(cls.to_datasets_root(), "KITTI-STEP")
     
     @classmethod
-    def to_kitti_step_train_images(cls):
+    def to_kitti_step_trainval_images(cls):
         """Path to KITTI-STEP training images"""
         return os.path.join(cls.to_kitti_step_root(), "KITTI-STEP/data_tracking_image_2/training/image_02")
-    
+
     @classmethod
     def to_kitti_step_test_images(cls):
         """Path to KITTI-STEP test images"""
