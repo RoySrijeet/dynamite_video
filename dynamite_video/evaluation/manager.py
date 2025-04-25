@@ -40,7 +40,6 @@ class SequenceManager:
         self.orig_to_serial_ids = metadata["orig_to_serial_ids"]
         self.serial_to_orig_ids = metadata["serial_to_orig_ids"]
 
-        self.clip_indices = metadata["indices"]
         self.clip_length = metadata["clip_length"]
         self.num_overlapping_frames = metadata["num_overlapping_frames"]
         
@@ -260,12 +259,16 @@ class SequenceManager:
                 "images": torch.as_tensor(self.images[indices[0]:indices[-1]+1], dtype=torch.uint8),
                 "num_instances_per_frame": [len(self.instances_per_frame[fr_idx]) for fr_idx in indices],
                 "num_clicks_per_object": self.num_clicks_per_object[indices[0]:indices[-1]+1],
-                "max_timestamp_list": self.max_timestamps[indices[0]:indices[-1]+1]
+                "max_timestamp_list": self.max_timestamps[indices[0]:indices[-1]+1],
         }
 
         # in case no foreground clicks are found on a given instance, simulate 
         # some from the predicted masks of the overlapping frames
-        if not all(np.sum(clip["num_clicks_per_object"], axis=0)):
+        net_clicks = np.sum(clip["num_clicks_per_object"], axis=0)
+        instances_in_clip = np.asarray(list(set(item for sublist in self.instances_per_frame[indices[0]:indices[-1]+1] for item in sublist))) - 1
+        if not all(net_clicks[instances_in_clip]):
+        
+        # if not all(np.sum(clip["num_clicks_per_object"], axis=0)):
             
             overlapping_frame_indices = sorted(_indices[:self.num_overlapping_frames])
             overlapping_frame_preds = torch.stack(self.pred_masks[overlapping_frame_indices[0]:overlapping_frame_indices[-1]+1])
