@@ -69,7 +69,7 @@ class DynamiteHead(nn.Module):
             data,
             images,
             features,
-            num_instances, 
+            instances_per_frame, 
             mask_features=None,
             multi_scale_features=None, 
             num_clicks_per_object=None,
@@ -84,7 +84,7 @@ class DynamiteHead(nn.Module):
             data: input from dataloader, with all metadata
             images: frames of the clip as [T, C, H, W] (d2 ImageList)
             features: frame features from image backbone
-            num_instances: num instances in each video frame
+            instances_per_frame: num instances in each video frame
             mask_features, multi_scale_features: frame features from pixel decoder
             num_clicks_per_object: #clicks on each instance in each video frame
             fg_coords: list of fg clicks in each video frame
@@ -96,7 +96,7 @@ class DynamiteHead(nn.Module):
             mask_features, _, multi_scale_features = self.pixel_decoder.forward_features(features)
 
         if self.transformer_in_feature == "multi_scale_pixel_decoder":
-            predictions, num_clicks_per_object = self.interactive_transformer(data, images, num_instances, multi_scale_features,
+            predictions, num_clicks_per_object = self.interactive_transformer(data, images, instances_per_frame, multi_scale_features,
                                         mask_features,  num_clicks_per_object,
                                         fg_coords, bg_coords, max_timestamp)
         if self.training:

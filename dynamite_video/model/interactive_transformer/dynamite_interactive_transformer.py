@@ -173,7 +173,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             self, 
             data, 
             images, 
-            num_instances, 
+            instances_per_frame, 
             multi_scale_features, 
             mask_features, 
             num_clicks_per_object=None,
@@ -187,7 +187,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         Args:
             data: input from dataloader, with all metadata
             images: [T, 3, H, W] tensors of the images in the clip (d2 ImageList)
-            num_instances: number of instances in each frame of the clip
+            instances_per_frame: instances present in each frame of the clip
             multi_scale_features: list of frame features (T,C,H,W) extracted at different scale
             mask_features: mask features of the frames in the clip (T,C,H,W)
             num_clicks_per_object: list of click counts on each instance, in each frame of the clip
@@ -219,10 +219,10 @@ class DynamiteInteractiveTransformer(nn.Module):
 
             for i in range(num_iters):
 
-                prev_output = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
-                                                            mask_features, fg_coords, bg_coords, max_timestamp)
+                prev_output, num_queries_per_object = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
+                                                            mask_features, instances_per_frame, fg_coords, bg_coords, max_timestamp)
                 
-                processed_results = self.process_results(data, images, prev_output, num_instances, num_clicks_per_object)
+                processed_results = self.process_results(data, images, prev_output, instances_per_frame, num_queries_per_object)
                                 
                 next_coords_info = get_next_clicks(data, processed_results, i+1, num_clicks_per_object, 
                                                    fg_coords, bg_coords, max_timestamp)
@@ -282,7 +282,8 @@ class DynamiteInteractiveTransformer(nn.Module):
             memory_pe, 
             size_list, 
             mask_features,
-            fg_coords=None, 
+            instances_per_frame,
+            fg_coords=None,
             bg_coords=None, 
             max_timestamp=None,
     ):
@@ -296,14 +297,15 @@ class DynamiteInteractiveTransformer(nn.Module):
         width = 4*W
         
         # generate query descriptors for input clicks
-        descriptors, normalized_click_coords = self.query_descriptors_initializer(
-                                                    multi_scale_features, 
-                                                    fg_coords, 
-                                                    bg_coords, 
-                                                    (height, width), 
-                                                    max_timestamp=max_timestamp,
-                                                    use_static_bg_queries=self.use_static_bg_queries,
-                                                ) # TxQxD, TxQx3
+        descriptors, normalized_click_coords, num_queries_per_object = self.query_descriptors_initializer(
+                                                                            multi_scale_features, 
+                                                                            instances_per_frame,
+                                                                            fg_coords, 
+                                                                            bg_coords, 
+                                                                            (height, width), 
+                                                                            max_timestamp=max_timestamp,
+                                                                            use_static_bg_queries=self.use_static_bg_queries,
+                                                                        ) # TxQxD, TxQx3
         
         query_embed = repeat(self.query_embed, "C -> Q N C", N=T, Q=descriptors.shape[1])  # QxTxD
 
@@ -317,6 +319,8 @@ class DynamiteInteractiveTransformer(nn.Module):
             query_embed = torch.cat((query_embed, static_bg_pe), dim=0)      # QxTxD
             static_bg_queries = repeat(self.static_bg_query, "Bg C -> N Bg C", N=T)
             descriptors = torch.cat((descriptors, static_bg_queries), dim=1)   # TxQxD
+            for i in range(len(num_queries_per_object)):
+                num_queries_per_object[i][-1] += static_bg_queries.shape[1]
     
         output = self.queries_nonlinear_projection(descriptors).permute(1,0,2)
         predictions_mask = []
@@ -371,7 +375,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             'pred_masks': predictions_mask[-1],
             'aux_outputs': self._set_aux_loss(predictions_mask)
         }
-        return out
+        return out, num_queries_per_object
 
 
     @torch.jit.unused
@@ -387,15 +391,15 @@ class DynamiteInteractiveTransformer(nn.Module):
             data, 
             images, 
             outputs, 
-            num_instances, 
-            num_clicks_per_object
+            instances_per_frame,
+            num_queries_per_object
     ):
         """
         Args:
             data: input from dataloader for current clip
             images: [T, 3, H, W] tensors of the images in the clip (d2 ImageList)
             outputs: prediction 
-            num_instances: List of instance IDs in the i-th frame
+            instances_per_frame: List of instance IDs in the i-th frame
             num_clicks_per_object: count of clicks on each instance in each frame
         """
         
@@ -412,40 +416,31 @@ class DynamiteInteractiveTransformer(nn.Module):
         # padding mask
         padding_mask = torch.logical_not(data["padding_mask"]).to(mask_pred_results.device)
 
-        # add padding clicks to the count
-        num_clicks_per_object_copy = copy.deepcopy(num_clicks_per_object)
-        for fr_idx in range(len(num_clicks_per_object_copy)):
-            for inst_id in range(len(num_clicks_per_object_copy[fr_idx])):
-                if num_clicks_per_object_copy[fr_idx][inst_id] == 0:
-                    num_clicks_per_object_copy[fr_idx][inst_id]+=1
-
         processed_results = []
-        for mask_pred_per_image, clicks_per_image in zip(mask_pred_results, num_clicks_per_object_copy):
-            processed_r = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image * padding_mask, max(num_instances), clicks_per_image)
+        for mask_pred_per_image, instances_per_image, queries_per_object in zip(mask_pred_results, instances_per_frame, num_queries_per_object):
+            processed_r = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image * padding_mask, instances_per_image, queries_per_object)
             processed_results.append(processed_r)
 
         return processed_results
 
     
-    def interactive_instance_inference(self, mask_pred, num_instances, clicks_per_image):
+    def interactive_instance_inference(self, mask_pred, instances_per_image, queries_per_object):
 
-        # bg queries
-        clicks_per_image.append(mask_pred.shape[0] - sum(clicks_per_image))
-
+        H,W = mask_pred.shape[1:]
         temp_out = []
-        if clicks_per_image[-1] == 0:
-            clicks_per_image = torch.split(mask_pred, clicks_per_image[:-1], dim=0)
-        else:
-            splited_masks = torch.split(mask_pred, clicks_per_image, dim=0)
+        splited_masks = torch.split(mask_pred, queries_per_object, dim=0)
         for m in splited_masks:
-            temp_out.append(torch.max(m, dim=0).values)
+            if len(m) == 0:
+                temp_out.append(torch.zeros(H,W).to(mask_pred.device))
+            else:
+                temp_out.append(torch.max(m, dim=0).values)
         
         mask_pred = torch.stack(temp_out)       # (N+1)xHxW
-
         mask_pred = torch.argmax(mask_pred,0)
+        
         m = []
-        for i in range(num_instances):
-            m.append((mask_pred == i).float())
+        for inst_id in instances_per_image:
+            m.append((mask_pred == inst_id-1).float())
         
         mask_pred = torch.stack(m)
      

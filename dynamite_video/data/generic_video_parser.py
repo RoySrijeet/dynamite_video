@@ -283,7 +283,7 @@ class GenericVideoSequence(object):
         # if an instance is not present in a frame, add an empty mask
         binary_masks = []
         
-        num_instances_per_frame = [0] * len(self.segmentations)
+        instances_per_frame = [[] for _ in range(len(self.segmentations))]
         
         for fr_idx, fr_mask in enumerate(self.segmentations):
             # given the instance masks of a frame
@@ -301,13 +301,13 @@ class GenericVideoSequence(object):
                     _m = self.decode_mask(rle, img_dims).astype('uint8')
                     # record
                     binary_masks_fr.append(_m)
-                    num_instances_per_frame[fr_idx] += 1
+                    instances_per_frame[fr_idx].append(inst_id)
                 else:
                     binary_masks_fr.append(np.zeros(self.image_dims).astype('uint8'))
 
             binary_masks.append(binary_masks_fr)
 
-        return binary_masks, num_instances_per_frame, instance_ids
+        return binary_masks, instances_per_frame, instance_ids
             
 
     def extract_subsequence(self, frame_idxes: List[int], instance_ids_to_keep: List[int], new_id: str=""):

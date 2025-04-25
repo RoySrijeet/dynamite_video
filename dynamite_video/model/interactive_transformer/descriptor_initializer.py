@@ -1,6 +1,7 @@
 import copy
 import torch
 import torch.nn as nn
+import numpy as np
 
 from torch import Tensor
 from einops import repeat
@@ -50,6 +51,7 @@ class AvgClicksPoolingInitializer(nn.Module):
     def forward(
             self,
             features: Tensor,
+            instances_per_frame: List,
             batched_fg_coords_list: List, 
             batched_bg_coords_list: List,
             img_dims: Tuple,
@@ -88,7 +90,7 @@ class AvgClicksPoolingInitializer(nn.Module):
         
         descriptors = []
         normalized_clicks = []
-        
+        num_queries_per_object = np.zeros((len(batched_fg_coords_list), len(batched_fg_coords_list[0])+1)).astype('int')
         
         # stack queries for each frame
         for fr_idx, fr_fg_coords in enumerate(batched_fg_coords_list):
@@ -99,14 +101,20 @@ class AvgClicksPoolingInitializer(nn.Module):
             
             # stack queries for each instance in the frame
             for inst_id, inst_fg_coords in enumerate(fr_fg_coords):
+
+                if inst_id+1 not in instances_per_frame[fr_idx]:
+                    continue
+
                 # if there are no clicks on a certain instance, insert empty query
-                if len(inst_fg_coords) ==0:
+                if len(inst_fg_coords) == 0:
                     fr_fg_queries.append(self.no_click_query.weight.unsqueeze(1).to(device))
                     fr_fg_normalized_clicks.append(torch.tensor([-1.0, -1.0, -1.0]))
+                    num_queries_per_object[fr_idx][inst_id] += 1
                     continue
 
                 for coords in inst_fg_coords:
                     fr_fg_normalized_clicks.append(torch.tensor([coords[0]/norm_h, coords[1]/norm_w, coords[-1]/norm_t]))
+                    num_queries_per_object[fr_idx][inst_id] += 1
 
                 clicks = torch.tensor(inst_fg_coords, dtype=torch.float, device=device)
                 # extract and scale spatial coordinates
@@ -134,7 +142,6 @@ class AvgClicksPoolingInitializer(nn.Module):
             descriptors.append(fr_fg_queries)
             normalized_clicks.append(fr_fg_normalized_clicks)
         
-        
         # background queries
         for fr_idx, fr_bg_coords in enumerate(batched_bg_coords_list):
 
@@ -143,6 +150,7 @@ class AvgClicksPoolingInitializer(nn.Module):
             
             for coords in fr_bg_coords:
                 normalized_clicks[fr_idx].append(torch.tensor([coords[0]/norm_h, coords[1]/norm_w, coords[-1]/norm_t]))
+                num_queries_per_object[fr_idx][-1] += 1
             
             clicks = torch.tensor(fr_bg_coords, dtype=torch.float, device=device)
             # extract and scale spatial coordinates
@@ -165,7 +173,10 @@ class AvgClicksPoolingInitializer(nn.Module):
             avg_bg_query = torch.mean(torch.stack(fr_bg_queries, -1), dim = -1)
             descriptors[fr_idx].append(avg_bg_query)
 
+        # at this point, in each frame, there is at least one query for 
+        # each instance present in that frame
         descriptors = [torch.cat(desc, dim=1) for desc in descriptors]
+        
         # pad descriptors of each frame so that they all have same length
         max_queries = max([desc.shape[1] for desc in descriptors])
         for i, desc in enumerate(descriptors):
@@ -176,17 +187,19 @@ class AvgClicksPoolingInitializer(nn.Module):
                 pad = max_queries+1-desc.shape[1]
                 bg_queries = repeat(self.bg_query, "C -> 1 L C", L=pad)
             descriptors[i] = torch.cat((descriptors[i], bg_queries), dim=1)
-        descriptors = torch.cat(descriptors, dim=0)  # TxQxD
-        
-        for idx in range(len(normalized_clicks)):
-            clks = normalized_clicks[idx]
-            if len(clks) < max_queries:
-                normalized_clicks[idx].extend([torch.tensor([-1.0, -1.0, -1.0])] * (max_queries-len(clks)))
 
-        normalized_clicks = [torch.stack(clks).unsqueeze(0) for clks in normalized_clicks]
-        normalized_clicks = torch.cat(normalized_clicks, dim=0).to(device)
+            clks = normalized_clicks[i]
+            if len(clks) < max_queries:
+                diff = max_queries-len(clks)
+                normalized_clicks[i].extend([torch.tensor([-1.0, -1.0, -1.0])] * diff)
+                num_queries_per_object[i][-1] += diff
         
-        return descriptors, normalized_clicks
+        descriptors = torch.cat(descriptors, dim=0)  # TxQxD
+        normalized_clicks = [torch.stack(clks).unsqueeze(0) for clks in normalized_clicks]
+        normalized_clicks = torch.cat(normalized_clicks, dim=0).to(device)  # TxQx3
+        
+        return descriptors, normalized_clicks, num_queries_per_object.tolist()
+
 
     # QUERY STACKING - GROUPED INSTANCE-WISE, THEN STACKED
     # def forward(

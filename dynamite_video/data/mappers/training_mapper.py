@@ -49,7 +49,7 @@ class TrainingMapper:
         # load binary and semantic masks as lists
         (
             masks,
-            num_instances_per_frame,
+            instances_per_frame,
             instance_ids
         ) = clip.prepare_masks()
 
@@ -132,7 +132,7 @@ class TrainingMapper:
             "padding_mask": torch.as_tensor(padding_mask, dtype=torch.uint8),
             "bg_masks": torch.as_tensor(bg_masks, dtype=torch.uint8),
             "instance_ids": instance_ids,
-            "num_instances_per_frame": num_instances_per_frame,
+            "instances_per_frame": instances_per_frame,
             "frame_instance_occupancy": dict(frame_instance_occupancy),
             "ref_frame_index": 0,
             "num_clicks_per_object": num_clicks_per_object,

@@ -114,7 +114,7 @@ class DynamiteModel(nn.Module):
         return self.pixel_mean.device
 
     
-    def forward(self, inputs, images=None,  num_instances=None,
+    def forward(self, inputs, images=None,  instances_per_frame=None,
                 features=None, mask_features=None, 
                 multi_scale_features=None, num_clicks_per_object= None,
                 fg_coords = None, bg_coords = None, max_timestamp=None):
@@ -132,8 +132,7 @@ class DynamiteModel(nn.Module):
                 * bg_masks: [T,H,W] np.ndarray, background mask of each frame
                 * padding_mask: [H,W] np.ndarray, padding applied
                 * instance_ids: list(int), IDs of the instances present in the cliip
-                * num_instances_per_frame: list(int), num of instances present in each
-                    frame of the clip
+                * instances_per_frame: list(int), instances present in each frame
                 * frame_instance_occupancy: dict, mapping between instance ID and 
                     frame indices where that instance appears in the clip
                 * fg_coords_list: list, foreground clicks sampled on each frame (at an
@@ -155,8 +154,8 @@ class DynamiteModel(nn.Module):
                 * list of number of clicks per instance in each frame
             max_timestamp: a batched list where each item is
                 * timestamp of last click sampled from each clip
-            num_instances:  a batched list where each item is
-                * a list of num of instances in frame
+            instances_per_frame:  a batched list where each item is
+                * a list of instances present in the frame
         Returns:
             list[Instances]:
                 each Instances has the predicted masks for one image.
@@ -169,7 +168,7 @@ class DynamiteModel(nn.Module):
         if (images is None) or (num_clicks_per_object is None) or (fg_coords is None):
             (
                 images, 
-                num_instances, 
+                instances_per_frame, 
                 num_clicks_per_object,
                 fg_coords, 
                 bg_coords, 
@@ -196,7 +195,7 @@ class DynamiteModel(nn.Module):
                                                                         inputs[sample_idx], 
                                                                         images[sample_idx],
                                                                         features[sample_idx],
-                                                                        num_instances[sample_idx],
+                                                                        instances_per_frame[sample_idx],
                                                                         sample_mask_features, 
                                                                         sample_multi_scale_features,
                                                                         num_clicks_per_object[sample_idx],
@@ -223,7 +222,7 @@ class DynamiteModel(nn.Module):
                                                                                             inputs[0],
                                                                                             images[0],
                                                                                             features[0],
-                                                                                            num_instances[0],
+                                                                                            instances_per_frame[0],
                                                                                             mask_features, 
                                                                                             multi_scale_features, 
                                                                                             num_clicks_per_object[0],
@@ -231,9 +230,9 @@ class DynamiteModel(nn.Module):
                                                                                             bg_coords[0], 
                                                                                             max_timestamp[0])
 
-            processed_results = self.process_results(inputs[0], images[0], outputs, num_instances[0], num_clicks_per_object)
+            processed_results = self.process_results(inputs[0], images[0], outputs, instances_per_frame[0], num_clicks_per_object)
             if self.iterative_evaluation:
-                return (processed_results, outputs, images,  num_instances, features, mask_features,
+                return (processed_results, outputs, images,  instances_per_frame, features, mask_features,
                         multi_scale_features, num_clicks_per_object, fg_coords, bg_coords)
             else:
                 return processed_results
@@ -248,7 +247,7 @@ class DynamiteModel(nn.Module):
             images: list of (d2) ImageList objects, one for each clip in the batch. Each 
                 ImageList object contains the image tensors of the frames in the corres
                 -ponding clip as [T,3,H,W] tensors, where T: #frames in the clip
-            num_instances: list of instance count in each frame of each clip in the batch.
+            instances_per_frame: list of instance count in each frame of each clip in the batch.
                 If a clip has T frames, then one element in this list would be 
                 [c1, c2, ..., cT] where cn is the #instances in the n-th frame of the clip
             num_clicks_per_object: list of click count per instance
@@ -256,7 +255,7 @@ class DynamiteModel(nn.Module):
             bg_coords: list of background clicks
         """
         images = []
-        num_instances = []
+        instances_per_frame = []
         num_clicks_per_object = []
         fg_coords = []
         bg_coords = []
@@ -272,13 +271,13 @@ class DynamiteModel(nn.Module):
             
             images.append(images_sample)
             # extract instance and click info
-            num_instances.append(clip["num_instances_per_frame"])
+            instances_per_frame.append(clip["instances_per_frame"])
             num_clicks_per_object.append(clip["num_clicks_per_object"])
             fg_coords.append(clip["fg_coords_list"])
             bg_coords.append(clip["bg_coords_list"])
             max_timestamp.append(clip["max_timestamp_list"])
 
-        return images, num_instances, num_clicks_per_object, fg_coords, bg_coords, max_timestamp
+        return images, instances_per_frame, num_clicks_per_object, fg_coords, bg_coords, max_timestamp
 
 
     def prepare_targets(self, inputs):
@@ -300,7 +299,7 @@ class DynamiteModel(nn.Module):
         for clip in inputs:
             clip_targets = []
             for i in range(clip["images"].shape[0]):
-                labels = [0] * clip["num_instances_per_frame"][i]
+                labels = [0] * len(clip["instances_per_frame"][i])
                 inst_mask = clip["instance_masks"][i].to(self.device)
                 bg_mask = clip["bg_masks"][i].to(self.device)
                 padding_mask = clip["padding_mask"].to(self.device)
@@ -314,6 +313,7 @@ class DynamiteModel(nn.Module):
         return targets
 
 
+    ### Evaluation ###
     def process_results(
             self, 
             data, 
