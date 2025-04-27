@@ -109,7 +109,7 @@ class SetFinalCriterion(nn.Module):
         self.oversample_ratio = oversample_ratio
         self.importance_sample_ratio = importance_sample_ratio
     
-    def loss_masks(self, outputs, targets, num_masks, num_clicks_per_object = None):
+    def loss_masks(self, outputs, targets, num_masks, num_queries_per_object = None):
         """Compute the losses related to the masks: the focal loss and the dice loss.
         targets dicts must contain the key "masks" containing a tensor of dim [nb_target_boxes, h, w]
         """
@@ -117,18 +117,17 @@ class SetFinalCriterion(nn.Module):
 
         # Accumulate mask for each object (as there might be multiple clicks per object) and background
         new_outputs = []
-        if num_clicks_per_object is not None:
-            import copy
-            for i in range(outputs['pred_masks'].shape[0]):
+        if num_queries_per_object is not None:
+            for fr_idx, mask_pred in enumerate(outputs['pred_masks']):
+                mask_pred = outputs['pred_masks']
+                H,W = mask_pred.shape[1:]
                 temp_out = []
-                clicks_per_image = copy.deepcopy(num_clicks_per_object[i])
-                for fr_i in range(len(clicks_per_image)):
-                    if clicks_per_image[fr_i] == 0:
-                        clicks_per_image[fr_i] += 1
-                clicks_per_image.append(outputs['pred_masks'][i].shape[0] - sum(clicks_per_image))
-                splited_masks = torch.split(outputs['pred_masks'][i], clicks_per_image, dim=0)
+                splited_masks = torch.split(mask_pred, num_queries_per_object[fr_idx], dim=0)
                 for m in splited_masks:
-                    temp_out.append(torch.max(m, dim=0).values)
+                    if len(m) == 0:
+                        temp_out.append(torch.zeros(H,W).to(mask_pred.device))
+                    else:
+                        temp_out.append(torch.max(m, dim=0).values)
                 new_outputs.append(torch.stack(temp_out))
         src_masks = torch.cat(new_outputs,dim=0)
 
@@ -171,14 +170,14 @@ class SetFinalCriterion(nn.Module):
         del target_masks
         return losses
 
-    def get_loss(self, loss, outputs, targets, num_masks, num_clicks_per_object=None):
+    def get_loss(self, loss, outputs, targets, num_masks, num_queries_per_object=None):
         loss_map = {
             'masks': self.loss_masks,
         }
         assert loss in loss_map, f"do you really want to compute {loss} loss?"
-        return loss_map[loss](outputs, targets, num_masks, num_clicks_per_object)
+        return loss_map[loss](outputs, targets, num_masks, num_queries_per_object)
 
-    def forward(self, outputs, targets, num_clicks_per_object = None):
+    def forward(self, outputs, targets, num_queries_per_object = None):
         """This performs the loss computation.
         Parameters:
              outputs: dict of tensors, see the output specification of the model for the format
@@ -202,13 +201,13 @@ class SetFinalCriterion(nn.Module):
         # Compute all the requested losses
         losses = {}
         for loss in self.losses:
-            losses.update(self.get_loss(loss, outputs, targets, num_masks, num_clicks_per_object))
+            losses.update(self.get_loss(loss, outputs, targets, num_masks, num_queries_per_object))
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
         if "aux_outputs" in outputs:
             for i, aux_outputs in enumerate(outputs["aux_outputs"]):
                 for loss in self.losses:
-                    l_dict = self.get_loss(loss, aux_outputs, targets, num_masks, num_clicks_per_object)
+                    l_dict = self.get_loss(loss, aux_outputs, targets, num_masks, num_queries_per_object)
                     l_dict = {k + f"_{i}": v for k, v in l_dict.items()}
                     losses.update(l_dict)
 

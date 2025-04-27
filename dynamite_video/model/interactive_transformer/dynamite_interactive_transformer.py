@@ -1,27 +1,24 @@
 # Adapted by Amit Rana from: https://github.com/facebookresearch/Mask2Former/blob/main/mask2former/modeling/transformer_decoder/mask2former_transformer_decoder.py
-import os
-import copy
-import time as timer
-import pickle
-import einops
-import random
-import numpy as np
+
 import fvcore.nn.weight_init as weight_init
+import random
 import torch
 
-from torch import nn, Tensor
+from einops import repeat, rearrange
+from torch import nn
 from torch.nn import functional as F
-from detectron2.utils.memory import retry_if_cuda_oom
-from detectron2.structures import Boxes, ImageList, Instances, BitMasks
+
 from detectron2.config import configurable
 from detectron2.layers import Conv2d
-from einops import repeat
-from .position_encoding import PositionEmbeddingSine
-from .descriptor_initializer import AvgClicksPoolingInitializer
-from dynamite_video.training.utils.train_utils import get_next_clicks, get_spatiotemporal_embeddings
-from .utils import INTERACTIVE_TRANSFORMER_REGISTRY, MLP
-from .encoder import Encoder
-from .decoder import Decoder
+from detectron2.utils.memory import retry_if_cuda_oom
+
+from dynamite_video.model.interactive_transformer.position_encoding import PositionEmbeddingSine, get_spatiotemporal_embeddings
+from dynamite_video.model.interactive_transformer.descriptor_initializer import AvgClicksPoolingInitializer
+from dynamite_video.model.interactive_transformer.utils import INTERACTIVE_TRANSFORMER_REGISTRY, MLP
+from dynamite_video.model.interactive_transformer.encoder import Encoder
+from dynamite_video.model.interactive_transformer.decoder import Decoder
+from dynamite_video.training.utils.train_utils import get_next_clicks
+
 
 @INTERACTIVE_TRANSFORMER_REGISTRY.register()
 class DynamiteInteractiveTransformer(nn.Module):
@@ -196,46 +193,53 @@ class DynamiteInteractiveTransformer(nn.Module):
             max_timestamp: list of timestamps of the last clip on each frame of the clip
         """
 
-        # multi_scale_features is a list of multi-scale feature
         assert len(multi_scale_features) == self.num_feature_levels
-        
+
+        # extract memory features for Transformer (cross-)attention
         memory = []
         memory_pe = []
         size_list = []
 
         for i in range(self.num_feature_levels):
             size_list.append(multi_scale_features[i].shape[-2:])
+            
             memory_pe.append(self.pe_layer(multi_scale_features[i], None).flatten(2))
             memory.append(self.input_proj[i](multi_scale_features[i]).flatten(2) + self.level_embed.weight[i][None, :, None])
-
+            
             # flatten NxCxHxW to HWxNxC
             memory_pe[-1] = memory_pe[-1].permute(2, 0, 1)  # TxDxhw -> hwxTxD
             memory[-1] = memory[-1].permute(2, 0, 1)        # TxDxhw -> hwxTxD
 
 
         if self.training:
-            prev_output = None
-            num_iters = random.randint(0, self.max_num_interactions)
 
+            # number of corrective iterations
+            num_iters = random.randint(0, self.max_num_interactions)
+            
             for i in range(num_iters):
 
-                prev_output, num_queries_per_object = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
+                # Given a set of clicks, generate click qureies and pass them throught the Transformer architecture
+                prev_output, num_queries_per_object = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list,
                                                             mask_features, instances_per_frame, fg_coords, bg_coords, max_timestamp)
                 
-                processed_results = self.process_results(data, images, prev_output, instances_per_frame, num_queries_per_object)
-                                
-                next_coords_info = get_next_clicks(data, processed_results, i+1, num_clicks_per_object, 
-                                                   fg_coords, bg_coords, max_timestamp)
-                
-                
-                (num_clicks_per_object,  fg_coords, bg_coords, max_timestamp) = next_coords_info
+                # Given the Transformer output and current query distribution over instances, extract prediction masks
+                processed_results = self.process_results(images, prev_output, data["padding_mask"], instances_per_frame, num_queries_per_object)
 
-            outputs = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
-                                                   mask_features, fg_coords, bg_coords, max_timestamp)
+                # Given the prediction masks of current round, sample corrective click
+                num_clicks_per_object, fg_coords, bg_coords, max_timestamp = get_next_clicks(data, processed_results, num_clicks_per_object,
+                                                                                            fg_coords, bg_coords, max_timestamp)
+                
+            outputs, num_queries_per_object = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
+                                                   mask_features, instances_per_frame, fg_coords, bg_coords, max_timestamp)
+        
+            return outputs, num_clicks_per_object, num_queries_per_object
+        
         else:
-            outputs = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
-                                                   mask_features, fg_coords, bg_coords, max_timestamp)
-        return outputs, num_clicks_per_object
+            # evaluation
+            outputs, num_queries_per_object = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
+                                                   mask_features, instances_per_frame, fg_coords, bg_coords, max_timestamp)
+        
+            return outputs, num_clicks_per_object, num_queries_per_object
 
     
     def forward_prediction_heads(
@@ -283,12 +287,12 @@ class DynamiteInteractiveTransformer(nn.Module):
             size_list, 
             mask_features,
             instances_per_frame,
-            fg_coords=None,
-            bg_coords=None, 
-            max_timestamp=None,
+            fg_coords,
+            bg_coords, 
+            max_timestamp
     ):
         """
-        Meta
+        Prepare query descriptors and forward pass through Transformer
         """
         
         _, T, _ = memory[0].shape           # hw, T, D
@@ -366,7 +370,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                 mask_features = F.interpolate(mask_features, scale_factor=scale_factor, mode='bilinear', align_corners=False)
            
             mask_features = self.decoder((mask_features, output, query_embed))
-            mask_features = einops.rearrange(mask_features,"(H W) B C -> B C H W", H=H, W=W, B=B).contiguous()
+            mask_features = rearrange(mask_features,"(H W) B C -> B C H W", H=H, W=W, B=B).contiguous()
             outputs_mask, attn_mask = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
             
             predictions_mask.append(outputs_mask)
@@ -388,19 +392,19 @@ class DynamiteInteractiveTransformer(nn.Module):
     
     def process_results(
             self, 
-            data, 
             images, 
             outputs, 
+            padding_mask,
             instances_per_frame,
             num_queries_per_object
     ):
         """
         Args:
-            data: input from dataloader for current clip
             images: [T, 3, H, W] tensors of the images in the clip (d2 ImageList)
             outputs: prediction 
+            padding_mask: padding, [H,W]
             instances_per_frame: List of instance IDs in the i-th frame
-            num_clicks_per_object: count of clicks on each instance in each frame
+            num_queries_per_object: count of queries on each instance in each frame
         """
         
         mask_pred_results = outputs["pred_masks"]   # [T,Q,H,W]
@@ -414,21 +418,34 @@ class DynamiteInteractiveTransformer(nn.Module):
         del outputs
 
         # padding mask
-        padding_mask = torch.logical_not(data["padding_mask"]).to(mask_pred_results.device)
+        padding_mask = torch.logical_not(padding_mask).to(mask_pred_results.device)
 
         processed_results = []
-        for mask_pred_per_image, instances_per_image, queries_per_object in zip(mask_pred_results, instances_per_frame, num_queries_per_object):
-            processed_r = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image * padding_mask, instances_per_image, queries_per_object)
+        for mask_pred_per_image, instances_per_image, queries_per_instance in zip(mask_pred_results, instances_per_frame, num_queries_per_object):
+            processed_r = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image * padding_mask, instances_per_image, queries_per_instance)
             processed_results.append(processed_r)
 
         return processed_results
 
     
-    def interactive_instance_inference(self, mask_pred, instances_per_image, queries_per_object):
+    def interactive_instance_inference(
+            self, 
+            mask_pred, 
+            instances_per_image, 
+            queries_per_instance
+    ):
+        """
+        Given the raw predictions from Transformer, obtain binary segmentation masks
+
+        Args:
+            mask_pred: raw prediction from Transformer, TxQxHxW
+            instances_per_image: list of instance IDs in current frame
+            queries_per_instances: count of queries on each instance in current frame
+        """
 
         H,W = mask_pred.shape[1:]
         temp_out = []
-        splited_masks = torch.split(mask_pred, queries_per_object, dim=0)
+        splited_masks = torch.split(mask_pred, queries_per_instance, dim=0)
         for m in splited_masks:
             if len(m) == 0:
                 temp_out.append(torch.zeros(H,W).to(mask_pred.device))

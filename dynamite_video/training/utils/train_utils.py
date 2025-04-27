@@ -1,101 +1,179 @@
-import math
-import torch
-import numpy as np
-import copy
 import cv2
+import numpy as np
 import random
+import torch
 
-def compute_iou(gt_masks, pred_masks, max_objs=15, iou_thres = 0.90):
+from functools import lru_cache
+
+
+def compute_iou(
+    gt_masks,
+    pred_masks,
+    max_insts_to_refine=15,
+    iou_thres=0.90
+):
+    """
+    Given the ground truth masks and prediction masks, compute instances-wise IoU and return the 
+    indices of the worst segmented instances
+
+    Args:
+        gt_masks: ground truth masks [T, N, H, W]
+        pred_masks: prediction masks [T, N, H, W]
+        max_insts_to_refine: sample corrective clicks on upto this many objects (int, default=15)
+        iou_thres: refine an object if computed IoU is lower than this threshold (float, default=0.90)
+    
+    Returns:
+        worst_indices: indices of objects to refine
+    """
 
     intersections = np.sum(np.logical_and(gt_masks, pred_masks), (1,2))
     unions = np.sum(np.logical_or(gt_masks,pred_masks), (1,2))
+    
+    # some instance(s) may be absent in some frame(s) in the clip. In such cases, intersection is 0,
+    # regardless of the prediction. However, if the union is 0, that means the prediction was correct
+    # (and empty, just like prediction). In that case, IoU should be 1.
     if not unions.all():
-        # at least for one of the instances, there's no gt mask and no pred mask
-        # that's a correct prediction
+        # at least for one of the instances, there's no gt mask and no pred mask that's a correct prediction
         pos = np.where(unions==0)
         unions[pos] = 1
         intersections[pos] = 1
-    
+
     ious = intersections/unions
 
+    # identify the instances with worst IoUs
     indices = torch.topk(torch.tensor(ious), len(ious),largest=False).indices
-    worst_indexs = []
-    i=0
-    while(i<max_objs and i<len(indices)):
-        if ious[indices[i]] < iou_thres:
-            worst_indexs.append(indices[i])
-        i+=1
-        if len(worst_indexs)==max_objs:
+    worst_indices = []
+    for inst_id in indices:
+        if ious[inst_id] < iou_thres:
+            worst_indices.append(inst_id)
+        if len(worst_indices)==max_insts_to_refine:
             break
-    return worst_indexs
+    return worst_indices
 
-def get_next_clicks(data, pred_output, timestamp, batched_num_clicks_per_object=None,
-                       fg_coords=None, bg_coords = None,
-                       max_timestamp = None
+
+def get_next_clicks(
+    data,
+    pred_output,
+    num_clicks_per_object,
+    fg_coords,
+    bg_coords,
+    max_timestamp,
+    max_num_points=2
 ):
-    
-    # OPTIMIZATION
-    # directly take data as input as they are already on the device
-    gt_masks_batch = [x.cpu().numpy() for x in data["instance_masks"]]
-    pred_masks_batch = [x.cpu().numpy() for x in pred_output]
-    semantic_maps_batch = [x.cpu().numpy() for x in data['semantic_masks']]
+    """
+    Given the predicted masks of current round, sample corrective clicks
 
-    padding_mask = data["padding_mask"].cpu().numpy()
+    Args:
+        data: dataloader input
+        pred_output: predicted masks, [T, N, H, W]
+        num_clicks_per_object: list of click counts on each instance, in each frame of the clip
+        fg_coords: list of fg clicks on the frames of the clip
+        bg_coords: list bg clicks on the frames of the clip
+        max_timestamp: list of timestamps of the last clip on each frame of the clip
+        max_num_points: maximum number of corrective clicks to sample per instance (int, default=2)
+
+    Returns:
+        num_clicks_per_object, fg_coords, bg_coords, max_timestamp: updated with sampled clicks
+    """
+
+    # directly take data as input as they are already on the device
+    gt_masks_clip = [x.cpu().numpy() for x in data["instance_masks"]]      # [T,N,H,W]
+    pred_masks_clip = [x.cpu().numpy() for x in pred_output]               # [T,N,H,W]
+    semantic_maps_clip = [x.cpu().numpy() for x in data['semantic_masks']] # [T,H,W]
+    padding_mask = data["padding_mask"].cpu().numpy()                      # [H,W]
     
-    for i, (gt_masks_per_image, pred_masks_per_image, semantic_map) in enumerate(zip(gt_masks_batch, pred_masks_batch, semantic_maps_batch)):
+    for fr_idx, (gt_masks, pred_masks, semantic_map) in enumerate(zip(gt_masks_clip, pred_masks_clip, semantic_maps_clip)):
         
         # id of the instance to be refined
-        indices = compute_iou(gt_masks_per_image,pred_masks_per_image)
-        # if unique_timestamp:
-        timestamp = max(max_timestamp)+1
-        # if scribbles:
-        for j in indices:
-            sampled_coords_info = _get_corrective_clicks(pred_masks_per_image[j], gt_masks_per_image[j],
-                                                        semantic_map, padding_mask, timestamp = timestamp,
-                                                        fr_idx=i, inst_id=int(j), max_num_points=2)
-            
-            if sampled_coords_info is not None:
-                point_coords, obj_indices = sampled_coords_info
-                # if unique_timestamp:
-                timestamp += len(point_coords)
-                for k, obj_indx in enumerate(obj_indices):
-                    if obj_indx == -1:
-                        if bg_coords[i]:
-                            bg_coords[i].extend([point_coords[k]])
-                        else:
-                            bg_coords[i] = [point_coords[k]]
-                    else:
-                        fg_coords[i][obj_indx].extend([point_coords[k]])
-                        batched_num_clicks_per_object[i][obj_indx]+= 1
-        # if unique_timestamp:
-        max_timestamp[i] = timestamp-1
+        indices = compute_iou(gt_masks, pred_masks)
+        # timestamp of the latest click so far
+        timestamp = max(max_timestamp)
 
-        return batched_num_clicks_per_object,  fg_coords, bg_coords, max_timestamp
-                  
-def _get_corrective_clicks(pred_mask, gt_mask, semantic_map, padding_mask,
-                           timestamp, fr_idx, inst_id, max_num_points=2,
+        for inst_id in indices:
+            sampled_clicks = _get_corrective_clicks(pred_masks[inst_id], gt_masks[inst_id], semantic_map, padding_mask,
+                                                        timestamp+1, max_num_points)
+            
+            if sampled_clicks is not None:
+                for click in sampled_clicks:
+                    # click is in the format [y,x,i,t]
+                    click_y, click_x, click_obj, click_time = click
+                    
+                    # BG click
+                    if click_obj == -1:
+                        if bg_coords[fr_idx]:
+                            bg_coords[fr_idx].extend([click_y, click_x, click_obj, fr_idx, click_time])
+                        else:
+                            bg_coords[fr_idx] = [click_y, click_x, click_obj, fr_idx, click_time]
+                    
+                    # FG click
+                    else:
+                        fg_coords[fr_idx][click_obj].extend([click_y, click_x, click_obj, fr_idx, click_time])
+                        num_clicks_per_object[fr_idx][click_obj]+= 1
+
+    return num_clicks_per_object, fg_coords, bg_coords, max_timestamp
+
+
+@lru_cache(maxsize=None)
+def _generate_probs(max_num_points, gamma=0.25):
+    """
+    Sampling probability of n-th click.
+    If n-th click has prob p, (n+1)th click has prob p*gamma.
+
+    Args:
+        max_num_points: max no. of points to sample
+        gamma: probability scaling factor (float, default=0.25)
+    """
+    probs = []
+    last_value = 1
+    for i in range(max_num_points):
+        probs.append(last_value)
+        last_value *= gamma
+    probs = np.array(probs)
+    probs /= probs.sum()
+    return probs
+
+
+def _get_corrective_clicks(
+    pred_mask,
+    gt_mask,
+    semantic_map,
+    padding_mask,
+    timestamp,
+    max_num_points=2
 ):
+    """
+    Sample corrective click on an instance, in a frame
+
+    Args:
+        pred_mask: H,W predicted segmentation mask of the instance
+        gt_mask: H,W ground truth segmentation mask of the instance
+        semantic_map: H,W ground truth semantic map of the frame
+        padding_mask: H,W padding mask applied during data-loading
+        timestamp: timestamp of current click (int)
+        max_num_points: maximum #clicks to sample (int, default: 2)
+    """
+
     gt_mask = np.asarray(gt_mask, dtype = np.bool_)
     pred_mask = np.asarray(pred_mask, dtype = np.bool_)
     padding_mask = np.asarray(padding_mask, dtype = np.bool_)
 
+    # negative error map - g.t. foreground missed by the prediction
     fn_mask =  np.logical_and(gt_mask, np.logical_not(pred_mask))
-    fp_mask =  np.logical_and(np.logical_not(gt_mask), pred_mask)
-    
     fn_mask = np.logical_and(fn_mask, np.logical_not(padding_mask))
+    
+    # positive error map - g.t. background covered by the prediction
+    fp_mask =  np.logical_and(np.logical_not(gt_mask), pred_mask)
     fp_mask = np.logical_and(fp_mask, np.logical_not(padding_mask))
-   
-    H, W = gt_mask.shape
-
+    
+    # distance transform to find the center of the error region
     fn_mask = np.pad(fn_mask, ((1, 1), (1, 1)), 'constant')
     fp_mask = np.pad(fp_mask, ((1, 1), (1, 1)), 'constant')
-
     fn_mask_dt = cv2.distanceTransform(fn_mask.astype(np.uint8), cv2.DIST_L2, 0)
     fp_mask_dt = cv2.distanceTransform(fp_mask.astype(np.uint8), cv2.DIST_L2, 0)
-
     fn_mask_dt = fn_mask_dt[1:-1, 1:-1]
     fp_mask_dt = fp_mask_dt[1:-1, 1:-1]
 
+    # choose the bigger error region
     fn_max_dist = np.max(fn_mask_dt)
     fp_max_dist = np.max(fp_mask_dt)
 
@@ -104,104 +182,27 @@ def _get_corrective_clicks(pred_mask, gt_mask, semantic_map, padding_mask,
     else:
         inner_mask = fp_mask_dt > (fp_max_dist / 2.0)
 
+    # candidate click coordinates from the largest error region
     sample_locations = np.argwhere(inner_mask)
+    
+    points_coords = None
     if len(sample_locations) > 0:
-        _probs = [0.80,0.20]
-        num_points = 1+ np.random.choice(np.arange(max_num_points), p=_probs)
+        # num of clicks to sample
+        _probs = _generate_probs(max_num_points)  #[0.80,0.20]
+        num_points = 1 + np.random.choice(np.arange(max_num_points), p=_probs)
         num_points = min(num_points, sample_locations.shape[0])
-        
+
+        # sample from candidate click coordinates
         indices = random.sample(range(sample_locations.shape[0]), num_points)
-        H, W = pred_mask.shape
+        
+        # record the sampled click coordinates
         points_coords = []
-        obj_indices = []
         for index in indices:
             coords = sample_locations[index]
-        
-            points_coords.append([coords[0], coords[1],inst_id, fr_idx, timestamp])
-            obj_indx = semantic_map[coords[0]][coords[1]] -1
-            obj_indices.append(obj_indx)
+
+            # ID of the instance in the g.t. mask at the sampled click location
+            obj_indx = semantic_map[coords[0]][coords[1]] - 1
+            points_coords.append([coords[0], coords[1], obj_indx, timestamp])   # [y,x,i,t]
             timestamp+=1
-        return (points_coords, obj_indices)
-    else:
-        None
 
-
-def get_spatiotemporal_embeddings(pos_tensor, positional_embeddings, hidden_dim=256):
-        
-        scale = 2 * math.pi
-        if positional_embeddings == "temporal":
-            dim_t = torch.arange(hidden_dim, dtype=torch.float, device=pos_tensor.device)
-            dim_t = 10000 ** (2 * torch.div(dim_t, 2, rounding_mode='floor') / hidden_dim)
-            t_embed = pos_tensor[:, :, 2] * scale
-            pos_t = t_embed[:, :, None] / dim_t
-            pos_t[:, :, 0::2][torch.where(pos_t[:, :, 0::2] < 0)] = 0.0
-            pos_t[:, :, 1::2][torch.where(pos_t[:, :, 1::2] < 0)] = math.pi/2
-            pos_t = torch.stack((pos_t[:, :, 0::2].sin(), pos_t[:, :, 1::2].cos()), dim=3).flatten(2)
-            return pos_t
-        hidden_dim = hidden_dim // 2    # 256-> 128
-        dim_t = torch.arange(hidden_dim, dtype=torch.float, device=pos_tensor.device)
-        dim_t = 10000 ** (2 * torch.div(dim_t, 2, rounding_mode='floor') / hidden_dim)
-        x_embed = pos_tensor[:, :, 1] * scale
-        y_embed = pos_tensor[:, :, 0] * scale
-        pos_x = x_embed[:, :, None] / dim_t
-        pos_y = y_embed[:, :, None] / dim_t
-        pos_x[:, :, 0::2][torch.where(pos_x[:, :, 0::2] < 0)] = 0.0
-        pos_x[:, :, 1::2][torch.where(pos_x[:, :, 1::2] < 0)] = math.pi/2
-        pos_y[:, :, 0::2][torch.where(pos_y[:, :, 0::2] < 0)] = 0.0
-        pos_y[:, :, 1::2][torch.where(pos_y[:, :, 1::2] < 0)] = math.pi/2
-        pos_x = torch.stack((pos_x[:, :, 0::2].sin(), pos_x[:, :, 1::2].cos()), dim=3).flatten(2)
-        pos_y = torch.stack((pos_y[:, :, 0::2].sin(), pos_y[:, :, 1::2].cos()), dim=3).flatten(2)
-
-        if positional_embeddings == "spatial":
-            return torch.cat((pos_y, pos_x), dim=2)
-        elif positional_embeddings == "spatio_temporal":
-            t_embed = pos_tensor[:, :, 2] * scale
-            pos_t = t_embed[:, :, None] / dim_t
-            pos_t[:, :, 0::2][torch.where(pos_t[:, :, 0::2] < 0)] = 0.0
-            pos_t[:, :, 1::2][torch.where(pos_t[:, :, 1::2] < 0)] = math.pi/2
-            pos_t = torch.stack((pos_t[:, :, 0::2].sin(), pos_t[:, :, 1::2].cos()), dim=3).flatten(2)
-            
-            pos = torch.cat((pos_y, pos_x, pos_t), dim=2)
-            return pos
-
-
-# def get_spatiotemporal_embeddings(pos_tensor, positional_embeddings, hidden_dim=256):
-        
-#         scale = 2 * math.pi
-#         if positional_embeddings == "temporal":
-#             dim_t = torch.arange(hidden_dim, dtype=torch.float, device=pos_tensor.device)
-#             dim_t = 10000 ** (2 * torch.div(dim_t, 2, rounding_mode='floor') / hidden_dim)
-#             t_embed = pos_tensor[:, 2] * scale
-#             pos_t = t_embed[:, None] / dim_t
-#             pos_t[:, 0::2][torch.where(pos_t[:, 0::2] < 0)] = 0.0
-#             pos_t[:, 1::2][torch.where(pos_t[:, 1::2] < 0)] = math.pi/2
-#             pos_t = torch.stack((pos_t[:, 0::2].sin(), pos_t[:, 1::2].cos()), dim=2).flatten(1)
-#             return pos_t
-#         hidden_dim = hidden_dim // 2    # 256-> 128
-#         dim_t = torch.arange(hidden_dim, dtype=torch.float, device=pos_tensor.device)
-#         dim_t = 10000 ** (2 * torch.div(dim_t, 2, rounding_mode='floor') / hidden_dim)
-#         x_embed = pos_tensor[:, 1] * scale
-#         y_embed = pos_tensor[:, 0] * scale
-#         pos_x = x_embed[:, None] / dim_t
-#         pos_y = y_embed[:, None] / dim_t
-#         pos_x[:, 0::2][torch.where(pos_x[:, 0::2] < 0)] = 0.0
-#         pos_x[:, 1::2][torch.where(pos_x[:, 1::2] < 0)] = math.pi/2
-#         pos_y[:, 0::2][torch.where(pos_y[:, 0::2] < 0)] = 0.0
-#         pos_y[:, 1::2][torch.where(pos_y[:, 1::2] < 0)] = math.pi/2
-#         pos_x = torch.stack((pos_x[:, 0::2].sin(), pos_x[:, 1::2].cos()), dim=2).flatten(1)
-#         pos_y = torch.stack((pos_y[:, 0::2].sin(), pos_y[:, 1::2].cos()), dim=2).flatten(1)
-
-#         if positional_embeddings == "spatial":
-#             return torch.cat((pos_y, pos_x), dim=1)
-#         elif positional_embeddings == "spatio_temporal":
-#             t_embed = pos_tensor[:, 2] * scale
-#             pos_t = t_embed[:, None] / dim_t
-#             pos_t[:, 0::2][torch.where(pos_t[:, 0::2] < 0)] = 0.0
-#             pos_t[:, 1::2][torch.where(pos_t[:, 1::2] < 0)] = math.pi/2
-#             pos_t = torch.stack((pos_t[:, 0::2].sin(), pos_t[:, 1::2].cos()), dim=2).flatten(1)
-            
-#             pos = torch.cat((pos_y, pos_x, pos_t), dim=1)
-#             return pos
-        
-
- 
+    return points_coords

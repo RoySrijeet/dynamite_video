@@ -1,15 +1,14 @@
 import cv2
-import torch
-import random
 import numpy as np
+import random
+import torch
 
-from operator import add
-from einops import rearrange
-from functools import lru_cache
 from collections import defaultdict
+from functools import lru_cache
+
 
 @lru_cache(maxsize=None)
-def generate_probs(max_num_points, gamma):
+def _generate_probs(max_num_points, gamma):
     """
     Sampling probability of n-th click.
     If n-th click has prob p, (n+1)th click has prob p*gamma.
@@ -91,7 +90,7 @@ def get_foreground_clicks(
 
     assert binary_masks.ndim == 3
     # sampling probs of positive clicks
-    _pos_probs = generate_probs(max_num_points, gamma=gamma)
+    _pos_probs = _generate_probs(max_num_points, gamma=gamma)
 
     fg_coords_list = []
     # instance_ids are serial and 1-indexed
@@ -175,7 +174,7 @@ def get_background_clicks(
         A list of background clicks sampled from the frame
     """
     # sampling probs of negative clicks
-    _neg_probs = generate_probs(max_num_points, gamma=gamma)
+    _neg_probs = _generate_probs(max_num_points, gamma=gamma)
 
     kernel = np.ones((3,3),np.uint8)
     # erode to avoid sampling clicks too close to the boundary
@@ -299,62 +298,3 @@ def get_clicks_coords(
 
 
     return num_clicks_per_object.tolist(), fg_coords_list, bg_coords_list, max_timestamp_clip
-
-
-def get_clicks_coords_evaluation(
-    instance_masks,
-    clip_instance_ids,
-    sequence_instance_ids,
-    frame_instance_occupancy,
-    max_num_points=1,
-    first_click_center=True,
-    start_t=1
-):
-    """
-    Clicker for evaluation data
-
-    Args:
-        instance_ids: IDs of instances present in each frame
-        instance_masks: binary instance masks of the frames
-        max_num_points: maximum number of points to sample *for each instance*
-        first_click_center: whether to sample first click at object center, (default: True)
-    """
-    num_frames = instance_masks.shape[0]
-
-    fg_coords_list = [[] for _ in range(num_frames)]
-    bg_coords_list = [[] for _ in range(num_frames)]
-    max_timestamp = [0 for _ in range(num_frames)]
-
-    # sample one click (object center) for each instance
-    # across all frames
-    sample_instances_from = defaultdict(list)
-    for inst_id, frame_idxs in frame_instance_occupancy.items():
-        choice = random.choice(frame_idxs)
-        # add a click on instance `inst_id` in frame `choice`
-        sample_instances_from[choice].append(inst_id)
-
-    
-    # all clicks in a clip share a single timeline
-    t = start_t
-    num_clicks_per_object = np.zeros((num_frames, len(sequence_instance_ids))).astype('int')
-    # Sample clicks from a given frame
-    for fr_idx in range(num_frames):
-
-        if fr_idx not in sample_instances_from.keys():
-            continue
-        
-        # instance masks of the frame
-        fr_mask = instance_masks[fr_idx]
-        # sample one click at object center
-        for inst_id in sample_instances_from[fr_idx]:
-            _mask = fr_mask[inst_id-1]
-            # fetch center coordinates
-            center_coords = get_center_coords(_mask)
-            # record click
-            fg_coords_list[fr_idx].append([center_coords[0], center_coords[1], inst_id, fr_idx, t])
-            
-            num_clicks_per_object[fr_idx][inst_id-1]+=1
-            max_timestamp[fr_idx] = t
-            t+=1
-
-    return num_clicks_per_object.tolist(), fg_coords_list, bg_coords_list, max_timestamp
