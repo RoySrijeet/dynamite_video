@@ -17,7 +17,7 @@ from dynamite_video.model.interactive_transformer.descriptor_initializer import 
 from dynamite_video.model.interactive_transformer.utils import INTERACTIVE_TRANSFORMER_REGISTRY, MLP
 from dynamite_video.model.interactive_transformer.encoder import Encoder
 from dynamite_video.model.interactive_transformer.decoder import Decoder
-from dynamite_video.training.utils.train_utils import get_next_clicks
+from dynamite_video.training.train_utils import get_next_clicks
 
 
 @INTERACTIVE_TRANSFORMER_REGISTRY.register()

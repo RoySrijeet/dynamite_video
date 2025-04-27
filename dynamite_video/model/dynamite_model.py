@@ -11,7 +11,7 @@ from detectron2.modeling.postprocessing import sem_seg_postprocess
 from detectron2.structures import ImageList
 from detectron2.utils.memory import retry_if_cuda_oom
 
-from dynamite_video.model.utils.criterion import SetFinalCriterion
+from dynamite_video.model.loss.criterion import SetFinalCriterion
 
 
 @META_ARCH_REGISTRY.register()
