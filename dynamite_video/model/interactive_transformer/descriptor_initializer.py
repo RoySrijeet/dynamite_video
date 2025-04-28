@@ -176,7 +176,10 @@ class AvgClicksPoolingInitializer(nn.Module):
 
         # at this point, in each frame, there is at least one query for 
         # each instance present in that frame
-        descriptors = [torch.cat(desc, dim=1) for desc in descriptors]
+        descriptors = [
+                        torch.cat(desc, dim=1) if len(desc) > 0 else torch.zeros((1, 0, self.hidden_dim), device=device)
+                        for desc in descriptors
+                    ]
         
         # pad descriptors of each frame so that they all have same length
         max_queries = max([desc.shape[1] for desc in descriptors])

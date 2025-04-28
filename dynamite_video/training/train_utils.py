@@ -100,15 +100,15 @@ def get_next_clicks(
                     
                     # BG click
                     if click_obj == -1:
-                        if bg_coords[fr_idx]:
-                            bg_coords[fr_idx].extend([click_y, click_x, click_obj, fr_idx, click_time])
-                        else:
-                            bg_coords[fr_idx] = [click_y, click_x, click_obj, fr_idx, click_time]
+                        bg_coords[fr_idx].append([click_y, click_x, click_obj, fr_idx, click_time])
                     
                     # FG click
                     else:
-                        fg_coords[fr_idx][click_obj].extend([click_y, click_x, click_obj, fr_idx, click_time])
+                        fg_coords[fr_idx][click_obj].append([click_y, click_x, click_obj, fr_idx, click_time])
                         num_clicks_per_object[fr_idx][click_obj]+= 1
+
+                    max_timestamp[fr_idx] = click_time
+                    timestamp = click_time
 
     return num_clicks_per_object, fg_coords, bg_coords, max_timestamp
 

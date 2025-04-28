@@ -1,6 +1,7 @@
 # Adapted by Amit Rana from: https://github.com/facebookresearch/Mask2Former/blob/main/mask2former/modeling/transformer_decoder/mask2former_transformer_decoder.py
 
 import fvcore.nn.weight_init as weight_init
+import numpy as np
 import random
 import torch
 
@@ -420,9 +421,12 @@ class DynamiteInteractiveTransformer(nn.Module):
         # padding mask
         padding_mask = torch.logical_not(padding_mask).to(mask_pred_results.device)
 
+        # instances in the whole clip
+        seq_instances = sorted(list(set(x for ids in instances_per_frame for x in ids)))
+
         processed_results = []
         for mask_pred_per_image, instances_per_image, queries_per_instance in zip(mask_pred_results, instances_per_frame, num_queries_per_object):
-            processed_r = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image * padding_mask, instances_per_image, queries_per_instance)
+            processed_r = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image * padding_mask, instances_per_image, queries_per_instance, seq_instances)
             processed_results.append(processed_r)
 
         return processed_results
@@ -432,7 +436,8 @@ class DynamiteInteractiveTransformer(nn.Module):
             self, 
             mask_pred, 
             instances_per_image, 
-            queries_per_instance
+            queries_per_instance,
+            seq_instances
     ):
         """
         Given the raw predictions from Transformer, obtain binary segmentation masks
@@ -441,6 +446,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             mask_pred: raw prediction from Transformer, TxQxHxW
             instances_per_image: list of instance IDs in current frame
             queries_per_instances: count of queries on each instance in current frame
+            seq_instances: all instances present in the clip
         """
 
         H,W = mask_pred.shape[1:]
@@ -456,8 +462,11 @@ class DynamiteInteractiveTransformer(nn.Module):
         mask_pred = torch.argmax(mask_pred,0)
         
         m = []
-        for inst_id in instances_per_image:
-            m.append((mask_pred == inst_id-1).float())
+        for inst_id in seq_instances:
+            if inst_id in instances_per_image:
+                m.append((mask_pred == inst_id-1).float())
+            else:
+                m.append(torch.zeros(H,W).to(mask_pred.device))
         
         mask_pred = torch.stack(m)
      
