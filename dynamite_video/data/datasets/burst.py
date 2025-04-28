@@ -1,23 +1,20 @@
 import os
 import json
-import numpy as np
 import pycocotools.mask as mt
 
 from collections import defaultdict
-from typing import Any, Dict, List, Union
+from typing import Dict
 
-
-from dynamite_video.utils.paths import Paths
 from dynamite_video.data.datasets.base import TrainingDataset, InferenceDataset
 from dynamite_video.data.generic_video_parser import GenericVideoSequence, parse_generic_video_dataset
+from dynamite_video.data.utils.file_packer import FilePackReader
+from dynamite_video.utils.paths import Paths
 
+
+########################### TRAINING DATASET ###########################
 
 class BURSTTrainingDataset(TrainingDataset):
-    """
-    BURST Training Dataset Class
-
-    Creates a `torch.utils.data.Dataset` class to load BURST dataset
-    """
+    """BURST Training Dataset Class"""
     
     def __init__(self, cfg, num_samples: int):
         """
@@ -40,17 +37,18 @@ class BURSTTrainingDataset(TrainingDataset):
         super().__init__(cfg, "BURST", clip_length, num_samples, fps, frame_sampling_multiplicative_factor)
 
         # path to BURST images
-        path_to_images = Paths.to_burst_train_images()
-        if not os.path.exists(path_to_images):
+        self.path_to_images = Paths.to_burst_training_images()
+        if not os.path.exists(self.path_to_images):
             # `path_to_images` could be an fpack file
-            path_to_images = f"{path_to_images}.fpack"
-            assert os.path.exists(path_to_images), f"Directory not found: {path_to_images}"
+            self.path_to_images = f"{self.path_to_images}.fpack"
+            assert os.path.exists(self.path_to_images), f"BURST training images not found at: {self.path_to_images}"
+            self.fpack_reader = FilePackReader(self.path_to_images, multiprocess_lock=False)
         
         # read JSON annotations
         annotations_content = self.map_annotations(Paths.to_burst_training_annotations())
         
         # cast each video sequence in the dataset to a generic `GenericVideoSequence` template
-        videos, meta_info = parse_generic_video_dataset(path_to_images, annotations_content)
+        videos, meta_info = parse_generic_video_dataset(self.path_to_images, annotations_content)
         
         self.meta = meta_info
         self.videos: Dict[str, GenericVideoSequence] = {vid.id: vid for vid in videos}
@@ -143,6 +141,8 @@ class BURSTTrainingDataset(TrainingDataset):
             "size": img_dims
         })
 
+
+########################### INFERENCE DATASET ###########################
 
 
 class BURSTInferenceDataset(InferenceDataset):

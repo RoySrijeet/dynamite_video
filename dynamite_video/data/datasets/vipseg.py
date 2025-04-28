@@ -3,14 +3,14 @@ import json
 import numpy as np
 import pycocotools.mask as mt
 
-from PIL import Image
 from collections import defaultdict
-from typing import Any, Dict, List, Union
+from PIL import Image
+from typing import Dict
 
-
-from dynamite_video.utils.paths import Paths
 from dynamite_video.data.datasets.base import TrainingDataset, InferenceDataset
 from dynamite_video.data.generic_video_parser import GenericVideoSequence, parse_generic_video_dataset
+from dynamite_video.data.utils.file_packer import FilePackReader
+from dynamite_video.utils.paths import Paths
 
 class VIPSEGTrainingDataset(TrainingDataset):
     """
@@ -40,27 +40,19 @@ class VIPSEGTrainingDataset(TrainingDataset):
         super().__init__(cfg, "VIPSEG", clip_length, num_samples, fps, frame_sampling_multiplicative_factor)
 
         # path to VIPSEG images
-        path_to_images = Paths.to_vipseg_images()
-        if not os.path.exists(path_to_images):
+        self.path_to_images = Paths.to_vipseg_training_images()
+        if not os.path.exists(self.path_to_images):
             # `path_to_images` could be an fpack file
-            path_to_images = f"{path_to_images}.fpack"
-            assert os.path.exists(path_to_images), f"Directory not found: {path_to_images}"
-        
-        # path to VIPSEG annotation files
-        # path_to_annotations = Paths.to_vipseg_annotations()
-        # if not os.path.exists(path_to_annotations):
-        #     # `path_to_images` could be an fpack file
-        #     path_to_annotations = f"{path_to_annotations}.fpack"
-        #     assert os.path.exists(path_to_annotations), f"Directory not found: {path_to_annotations}"
+            self.path_to_images = f"{self.path_to_images}.fpack"
+            assert os.path.exists(self.path_to_images), f"VIPSEG training images not found at: {self.path_to_images}"
+            self.fpack_reader = FilePackReader(self.path_to_images, multiprocess_lock=False)
 
         # training video info
-        annotations_content = self.map_annotations(path_to_images, 
-                                                   Paths.to_vipseg_annotations(), 
-                                                   Paths.to_vipseg_train_video_info()
-                                            )
+        annotations_content = self.map_annotations(Paths.to_vipseg_annotations(), 
+                                                   Paths.to_vipseg_train_video_info())
         
         # cast each video sequence in the dataset to a generic `GenericVideoSequence` template
-        videos, meta_info = parse_generic_video_dataset(path_to_images, annotations_content)
+        videos, meta_info = parse_generic_video_dataset(self.path_to_images, annotations_content)
         
         self.meta = meta_info
         self.videos: Dict[str, GenericVideoSequence] = {vid.id: vid for vid in videos}
@@ -78,8 +70,7 @@ class VIPSEGTrainingDataset(TrainingDataset):
 
 
     def map_annotations(
-            self, 
-            path_to_images, 
+            self,
             path_to_annotations: str, 
             video_info_path: str
     ):
@@ -127,7 +118,7 @@ class VIPSEGTrainingDataset(TrainingDataset):
             entry["width"] = seq["width"]
             
             # path to image files
-            entry["image_paths"] = sorted([os.path.join(path_to_images, seq["name"], file + '.jpg') for file in seq["filenames"]])
+            entry["image_paths"] = sorted([os.path.join(self.path_to_images, seq["name"], file + '.jpg') for file in seq["filenames"]])
             # mask files
             maskfiles = sorted([os.path.join(path_to_annotations, seq["name"], file + '.png') for file in seq["filenames"]])
             
