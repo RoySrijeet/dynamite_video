@@ -39,11 +39,12 @@ class KITTISTEPTrainingDataset(TrainingDataset):
         super().__init__(cfg, "KITTI_STEP", clip_length, num_samples, fps, frame_sampling_multiplicative_factor)
 
         # path to KITTI_STEP images
-        self.path_to_images = Paths.to_kitti_step_training_images()
+        self.path_to_images = Paths.to_kitti_step_trainval_images()
         if not os.path.exists(self.path_to_images):
-            # `path_to_images` could be an fpack file
-            self.path_to_images = f"{self.path_to_images}.fpack"
-            assert os.path.exists(self.path_to_images), f"KITTI-STEP training images not found at: {self.path_to_images}"
+            # if path does not exist, perhaps we're on JUWELS
+            path_to_images = f"{Paths.to_training_images_on_juwels()}/kitti_step.fpack"
+            assert os.path.exists(path_to_images), f"KITTI_STEP images not found at: {self.path_to_images}"
+            self.path_to_images = path_to_images
             self.fpack_reader = FilePackReader(self.path_to_images, multiprocess_lock=False)
         
         # read JSON annotations

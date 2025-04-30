@@ -9,6 +9,7 @@ from typing import Dict
 
 from dynamite_video.data.datasets.base import TrainingDataset, InferenceDataset
 from dynamite_video.data.generic_video_parser import GenericVideoSequence, parse_generic_video_dataset
+from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks
 from dynamite_video.data.utils.file_packer import FilePackReader
 from dynamite_video.utils.paths import Paths
 
@@ -40,11 +41,12 @@ class VIPSEGTrainingDataset(TrainingDataset):
         super().__init__(cfg, "VIPSEG", clip_length, num_samples, fps, frame_sampling_multiplicative_factor)
 
         # path to VIPSEG images
-        self.path_to_images = Paths.to_vipseg_training_images()
+        self.path_to_images = Paths.to_vipseg_images()
         if not os.path.exists(self.path_to_images):
-            # `path_to_images` could be an fpack file
-            self.path_to_images = f"{self.path_to_images}.fpack"
-            assert os.path.exists(self.path_to_images), f"VIPSEG training images not found at: {self.path_to_images}"
+            # if path does not exist, perhaps we're on JUWELS
+            path_to_images = f"{Paths.to_training_images_on_juwels()}/vipseg.fpack"
+            assert os.path.exists(path_to_images), f"VIPSEG images not found at: {self.path_to_images}"
+            self.path_to_images = path_to_images
             self.fpack_reader = FilePackReader(self.path_to_images, multiprocess_lock=False)
 
         # training video info
@@ -190,4 +192,111 @@ class VIPSEGInferenceDataset(InferenceDataset):
         
         super().__init__(cfg, "VIPSEG", clip_length, fps, num_overlapping_frames, split)
 
+        # get paths
+        self.path_to_images = Paths.to_vipseg_images()
+        
+        self.path_to_annotations = Paths.to_vipseg_annotations()
+        if self.split == "val":
+            self.path_to_val_imset = Paths.to_vipseg_val_imset()
+        else:
+            self.path_to_val_imset = Paths.to_vipseg_test_imset()
+        
+        
+    def create_inference_dataset(self):
+        """
+        Prepare dataset for evaluation.
+        """
+        
+        # evaluation sequences
+        with open(self.path_to_val_imset, "r") as f:
+            sequences = [seq.rstrip() for seq in f.readlines()]
 
+        sequence_annotations = []
+        for seq in sequences:
+
+            metadata = {"id": seq}
+
+            # load images
+            image_filepaths = sorted([os.path.join(self.path_to_images, seq, file) for file in os.listdir(os.path.join(self.path_to_images, seq)) if file.endswith('jpg')])
+            images = self.load_images(image_filepaths)      # [T, H, W, 3]
+
+            metadata["length"] = len(image_filepaths)
+            metadata["orig_dims"] = (images.shape[1], images.shape[2])
+
+            # panoptic masks
+            mask_filepaths = sorted([os.path.join(self.path_to_annotations, seq, file) for file in os.listdir(os.path.join(self.path_to_annotations, seq)) if file.endswith('png')])
+            semantic_maps, bg_masks, instances_per_frame, instance_discovery = self.load_png_masks(mask_filepaths)
+
+            # resize
+            if self.cfg.INPUT.AUGMENTATION.RESIZE_TEST:
+                # compute target resolution
+                new_height, new_width = compute_resized_dims(
+                    *images.shape[1:3], 
+                    min_dim=self.cfg.INPUT.AUGMENTATION.MIN_DIM_TEST,
+                    max_dim=self.cfg.INPUT.AUGMENTATION.MAX_DIM_TEST,
+                )
+                if (new_height, new_width) != metadata["orig_dims"]:
+                    images = resize_images(images, new_height, new_width)
+                    semantic_maps = resize_masks(semantic_maps, new_height, new_width, binary=False)
+                    bg_masks = resize_masks(bg_masks, new_height, new_width, binary=False)
+            
+            # arrange dimensions
+            images = np.transpose(images, (0, 3, 1, 2))   # [T, H, W, 3] -> [T, 3, H, W]
+            if self.cfg.INPUT.RGB:
+                # BGR -> RGB (load_images uses cv2.imread which reads images in BGR mode by default)
+                images = np.flip(images, 1).copy()
+            
+            metadata["images"] = images
+            metadata["bg_masks"] = bg_masks
+            # TODO - padding - not applied
+            metadata["padding_mask"] = np.zeros((images.shape[2], images.shape[3])).astype('uint8')
+
+            # serialize instance IDs
+            # IDs of all instances present in the sequence
+            orig_instance_ids = sorted(list(instance_discovery.keys()))
+            orig_to_serial_ids, serial_to_orig_ids = self.serialize_instance_ids(orig_instance_ids)
+            assert orig_instance_ids == list(orig_to_serial_ids.keys())
+            metadata["orig_to_serial_ids"] = orig_to_serial_ids
+            metadata["serial_to_orig_ids"] = serial_to_orig_ids
+
+            metadata["instance_discovery"] = {orig_to_serial_ids[inst_id]: fr_idx 
+                                              for inst_id, fr_idx in instance_discovery.items()}
+            
+            # extract binary instance masks from semantic map of each frame
+            sequence_instances_serial_ids = sorted(list(metadata["instance_discovery"].keys()))
+            instance_masks = []
+            for fr_idx, fr_map in enumerate(semantic_maps):
+                fr_inst_masks = []
+                for inst_id in sequence_instances_serial_ids:
+                    # semantic map is still labeled with original instance IDs
+                    orig_inst_id = serial_to_orig_ids[inst_id]
+                    if orig_inst_id in instances_per_frame[fr_idx]:
+                        fr_inst_masks.append((fr_map == orig_inst_id).astype('uint8'))
+                    else:
+                        # if an instance is absent, pad it with empty mask
+                        fr_inst_masks.append(np.zeros_like(fr_map).astype('uint8'))
+                instance_masks.append(np.stack(fr_inst_masks))
+            
+            instance_masks = np.stack(instance_masks)    # [T,N,H,W]
+            metadata["instance_masks"] = instance_masks
+
+            # recreate semantic maps with serial instance IDs
+            semantic_maps_serial = []
+            for fr_idx, fr_inst_masks in enumerate(instance_masks):
+                fr_map = np.zeros_like(fr_inst_masks[0])
+                for inst_id, inst_mask in zip(sequence_instances_serial_ids, fr_inst_masks):
+                    fr_map[np.where(inst_mask==1)] = inst_id
+                semantic_maps_serial.append(fr_map.astype('uint8'))
+                
+                # update record on which instances are present in this frame
+                instances_per_frame[fr_idx] = [orig_to_serial_ids[orig_inst_id] for orig_inst_id in instances_per_frame[fr_idx]]
+            
+            metadata["semantic_maps"] = np.stack(semantic_maps_serial)
+            metadata["instances_per_frame"] = instances_per_frame
+
+            metadata["clip_length"] = self.clip_length
+            metadata["num_overlapping_frames"] = self.num_overlapping_frames
+
+            sequence_annotations.append(metadata)
+
+        return sequence_annotations

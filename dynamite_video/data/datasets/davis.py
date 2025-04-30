@@ -4,6 +4,7 @@ import numpy as np
 import pycocotools.mask as mt
 
 from collections import defaultdict
+from PIL import Image
 from typing import Dict
 
 from dynamite_video.data.datasets.base import TrainingDataset, InferenceDataset
@@ -39,15 +40,19 @@ class DAVISTrainingDataset(TrainingDataset):
         super().__init__(cfg, "DAVIS", clip_length, num_samples, fps, frame_sampling_multiplicative_factor)
 
         # get paths
-        self.path_to_images = Paths.to_davis_training_images()
-        # image dir could be an fpack file
+        self.path_to_images = Paths.to_davis_images()
         if not os.path.exists(self.path_to_images):
-            self.path_to_images = f"{self.path_to_images}.fpack"
-            assert os.path.exists(self.path_to_images), f"DAVIS training images not found at: {self.path_to_images}"
+            # if path does not exist, perhaps we're on JUWELS
+            path_to_images = f"{Paths.to_training_images_on_juwels()}/davis.fpack"
+            assert os.path.exists(path_to_images), f"DAVIS images not found at: {self.path_to_images}"
+            self.path_to_images = path_to_images
             self.fpack_reader = FilePackReader(self.path_to_images, multiprocess_lock=False)
         
-        # load masks of video frames in DAVIS training split 
-        annotations_content = self.map_annotations(Paths.to_davis_training_annotations())
+        # load masks of video frames in DAVIS training split
+        annotations_content = self.map_annotations(Paths.to_davis_train_annotations_json())
+
+        # load masks from PNG files and store them as RLEs
+        # annotations_content = self.map_annotations_IO(Paths.to_davis_annotations(), Paths.to_davis_train_imset())
         
         # cast each video sequence in the dataset to a generic `GenericVideoSequence` template
         videos, meta_info = parse_generic_video_dataset(self.path_to_images, annotations_content)
@@ -141,6 +146,90 @@ class DAVISTrainingDataset(TrainingDataset):
             "counts": rle.encode("utf-8"),
             "size": img_dims
         })
+    
+
+    def map_annotations_IO(
+            self,
+            path_to_annotations: str, 
+            path_to_imset: str, 
+    ):
+        """
+        Read semantic masks from PNG files.
+
+        NOTE: Considerably slower as involves reading PNG files and converting them to RLEs
+
+        Args:
+            path_to_annotations: path to annotations directory
+            path_to_imset: path to imset .txt file, listing training sequence names
+
+        Returns a dictionary with annotation content from the entire dataset
+        """
+        
+        # load the list of training sequences as a list
+        with open(path_to_imset, 'r') as f:
+            sequences = [seq.rstrip() for seq in f.readlines()]
+
+        sequence_annotations = []
+
+        MIN_MASK_AREA = self.cfg.TRAINING.MIN_MASK_AREA
+        
+        # for each video sequence in the dataset
+        for seq in sequences:
+            entry = {}
+            entry["id"] = f"{self.name}/{seq}"
+            entry["dataset"] = self.name
+
+            # load paths to all image files of the sequence
+            imagefiles = sorted([os.path.join(self.path_to_images, seq, file) for file in os.listdir(os.path.join(self.path_to_images, seq)) if file.endswith('jpg')])
+            entry["image_paths"] = imagefiles
+            
+            # load paths to all mask files of a sequence
+            maskfiles = sorted([os.path.join(path_to_annotations, seq, file) for file in os.listdir(os.path.join(path_to_annotations, seq)) if file.endswith('png')])
+
+            # read first frame mask again to store resolution and instances
+            mask0 = np.asarray(Image.open(maskfiles[0]))
+            entry["height"], entry["width"] = mask0.shape
+
+            segmentations = []
+            seq_instances = []
+            # for mask of each frame of the video sequence
+            for idx, file in enumerate(maskfiles):
+                # read and store the semantic map
+                mask = np.asarray(Image.open(file).convert("P")).astype(dtype='uint8')
+                # find how many instances in the mask (excluding bg, value 0)
+                instances = list(np.unique(mask))[1:]
+
+                # extract and store binary masks of individual instances from semantic mask
+                binary_masks = {}
+                for i in instances:
+                    _m = (mask==i).astype(dtype='uint8')
+                    # check mask area
+                    if self.mask_area_array(_m) >= MIN_MASK_AREA:
+                        # if mask larger than threshold, keep it
+                        binary_masks[int(i)] = mt.encode(np.asfortranarray(_m))
+                        seq_instances.append(i)
+                segmentations.append(binary_masks)
+
+            seq_instances = set(seq_instances)
+            entry["categories"] = {int(k):1 for k in seq_instances}
+            entry['segmentations'] = segmentations
+
+            sequence_annotations.append(entry)
+
+        annotations_content = {}
+        # there is no explicit categories present in DAVIS
+        annotations_content["meta"] = {"category_labels": {1: 'object'}}
+        annotations_content["sequences"] = sequence_annotations
+
+        return annotations_content
+
+
+    def mask_area_array(self, mask):
+        assert isinstance(mask, np.ndarray)
+        bin_mask = mask.astype('uint8')
+        assert list(np.unique(bin_mask))==[0,1]
+        return bin_mask.sum()
+
 
 
 ########################### INFERENCE DATASET ###########################
@@ -172,10 +261,11 @@ class DAVISInferenceDataset(InferenceDataset):
 
         # get paths
         self.path_to_images = Paths.to_davis_images()
-        # `images_dir` could be an fpack file
         if not os.path.exists(self.path_to_images):
-            self.path_to_images = f"{self.path_to_images}.fpack"
-            assert os.path.exists(self.path_to_images), f"DAVIS image directory not found at: {self.path_to_images}"
+            # if path does not exist, perhaps we're on JUWELS
+            path_to_images = f"{Paths.to_evaluation_images_on_juwels()}/davis.fpack"
+            assert os.path.exists(path_to_images), f"DAVIS images not found at: {self.path_to_images}"
+            self.path_to_images = path_to_images
             self.fpack_reader = FilePackReader(self.path_to_images, multiprocess_lock=False)
 
         self.path_to_annotations = Paths.to_davis_annotations()

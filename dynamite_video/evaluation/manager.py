@@ -257,7 +257,8 @@ class SequenceManager:
                 "seq_name": self.sequence_id,
                 "frame_indices": indices,
                 "images": torch.as_tensor(self.images[indices[0]:indices[-1]+1], dtype=torch.uint8),
-                "num_instances_per_frame": [len(self.instances_per_frame[fr_idx]) for fr_idx in indices],
+                "instance_ids": self.instances,
+                "instances_per_frame": self.instances_per_frame[indices[0]:indices[-1]+1],
                 "num_clicks_per_object": self.num_clicks_per_object[indices[0]:indices[-1]+1],
                 "max_timestamp_list": self.max_timestamps[indices[0]:indices[-1]+1],
         }
@@ -276,7 +277,7 @@ class SequenceManager:
 
             click_counts = np.sum(clip["num_clicks_per_object"], axis=0)
             for inst_id, cc in enumerate(click_counts):
-                # instances that didn't get a click
+                # only sample for instances that didn't get a click
                 if cc>0:
                     continue
                 inst_masks = overlapping_frame_preds[:,inst_id]
@@ -322,8 +323,19 @@ class SequenceManager:
             pred_masks: predicted masks, list of [T,H,W] tensors where T=length of the clip
             indices: list of indices (w.r.t. the whole sequence) specifying the clip
         """
+        # add empty masks for instances that were not present in this clip
+        instance_id_to_index = {id_: i for i, id_ in enumerate(self.instances)}
+        N = len(self.instances)
+        H, W = pred_masks[0].shape[1:]
+        
         for idx, pred in zip(indices, pred_masks):
-            self.pred_masks[idx] = pred
+            updated_fr_pred = torch.zeros((N, H, W))
+            # instances present in the current frame
+            for i, orig_id in enumerate(self.instances_per_frame[idx]):
+                final_index = instance_id_to_index[orig_id]
+                updated_fr_pred[final_index] = pred[i]
+            
+            self.pred_masks[idx] = updated_fr_pred.to(dtype=pred.dtype, device=pred.device)
 
     
     def store_predicted_semantic_maps(self, indices=None):
