@@ -13,7 +13,8 @@ class Encoder(nn.Module):
         self.num_heads = nheads
         self.num_layers = enc_layers
         self.self_attention_layers = nn.ModuleList()
-        self.cross_attention_layers = nn.ModuleList()
+        self.image_query_cross_attention_layers = nn.ModuleList()
+        self.query_query_cross_attention_layers = nn.ModuleList()
         self.ffn_layers = nn.ModuleList()
 
         for _ in range(self.num_layers):
@@ -26,8 +27,17 @@ class Encoder(nn.Module):
                 )
             )
 
-            self.cross_attention_layers.append(
+            self.image_query_cross_attention_layers.append(
                 CrossAttentionLayer(
+                    d_model=self.hidden_dim,
+                    nhead=self.num_heads,
+                    dropout=0.0,
+                    normalize_before=self.pre_norm,
+                )
+            )
+
+            self.query_query_cross_attention_layers.append(
+                SelfAttentionLayer(
                     d_model=self.hidden_dim,
                     nhead=self.num_heads,
                     dropout=0.0,

@@ -339,8 +339,8 @@ class DynamiteInteractiveTransformer(nn.Module):
         for i in range(self.enc_layers):
             level_index = i % self.num_feature_levels
             attn_mask[torch.where(attn_mask.sum(-1) == attn_mask.shape[-1])] = False
-            # attention: cross-attention first
-            output = self.encoder.cross_attention_layers[i](
+            # cross-attention between image features and queries in each frame
+            output = self.encoder.image_query_cross_attention_layers[i](
                                                             tgt=output,                     # QxTxD
                                                             memory=memory[level_index],     # (hw)xTxD
                                                             memory_mask=attn_mask,          # (T*#attn_heads)xQx(hw)
@@ -349,6 +349,17 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                             query_pos=query_embed           # QxTxD pos emb for query
                                                         )
 
+            # cross-attention between queries of different frames
+            Q,T,D = output.shape
+            output = self.encoder.query_query_cross_attention_layers[i](
+                                                            output.view(Q*T,1,D),
+                                                            tgt_mask=None,
+                                                            tgt_key_padding_mask=None,
+                                                            query_pos=query_embed.view(Q*T,1,D)
+                                                        )
+            output = output.view(Q,T,D)
+            
+            # self-attention between queries within frame
             output = self.encoder.self_attention_layers[i](
                 output, tgt_mask=None,
                 tgt_key_padding_mask=None,

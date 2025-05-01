@@ -42,9 +42,9 @@ class AvgClicksPoolingInitializer(nn.Module):
     def __init__(self, hidden_dim):
         super().__init__()
         self.hidden_dim = hidden_dim
-        self.no_click_query = nn.Embedding(1, hidden_dim)
         
-        self.register_parameter("bg_query", nn.Parameter(torch.zeros(hidden_dim), False))
+        self.register_parameter("bg_query", nn.Parameter(torch.zeros(hidden_dim), requires_grad=True))
+        self.register_parameter("no_click_query", nn.Parameter(torch.zeros(hidden_dim), requires_grad=True))
 
     
     # QUERY NOT STACKING - GROUP FRAME WISE (TxQxD)
@@ -108,7 +108,7 @@ class AvgClicksPoolingInitializer(nn.Module):
 
                 # if there are no clicks on a certain instance, insert empty query
                 if len(inst_fg_coords) == 0:
-                    fr_fg_queries.append(self.no_click_query.weight.unsqueeze(1).to(device))
+                    fr_fg_queries.append(repeat(self.no_click_query, "C -> 1 1 C"))
                     fr_fg_normalized_clicks.append(torch.tensor([-1.0, -1.0, -1.0]))
                     num_queries_per_object[fr_idx][inst_id] += 1
                     continue
