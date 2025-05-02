@@ -272,7 +272,7 @@ class DAVISInferenceDataset(InferenceDataset):
         self.path_to_val_imset = Paths.to_davis_val_imset()
 
     
-    def create_inference_dataset(self):
+    def create_inference_dataset(self, single_instance=False):
         """
         Prepare dataset for evaluation. Involves the following steps:
             1. Load images and masks from files
@@ -301,6 +301,9 @@ class DAVISInferenceDataset(InferenceDataset):
             * "indices": list, frame indices for creating clips/sub-sequences
 
         """
+
+        if single_instance:
+            return self.create_single_inst_inference_dataset()
 
         # load the list of evaluation sequences as a list
         with open(self.path_to_val_imset, 'r') as f:
@@ -398,5 +401,84 @@ class DAVISInferenceDataset(InferenceDataset):
             metadata["num_overlapping_frames"] = self.num_overlapping_frames
 
             sequence_annotations.append(metadata)
+
+        return sequence_annotations
+
+
+    def create_single_inst_inference_dataset(self):
+        """
+        Create single instance inference dataset. Sequences containing more than one 
+        instances are separated into multiple sequences with one instance each
+        """
+        
+        # load the list of evaluation sequences as a list
+        with open(self.path_to_val_imset, 'r') as f:
+            sequences = [seq.rstrip() for seq in f.readlines()]
+        
+        sequence_annotations = []
+        for seq in sequences:
+            
+            # load images
+            image_filepaths = sorted([os.path.join(self.path_to_images, seq, file) for file in os.listdir(os.path.join(self.path_to_images, seq)) if file.endswith('jpg')])
+            images = self.load_images(image_filepaths)      # [T, H, W, 3]
+            orig_dims = (images.shape[1], images.shape[2])
+
+            # load masks
+            mask_filepaths = sorted([os.path.join(self.path_to_annotations, seq, file) for file in os.listdir(os.path.join(self.path_to_annotations, seq)) if file.endswith('png')])
+            multi_semantic_maps = []
+            for fr_idx, fp in enumerate(mask_filepaths):
+                msk = np.asarray(Image.open(fp)).astype('uint8')
+                multi_semantic_maps.append(msk)
+            multi_semantic_maps = np.stack(multi_semantic_maps)
+
+            # resize
+            if self.cfg.INPUT.AUGMENTATION.RESIZE_TEST:
+                # compute target resolution
+                new_height, new_width = compute_resized_dims(
+                    *images.shape[1:3], 
+                    min_dim=self.cfg.INPUT.AUGMENTATION.MIN_DIM_TEST,
+                    max_dim=self.cfg.INPUT.AUGMENTATION.MAX_DIM_TEST,
+                )
+                if (new_height, new_width) != orig_dims:
+                    images = resize_images(images, new_height, new_width)
+                    multi_semantic_maps = resize_masks(multi_semantic_maps, new_height, new_width, binary=False)
+
+            # arrange dimensions
+            images = np.transpose(images, (0, 3, 1, 2))   # [T, H, W, 3] -> [T, 3, H, W]
+            if self.cfg.INPUT.RGB:
+                # BGR -> RGB (load_images uses cv2.imread which reads images in BGR mode by default)
+                images = np.flip(images, 1).copy()
+
+            padding_mask = np.zeros((images.shape[2], images.shape[3])).astype('uint8')
+
+            # In DAVIS, all instances are assumed to be present in the first frame
+            all_instance_ids = list(np.unique(multi_semantic_maps[0]))[1:]
+            for inst_id in all_instance_ids:
+                
+                metadata = {"id": f"{seq}_{inst_id}"}
+                metadata["images"] = images
+                metadata["length"] = len(image_filepaths)
+                metadata["orig_dims"] = orig_dims
+
+                metadata["orig_to_serial_ids"] = {1: 1}
+                metadata["serial_to_orig_ids"] = {1: 1}
+                metadata["instance_discovery"] = {1: 0}
+                
+                # semantic_maps - [T,H,W] np.ndarray
+                semantic_maps = (multi_semantic_maps == inst_id).astype('uint8')
+                
+                metadata["instance_masks"] = np.expand_dims(semantic_maps, axis=1)  # [T,N,H,W]
+                metadata["bg_masks"] = (semantic_maps==0).astype('uint8')           # [T,H,W]
+                metadata["padding_mask"] = padding_mask                             # [H,W]
+                metadata["semantic_maps"] = semantic_maps                           # [T,H,W]
+                
+                # instances_per_frame - list of IDs of instances present in each frame
+                metadata["instances_per_frame"] = [list(np.unique(msk))[1:] for msk in semantic_maps]
+                
+
+                metadata["clip_length"] = self.clip_length
+                metadata["num_overlapping_frames"] = self.num_overlapping_frames
+
+                sequence_annotations.append(metadata)
 
         return sequence_annotations

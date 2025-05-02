@@ -61,9 +61,9 @@ def listify(datasets):
     return dataset_list
 
 
-def build_evaluation_dataset(cfg, dataset_name):
+def build_evaluation_dataset(cfg, dataset_name, single_instance=False):
     """
     Load evaluation dataset in clips
     """
     eval_ds = EVALUATION_DATASET_BUILDERS[dataset_name](cfg)
-    return eval_ds.create_inference_dataset()
+    return eval_ds.create_inference_dataset(single_instance)

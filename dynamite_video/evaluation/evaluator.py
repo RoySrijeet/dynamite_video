@@ -49,7 +49,7 @@ class Evaluator(DefaultTrainer):
             logger.info(f"Loading dataset: {dataset_name} ...")
             
             # build clips from input dataset
-            data = build_evaluation_dataset(cfg, dataset_name)
+            data = build_evaluation_dataset(cfg, dataset_name, single_instance=cfg.ITERATIVE.TEST.SINGLE_INSTANCE)
             
             result = evaluate(model,
                             data,
