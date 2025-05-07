@@ -119,7 +119,7 @@ class KITTISTEPTrainingDataset(TrainingDataset):
             # maximum instance ID (belonging only to salient classes) seen across all frames
             max_track_id = max(accepted_track_ids.keys())
             
-            # panoptic masks of 'stuff' classes
+            # panoptic masks
             # Label values for panoptic class annotations start from max_track_id + 1 
             for fr_idx, pano_masks in enumerate(seq["semantic_segmentations"]):
                 for class_id, pano_seg in pano_masks.items():
@@ -180,7 +180,7 @@ class KITTISTEPTrainingDataset(TrainingDataset):
 
 class KITTISTEPInferenceDataset(InferenceDataset):
     """
-    Inference dataset for KITTI-STEP
+    Inference dataset for KITTI_STEP
 
     NOTE: KITTI-STEP training dataset (21 sequences) is split into train (12) and val (9) datasets.
     Annotations for KITTI-STEP test dataset (29 different sequences) was not available
@@ -361,7 +361,5 @@ class KITTISTEPInferenceDataset(InferenceDataset):
             metadata["num_overlapping_frames"] = self.num_overlapping_frames
             
             sequence_annotations.append(metadata)
-            # TODO: remove
-            break
         
         return sequence_annotations
