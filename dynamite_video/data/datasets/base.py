@@ -577,10 +577,13 @@ class InferenceDataset(Dataset):
         """
         Decode RLE mask to numpy.ndarray
         """
-        encoded_mask = {
-            "counts": rle.encode("utf-8"),
-            "size": img_dims
-        }
+        if img_dims is not None:
+            encoded_mask = {
+                "counts": rle.encode("utf-8"),
+                "size": img_dims
+            }
+        else:
+            encoded_mask = rle
         return np.ascontiguousarray(mt.decode(encoded_mask)).astype(np.uint8)
 
 

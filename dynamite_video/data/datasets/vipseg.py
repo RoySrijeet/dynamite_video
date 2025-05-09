@@ -53,10 +53,6 @@ class VIPSEGTrainingDataset(TrainingDataset):
         annotations_content = self.map_annotations(Paths.to_vipseg_annotations(), 
                                                    Paths.to_vipseg_train_video_info())
         
-        import pickle
-        with open("/home/roy/REPOS/dynamite_video/debug/visualization/dataloaders/training/vipseg/mapped_annotations.pkl", "wb") as f:
-            pickle.dump(annotations_content, f)
-        
         # cast each video sequence in the dataset to a generic `GenericVideoSequence` template
         videos, meta_info = parse_generic_video_dataset(self.path_to_images, annotations_content)
         
@@ -65,7 +61,7 @@ class VIPSEGTrainingDataset(TrainingDataset):
 
         # create samples
         self.samples, self.sample_image_dims, self.sample_instance_counts = self.create_training_samples(
-            self.videos, num_samples, frame_sampling_multiplicative_factor, max_num_instances
+            self.videos, num_samples, max_num_instances
         )
 
         # store fallback candidates
