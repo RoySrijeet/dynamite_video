@@ -53,6 +53,10 @@ class VIPSEGTrainingDataset(TrainingDataset):
         annotations_content = self.map_annotations(Paths.to_vipseg_annotations(), 
                                                    Paths.to_vipseg_train_video_info())
         
+        import pickle
+        with open("/home/roy/REPOS/dynamite_video/debug/visualization/dataloaders/training/vipseg/mapped_annotations.pkl", "wb") as f:
+            pickle.dump(annotations_content, f)
+        
         # cast each video sequence in the dataset to a generic `GenericVideoSequence` template
         videos, meta_info = parse_generic_video_dataset(self.path_to_images, annotations_content)
         
@@ -153,7 +157,7 @@ class VIPSEGTrainingDataset(TrainingDataset):
             entry["segmentations"] = segmentations
             entry["stuff_classes"] = list(accepted_stuff_classes)
             # assigned_id = category_id x 100 + instance_id
-            entry["thing_classes"] = [k//100 for k in accepted_track_ids]
+            entry["thing_classes"] = list(set([k//100 for k in accepted_track_ids]))
             entry["categories"] = {k:k//100 for k in accepted_track_ids} # of "thing" classes
             entry["categories"].update({k:k for k in accepted_stuff_classes})
 

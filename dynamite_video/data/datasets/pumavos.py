@@ -2,21 +2,20 @@ import os
 import numpy as np
 import pycocotools.mask as mt
 
-from PIL import Image
-from typing import Any, Dict, List
 from collections import defaultdict
+from PIL import Image
+from typing import Dict
 
-from utils.paths import Paths
-from data.datasets.base import TrainingDataset, InferenceDataset
-from data.generic_video_parser import GenericVideoSequence, parse_generic_video_dataset
+from dynamite_video.data.datasets.base import TrainingDataset, InferenceDataset
+from dynamite_video.data.generic_video_parser import GenericVideoSequence, parse_generic_video_dataset
+from dynamite_video.data.utils.file_packer import FilePackReader
+from dynamite_video.utils.paths import Paths
 
+
+########################### TRAINING DATASET ###########################
 
 class PUMAVOSTrainingDataset(TrainingDataset):
-    """
-    PUMAVOS Training Dataset Class
-
-    Creates a `torch.utils.data.Dataset` class to load BURST dataset
-    """
+    """PUMAVOS Training Dataset Class"""
     
     def __init__(self, cfg, num_samples: int):
         """
@@ -39,18 +38,19 @@ class PUMAVOSTrainingDataset(TrainingDataset):
         super().__init__(cfg, "PUMAVOS", clip_length, num_samples, fps, frame_sampling_multiplicative_factor)
 
         # get paths
-        path_to_images = Paths.to_pumavos_images()
-        # `images_dir` could be an fpack file
-        if not os.path.exists(path_to_images):
-            path_to_images = f"{path_to_images}.fpack"
-            assert os.path.exists(path_to_images), f"Directory not found: {path_to_images}"
-        
+        self.path_to_images = Paths.to_pumavos_images()
+        if not os.path.exists(self.path_to_images):
+            # if path does not exist, perhaps we're on JUWELS
+            path_to_images = f"{Paths.to_training_images_on_juwels()}/pumavos.fpack"
+            assert os.path.exists(path_to_images), f"PUMAVOS images not found at: {self.path_to_images}"
+            self.path_to_images = path_to_images
+            self.fpack_reader = FilePackReader(self.path_to_images, multiprocess_lock=False)
 
         # load masks of video frames in PUMAVOS training split 
-        annotations_content = self.map_annotations(path_to_images, Paths.to_pumavos_annotations(), Paths.to_pumavos_imset())
+        annotations_content = self.map_annotations(Paths.to_pumavos_annotations(), Paths.to_pumavos_imset())
         
         # cast each video sequence in the dataset to a generic `GenericVideoSequence` template
-        videos, meta_info = parse_generic_video_dataset(path_to_images, annotations_content)
+        videos, meta_info = parse_generic_video_dataset(self.path_to_images, annotations_content)
         
         self.meta = meta_info
         self.videos: Dict[str, GenericVideoSequence] = {vid.id: vid for vid in videos}
@@ -69,7 +69,6 @@ class PUMAVOSTrainingDataset(TrainingDataset):
     # dynamite style
     def map_annotations(
             self,
-            path_to_images: str,
             path_to_annotations: str, 
             path_to_imset: str, 
     ):
@@ -77,7 +76,6 @@ class PUMAVOSTrainingDataset(TrainingDataset):
         Read semantic masks from PNG files
 
         Args:
-            path_to_images: path to image directory
             path_to_annotations: path to annotations directory
             path_to_imset: path to imset .txt file, listing training sequence names
 
@@ -99,7 +97,7 @@ class PUMAVOSTrainingDataset(TrainingDataset):
             entry["dataset"] = self.name
 
             # load paths to all image files of the sequence
-            imagefiles = sorted([os.path.join(path_to_images, seq, file) for file in os.listdir(os.path.join(path_to_images, seq)) if file.endswith('jpg')])
+            imagefiles = sorted([os.path.join(self.path_to_images, seq, file) for file in os.listdir(os.path.join(self.path_to_images, seq)) if file.endswith('jpg')])
             entry["image_paths"] = imagefiles
             
             # load paths to all mask files of a sequence
@@ -150,4 +148,6 @@ class PUMAVOSTrainingDataset(TrainingDataset):
 
 
 class PUMAVOSInferenceDataset(InferenceDataset):
-    ...
+    
+    def __init__(self):
+        raise NotImplementedError

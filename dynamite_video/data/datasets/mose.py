@@ -2,21 +2,21 @@ import os
 import numpy as np
 import pycocotools.mask as mt
 
-from PIL import Image
-from typing import Any, Dict, List
 from collections import defaultdict
+from PIL import Image
+from typing import Dict
 
-from utils.paths import Paths
-from data.datasets.base import TrainingDataset, InferenceDataset
-from data.generic_video_parser import GenericVideoSequence, parse_generic_video_dataset
+from dynamite_video.data.datasets.base import TrainingDataset, InferenceDataset
+from dynamite_video.data.generic_video_parser import GenericVideoSequence, parse_generic_video_dataset
+from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks
+from dynamite_video.data.utils.file_packer import FilePackReader
+from dynamite_video.utils.paths import Paths
 
+
+########################### TRAINING DATASET ###########################
 
 class MOSETrainingDataset(TrainingDataset):
-    """
-    MOSE Training Dataset Class
-
-    Creates a `torch.utils.data.Dataset` class to load BURST dataset
-    """
+    """MOSE Training Dataset Class"""
     
     def __init__(self, cfg, num_samples: int):
         """
@@ -39,18 +39,19 @@ class MOSETrainingDataset(TrainingDataset):
         super().__init__(cfg, "MOSE", clip_length, num_samples, fps, frame_sampling_multiplicative_factor)
 
         # get paths
-        path_to_images = Paths.to_mose_train_images()
-        # `images_dir` could be an fpack file
-        if not os.path.exists(path_to_images):
-            path_to_images = f"{path_to_images}.fpack"
-            assert os.path.exists(path_to_images), f"Directory not found: {path_to_images}"
-        
+        self.path_to_images = Paths.to_mose_train_images()
+        if not os.path.exists(self.path_to_images):
+            # if path does not exist, perhaps we're on JUWELS
+            path_to_images = f"{Paths.to_training_images_on_juwels()}/mose.fpack"
+            assert os.path.exists(path_to_images), f"MOSE images not found at: {self.path_to_images}"
+            self.path_to_images = path_to_images
+            self.fpack_reader = FilePackReader(self.path_to_images, multiprocess_lock=False)
 
         # load masks of video frames in MOSE training split 
-        annotations_content = self.map_annotations(path_to_images, Paths.to_mose_train_annotations()) #, Paths.to_mose_train_imset())
+        annotations_content = self.map_annotations(Paths.to_mose_train_annotations()) #, Paths.to_mose_train_imset())
         
         # cast each video sequence in the dataset to a generic `GenericVideoSequence` template
-        videos, meta_info = parse_generic_video_dataset(path_to_images, annotations_content)
+        videos, meta_info = parse_generic_video_dataset(self.path_to_images, annotations_content)
         
         self.meta = meta_info
         self.videos: Dict[str, GenericVideoSequence] = {vid.id: vid for vid in videos}
@@ -69,7 +70,6 @@ class MOSETrainingDataset(TrainingDataset):
     # dynamite style
     def map_annotations(
             self,
-            path_to_images: str,
             path_to_annotations: str, 
             path_to_imset: str = None, 
     ):
@@ -77,7 +77,6 @@ class MOSETrainingDataset(TrainingDataset):
         Read semantic masks from PNG files
 
         Args:
-            path_to_images: path to image directory
             path_to_annotations: path to annotations directory
             path_to_imset: path to imset .txt file, listing training sequence names
 
@@ -89,7 +88,7 @@ class MOSETrainingDataset(TrainingDataset):
             with open(path_to_imset, 'r') as f:
                 sequences = [seq.rstrip() for seq in f.readlines()]
         else:
-            sequences = [dirname for dirname in os.listdir(path_to_images) if os.path.isdir(os.path.join(path_to_images, dirname))]
+            sequences = [dirname for dirname in os.listdir(self.path_to_images) if os.path.isdir(os.path.join(self.path_to_images, dirname))]
 
         sequence_annotations = []
 
@@ -97,12 +96,13 @@ class MOSETrainingDataset(TrainingDataset):
         
         # for each video sequence in the dataset
         for seq in sequences:
+            
             entry = {}
             entry["id"] = f"{self.name}/{seq}"
             entry["dataset"] = self.name
 
             # load paths to all image files of the sequence
-            imagefiles = sorted([os.path.join(path_to_images, seq, file) for file in os.listdir(os.path.join(path_to_images, seq)) if file.endswith('jpg') and not file.startswith("._")])
+            imagefiles = sorted([os.path.join(self.path_to_images, seq, file) for file in os.listdir(os.path.join(self.path_to_images, seq)) if file.endswith('jpg') and not file.startswith("._")])
             entry["image_paths"] = imagefiles
             
             # load paths to all mask files of a sequence
@@ -153,4 +153,168 @@ class MOSETrainingDataset(TrainingDataset):
 
 
 class MOSEInferenceDataset(InferenceDataset):
-    ...
+    """
+    Inference dataset for MOSE dataset ("val" split)
+
+    Loads image and mask files from the disc and generates indices
+    of clips that are to be used in inference forward pass.
+    """
+
+    def __init__(self, cfg):
+        # number of frames in each training sample
+        clip_length = cfg.DATASETS.MOSE.INFERENCE.CLIP_LENGTH
+        # video fps
+        fps = cfg.DATASETS.MOSE.INFERENCE.FPS
+        # number of overlapping frames between clips
+        num_overlapping_frames = cfg.DATASETS.MOSE.INFERENCE.FRAME_OVERLAP
+
+        assert num_overlapping_frames <= clip_length, f"No. of overlapping frames cannot be more than the length of a clip"
+        
+        split = cfg.DATASETS.MOSE.INFERENCE.SPLIT
+        # MOSE has only one "val" split
+        assert split=="val"
+        
+        super().__init__(cfg, "MOSE", clip_length, fps, num_overlapping_frames, split)
+
+        # get paths
+        self.path_to_images = Paths.to_mose_val_images()
+        if not os.path.exists(self.path_to_images):
+            # if path does not exist, perhaps we're on JUWELS
+            path_to_images = f"{Paths.to_evaluation_images_on_juwels()}/mose.fpack"
+            assert os.path.exists(path_to_images), f"MOSE images not found at: {self.path_to_images}"
+            self.path_to_images = path_to_images
+            self.fpack_reader = FilePackReader(self.path_to_images, multiprocess_lock=False)
+
+        self.path_to_annotations = Paths.to_mose_val_annotations()
+        self.path_to_val_imset = Paths.to_mose_val_imset()
+
+    def create_inference_dataset(self, single_instance=False):
+        """
+        Prepare dataset for evaluation. Involves the following steps:
+            1. Load images and masks from files
+            2. Serialize instance IDs. NOTE: All structures loaded in this routine use the 
+            serialized IDs
+            3. Generate indices for extracting clips/sub-sequences from each sequence
+            that is to be used for inference forward pass
+        
+        For each sequence, return a dictionary containing the following keys:
+            * "id": str, sequence name
+            * "length": int, length of the sequence (T)
+            * "orig_dims": tuple(int), original resolution of sequence frames
+            * "images": [T,3,H,W] np.ndarray, RGB images of the sequence frames
+            * "instance_masks": [T,N,H,W] np.ndarray, binary segmentation masks of 
+                        instances in each frame (N: #instances in the sequence)
+            * "semantic_maps": [T,H,W] np.ndarray, semantic map of each frame
+            * "bg_masks": [T,H,W] np.ndarray, background mask of each frame
+            * "instances_per_frame": list, IDs of instances present in each frame
+            * "padding_mask": [H,W] np.ndarray, padding mask (a 0-array)
+            * "orig_to_serial_ids": dict, mapping between original instance IDs and 
+                        serialied instance IDs used by the model
+            * "serial_to_orig_ids": dict, mapping between serial instance IDs used 
+                        by the model and the original instance IDs
+            * "instance_discovery": dict, mapping between each instance ID and the 
+                        frame index where the instance first appeared
+            * "indices": list, frame indices for creating clips/sub-sequences
+
+        """
+        if single_instance:
+            raise NotImplementedError
+
+        # load the list of evaluation sequences as a list
+        with open(self.path_to_val_imset, 'r') as f:
+            sequences = [seq.rstrip() for seq in f.readlines()]
+        
+        sequence_annotations = []
+        for seq in sequences:
+            
+            metadata = {"id": seq}
+
+            # load images
+            image_filepaths = sorted([os.path.join(self.path_to_images, seq, file) for file in os.listdir(os.path.join(self.path_to_images, seq)) if file.endswith('jpg')])
+            images = self.load_images(image_filepaths)      # [T, H, W, 3]
+
+            metadata["length"] = len(image_filepaths)
+            metadata["orig_dims"] = (images.shape[1], images.shape[2])
+
+            # semantic_maps - [T,H,W] np.ndarray
+            # bg_masks - [T,H,W] np.ndarray binary background masks
+            # instances_per_frame - list of IDs of instances present in each frame
+            # instance_discovery - dict, instance ID and frame index where the instance first appeared
+            mask_filepaths = sorted([os.path.join(self.path_to_annotations, seq, file) for file in os.listdir(os.path.join(self.path_to_annotations, seq)) if file.endswith('png')])
+            semantic_maps, bg_masks, instances_per_frame, instance_discovery = self.load_png_masks(mask_filepaths)
+            
+            # resize
+            if self.cfg.INPUT.AUGMENTATION.RESIZE_TEST:
+                # compute target resolution
+                new_height, new_width = compute_resized_dims(
+                    *images.shape[1:3], 
+                    min_dim=self.cfg.INPUT.AUGMENTATION.MIN_DIM_TEST,
+                    max_dim=self.cfg.INPUT.AUGMENTATION.MAX_DIM_TEST,
+                )
+                if (new_height, new_width) != metadata["orig_dims"]:
+                    images = resize_images(images, new_height, new_width)
+                    semantic_maps = resize_masks(semantic_maps, new_height, new_width, binary=False)
+                    bg_masks = resize_masks(bg_masks, new_height, new_width, binary=False)
+            
+            # arrange dimensions
+            images = np.transpose(images, (0, 3, 1, 2))   # [T, H, W, 3] -> [T, 3, H, W]
+            if self.cfg.INPUT.RGB:
+                # BGR -> RGB (load_images uses cv2.imread which reads images in BGR mode by default)
+                images = np.flip(images, 1).copy()
+            
+            metadata["images"] = images
+            metadata["bg_masks"] = bg_masks
+            # TODO - padding - not applied
+            metadata["padding_mask"] = np.zeros((images.shape[2], images.shape[3])).astype('uint8')
+            
+            # serialize instance IDs
+            
+            # IDs of all instances present in the sequence
+            orig_instance_ids = sorted(list(instance_discovery.keys()))
+            orig_to_serial_ids, serial_to_orig_ids = self.serialize_instance_ids(orig_instance_ids)
+            assert orig_instance_ids == list(orig_to_serial_ids.keys())
+            metadata["orig_to_serial_ids"] = orig_to_serial_ids
+            metadata["serial_to_orig_ids"] = serial_to_orig_ids
+
+            metadata["instance_discovery"] = {orig_to_serial_ids[inst_id]: fr_idx 
+                                              for inst_id, fr_idx in instance_discovery.items()}
+            
+            
+            # extract binary instance masks from semantic map of each frame
+            sequence_instances_serial_ids = sorted(list(metadata["instance_discovery"].keys()))
+            instance_masks = []
+            for fr_idx, fr_map in enumerate(semantic_maps):
+                fr_inst_masks = []
+                for inst_id in sequence_instances_serial_ids:
+                    # semantic map is still labeled with original instance IDs
+                    orig_inst_id = serial_to_orig_ids[inst_id]
+                    if orig_inst_id in instances_per_frame[fr_idx]:
+                        fr_inst_masks.append((fr_map == orig_inst_id).astype('uint8'))
+                    else:
+                        # if an instance is absent, pad it with empty mask
+                        fr_inst_masks.append(np.zeros_like(fr_map).astype('uint8'))
+                instance_masks.append(np.stack(fr_inst_masks))
+            
+            instance_masks = np.stack(instance_masks)    # [T,N,H,W]
+            metadata["instance_masks"] = instance_masks
+
+            # recreate semantic maps with serial instance IDs
+            semantic_maps_serial = []
+            for fr_idx, fr_inst_masks in enumerate(instance_masks):
+                fr_map = np.zeros_like(fr_inst_masks[0])
+                for inst_id, inst_mask in zip(sequence_instances_serial_ids, fr_inst_masks):
+                    fr_map[np.where(inst_mask==1)] = inst_id
+                semantic_maps_serial.append(fr_map.astype('uint8'))
+                
+                # update record on which instances are present in this frame
+                instances_per_frame[fr_idx] = [orig_to_serial_ids[orig_inst_id] for orig_inst_id in instances_per_frame[fr_idx]]
+            
+            metadata["semantic_maps"] = np.stack(semantic_maps_serial)
+            metadata["instances_per_frame"] = instances_per_frame
+
+            metadata["clip_length"] = self.clip_length
+            metadata["num_overlapping_frames"] = self.num_overlapping_frames
+
+            sequence_annotations.append(metadata)
+
+        return sequence_annotations

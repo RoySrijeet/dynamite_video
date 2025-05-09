@@ -58,7 +58,7 @@ class KITTISTEPTrainingDataset(TrainingDataset):
 
         # create samples
         self.samples, self.sample_image_dims, self.sample_instance_counts = self.create_training_samples(
-            self.videos, num_samples, frame_sampling_multiplicative_factor, max_num_instances
+            self.videos, num_samples, max_num_instances
         )
 
         # store fallback candidates
@@ -92,6 +92,7 @@ class KITTISTEPTrainingDataset(TrainingDataset):
         for seq in content["sequences"]:
             
             seq['id'] = f"{self.name}/{seq['id']}"
+            seq['dataset'] = self.name
             
             # video resolution
             img_dims = (seq['height'], seq['width'])
@@ -246,7 +247,7 @@ class KITTISTEPInferenceDataset(InferenceDataset):
             # JSON annotation file
             # N/A
     
-    def create_inference_dataset(self):
+    def create_inference_dataset(self, single_instance=False):
         """
         Prepare dataset for evaluation.
         """
