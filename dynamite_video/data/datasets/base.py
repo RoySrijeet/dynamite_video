@@ -178,7 +178,6 @@ class TrainingDataset(Dataset, ABC):
         self, 
         videos: Dict[str, GenericVideoSequence],
         num_total_samples: int,
-        frame_sampling_multiplicative_factor: float,
         max_num_instances: int=4,
     ):
         """
@@ -187,7 +186,6 @@ class TrainingDataset(Dataset, ABC):
         Args:
             videos: all video sequences in the dataset as GenericVideoSequence objects
             num_total_samples: total num of samples to be drawn from the dataset
-            frame_sampling_multiplicative_factor: defines window to draw frames of a clip from
             max_num_instances: maximum #instances permitted in a clip, default: 4
         """
 
@@ -195,25 +193,23 @@ class TrainingDataset(Dataset, ABC):
         rnd_state_backup = random.getstate()
         random.seed(2202)
 
-        max_temporal_span = int(round(frame_sampling_multiplicative_factor * self.clip_length))
+        # given the starting frame index of a clip, the rest of the frames of the clip are randomly sampled from 
+        # a temporal window of a certain size, specified by the configurable `frame_sampling_multiplicative_factor`
+        max_temporal_span = int(round(self.frame_sampling_multiplicative_factor * self.clip_length))
 
         samples_by_num_instance = defaultdict(list)
         for vid_id, vid in videos.items():
             # last index in the video to be the first frame of a clip
             last_t = len(vid) - self.clip_length
 
+            # separate (video, frame index) into bins. The bins range from 1 to configurable `max_num_instances`. 
+            # From a pair in the N-th bin, a clip can be sampled (starting at t) with up to N instances in it
             for t in range(last_t):
-                # instances present in the clip starting at frame t,
-                # are the instances present in frame t
+                # instances present in the clip starting at frame t, are the instances present in frame t
                 valid_instance_ids = [iid for iid in vid.instance_ids if iid in vid.segmentations[t]]
                 if not valid_instance_ids:
                     continue
-                
-                # max_num_instances is currently set to 4, TarViS default
                 bin_id = min(max_num_instances, len(valid_instance_ids))
-
-                # n-th bin has clips with n instances, except the final bin (say bin # N)
-                # final bin has clips with N or more instances
                 samples_by_num_instance[bin_id].append((vid_id, t, valid_instance_ids))
 
         # random samples within each bin
@@ -231,9 +227,9 @@ class TrainingDataset(Dataset, ABC):
         for ni in range(max_num_instances, 0, -1):
             if ni not in samples_by_num_instance.keys():
                 continue
+            # The pool available for ni includes the pool available for (ni+1)
             available_sample_pool = samples_by_num_instance[ni] + available_sample_pool
 
-            # TODO - exclude extracted samples from the pool
             for ii in range(num_instances_per_count):
                 ii = ii % len(available_sample_pool)
                 
