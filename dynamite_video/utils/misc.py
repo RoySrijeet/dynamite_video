@@ -215,6 +215,13 @@ def get_cl_arguments():
         help="Max no. of interactions allowed per instance for interactive evaluation"
     )
 
+    parser.add_argument(            # eval
+        "--max-rounds",
+        type=int, 
+        default=3,
+        help="Max no. of corrective rounds in interactive evaluation"
+    )
+
     parser.add_argument(
         "--num-gpus", 
         type=int, 
