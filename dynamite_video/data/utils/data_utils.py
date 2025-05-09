@@ -295,7 +295,6 @@ def apply_random_crop(
             MIN_MASK_AREA: minimum area threshold
         """
         assert images.ndim == 4 and binary_masks.ndim == 4 # and semantic_masks.ndim == 3
-        crop_size = (crop_size, crop_size)
 
         # input dims
         input_size = images.shape[1:3]
