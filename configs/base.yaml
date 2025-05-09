@@ -138,7 +138,7 @@ INPUT:
     # random crop (2:1 aspect ratio)
     RANDOM_CROP: true
     # IMPORTANT: final frame dimensions, must be divisible by MASK_FORMER.SIZE_DIVISIBILITY
-    IMAGE_SIZE: 512     # crop target dims
+    IMAGE_SIZE: [512, 512]     # crop target dims
     #RANDOM_CROP_FACTOR: 0.75
     #MASK_PRESERVING_CROP_REF_FRAME: 0
 
