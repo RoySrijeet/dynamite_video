@@ -58,7 +58,7 @@ class MOSETrainingDataset(TrainingDataset):
 
         # create samples
         self.samples, self.sample_image_dims, self.sample_instance_counts = self.create_training_samples(
-            self.videos, num_samples, frame_sampling_multiplicative_factor, max_num_instances
+            self.videos, num_samples, max_num_instances
         )
         
         # store fallback candidates
