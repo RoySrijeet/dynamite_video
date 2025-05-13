@@ -15,14 +15,11 @@ from dynamite_video.evaluation.manager import SequenceManager
 from dynamite_video.evaluation.metrics import batched_f_measure, batched_jaccard
 
 
-def interactive_loop():
-    ...
-
-
 def evaluate(model, 
              dataset,
              iou_threshold=0.85,
              max_interactions=3,
+             max_rounds=3,
              eval_strategy="random",
              seed_id=0,
              output_path=None,
@@ -38,6 +35,7 @@ def evaluate(model,
                 of (potentially overlapping) clips
         iou_threshold: desired IoU value for each object mask (float, default: 0.85)
         max_interactions: max #interactions permitted per object (int, default: 3)
+        max_rounds: max #corrective rounds (int, default: 3)
         eval_strategy: strategy to select the instance to add corrective clicks on 
                 "worst": select the instance with worst IoU
                 "random": select an instance randomly (as long as IoU < iou_threshold)
@@ -55,8 +53,6 @@ def evaluate(model,
     
     logger = setup_logger(output=output_path, distributed_rank=comm.get_rank(), name="Interactive Evaluation")
     logger.info(f"Starting inference on {len(dataset)} sequences...")
-
-    max_rounds = 3
     
     with ExitStack() as stack:
         if isinstance(model, nn.Module):
