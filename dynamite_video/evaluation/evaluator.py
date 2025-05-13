@@ -26,6 +26,7 @@ class Evaluator(DefaultTrainer):
         eval_datasets = args.eval_datasets
         iou_threshold = args.iou_threshold
         max_interactions = args.max_interactions
+        max_rounds = args.max_rounds
         eval_strategy = args.eval_strategy
         seed_id = args.seed_id
         save_vis = args.save_vis
@@ -34,6 +35,7 @@ class Evaluator(DefaultTrainer):
         logger.info(f"Evaluation datasets: {eval_datasets}")
         logger.info(f"IoU threshold: {iou_threshold}")
         logger.info(f"Max #interactions: {max_interactions}")
+        logger.info(f"Max corrective rounds: {max_rounds}")
         logger.info(f"Evaluation strategy: {eval_strategy}")
         logger.info(f"Random seed: {seed_id}")
         logger.info(f"Output path: {cfg.OUTPUT_DIR}")
@@ -55,6 +57,7 @@ class Evaluator(DefaultTrainer):
                             data,
                             iou_threshold=iou_threshold,
                             max_interactions=max_interactions,
+                            max_rounds=max_rounds,
                             eval_strategy=eval_strategy,
                             seed_id=seed_id,
                             output_path=cfg.OUTPUT_DIR,
