@@ -1,26 +1,18 @@
-import os
 import cv2
-import math
-import torch
-import random
 import itertools
+import math
+import random
+
 import numpy as np
 import pycocotools.mask as mt
-import torch.nn.functional as F
-import imgaug.augmenters as iaa
 
-from PIL import Image
-from einops import rearrange
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Union
 from collections import defaultdict, OrderedDict
+from PIL import Image
 from torch.utils.data import Dataset, ConcatDataset as _ConcatDataset
-
+from typing import Any, Dict, List
 
 from dynamite_video.data.generic_video_parser import GenericVideoSequence
-from dynamite_video.data.utils.data_utils import apply_resizer
-from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks
-from dynamite_video.data.utils.clicker import get_center_coords
 
 
 ######################### TRAINING DATASET BASE ###################################
@@ -283,162 +275,6 @@ class TrainingDataset(Dataset, ABC):
         train_sample_ni = train_sample_ni[:num_total_samples]
 
         return train_samples, train_sample_dims, train_sample_ni
-
-    
-    def apply_color_augmentation(self, images: List[np.ndarray]):
-        """
-        Apply same color augmentation to all frames
-
-        Args:
-            images: list of RGB images [H, W, 3]
-        """
-        # if color augmentation is disabled
-        if not self.cfg.INPUT.AUGMENTATION.COLOR_AUG:
-            return images
-        
-        color_augmenter = iaa.Sequential([
-            iaa.AddToHueAndSaturation(value_hue=(-12, 12), value_saturation=(-12, 12)),
-            iaa.LinearContrast(alpha=(0.95, 1.05)),
-            iaa.AddToBrightness(add=(-25, 25))
-        ])
-        det_augmenter = color_augmenter.to_deterministic()
-        return [det_augmenter(image=img) for img in images]
-
-    
-    def resize_shortest_edge(
-        self, 
-        images: np.ndarray, 
-        binary_masks: np.ndarray,
-        semantic_masks: np.ndarray
-    ):
-        """
-        Resize video frames to a specified resolution .Shortest edge of each frame 
-        is reduced to the target size.
-
-        Args:
-            images: [T, H, W, 3]
-            binary_masks: [N, T, H, W]
-            semantic_masks: [T, H, W]
-        """
-        mode = self.cfg.INPUT.AUGMENTATION.RESIZE_TRAIN
-        ALLOWED_MODES = ["min_dim"]
-        assert mode in ALLOWED_MODES, f"Desired resize mode {mode} is not available. \
-            Choose from {ALLOWED_MODES}"
-
-        if mode == "none":
-            return images, binary_masks, semantic_masks
-        
-        # params for min dim mode (resize shortest edge)
-        max_dim = self.cfg.INPUT.AUGMENTATION.MAX_DIM_TRAIN
-        min_dim = self.cfg.INPUT.AUGMENTATION.MIN_DIM_TRAIN
-
-        # compute target resolution
-        new_height, new_width = compute_resized_dims(
-            *images.shape[1:3], 
-            min_dim, 
-            max_dim
-        )
-
-        images = resize_images(images, new_height, new_width)
-
-        semantic_masks = resize_masks(semantic_masks, new_height, new_width, binary=False)
-
-        binary_masks = resize_masks(binary_masks, new_height, new_width, binary=True)
-
-        return images, binary_masks, semantic_masks
-    
-    
-    def apply_random_horizontal_flip(
-        self, 
-        images: np.ndarray, 
-        binary_masks: np.ndarray,
-        semantic_masks: np.ndarray
-    ):
-        """
-        Apply random horizontal flips
-        
-        Args:
-            images: [T, H, W, 3]
-            binary_masks: [N, T, H, W]
-            semantic_masks: [T, H, W]
-        """
-        assert images.ndim == 4 and binary_masks.ndim == 4 and semantic_masks.ndim == 3
-
-        # if random flips are disabled
-        if not self.cfg.INPUT.AUGMENTATION.RANDOM_FLIP:
-            return images, binary_masks, semantic_masks
-        
-        # only horizontal flips
-        assert self.cfg.INPUT.AUGMENTATION.RANDOM_FLIP_AXIS == "horizontal", f"Only 'horizontal' flips are allowed, {self.cfg.INPUT.RANDOM_FLIP_AXIS} is not allowed!"
-        
-        # flip probability
-        prob = self.cfg.INPUT.AUGMENTATION.RANDOM_FLIP_PROB
-
-        if torch.rand(1) < prob:
-            # flip along width
-            images = np.flip(images, 2).copy()
-            binary_masks = np.flip(binary_masks, 3).copy()
-            semantic_masks = np.flip(semantic_masks, 2).copy()
-
-        return images, binary_masks, semantic_masks
-
-
-    def apply_random_crop(
-        self, 
-        images: np.ndarray, 
-        binary_masks: np.ndarray, 
-        semantic_masks: np.ndarray, 
-    ):
-        """
-        Apply random horizontal flips
-        
-        Args:
-            images: [T, H, W, 3]
-            binary_masks: [N, T, H, W]
-            semantic_masks: [T, H, W]
-        """
-        assert images.ndim == 4 and binary_masks.ndim == 4 and semantic_masks.ndim == 3
-
-        # if random crops are disabled
-        if not self.cfg.INPUT.AUGMENTATION.RANDOM_CROP:
-            return images, binary_masks, semantic_masks
-        
-        # crop size 
-        crop_size = (self.cfg.INPUT.AUGMENTATION.CROP_HEIGHT, self.cfg.INPUT.AUGMENTATION.CROP_WIDTH)
-
-        # crop offsets
-        input_size = images.shape[1:3]
-        max_offset = np.subtract(input_size, crop_size)
-        max_offset = np.maximum(max_offset, 0)
-        offset = np.multiply(max_offset, np.random.uniform(0.0, 1.0))
-        offset = np.round(offset).astype(int)
-        
-        cropped_images = images[..., offset[0]:offset[0]+crop_size[0], offset[1]:offset[1]+crop_size[1], :]
-        cropped_binary_masks = binary_masks[:, :, offset[0]:offset[0]+crop_size[0], offset[1]:offset[1]+crop_size[1]]
-        cropped_semantic_masks = semantic_masks[:, offset[0]:offset[0]+crop_size[0], offset[1]:offset[1]+crop_size[1]]
-
-        pad_size = np.subtract(crop_size, input_size)
-        pad_size = np.maximum(pad_size, 0)
-        # account for applied mask
-        padding_mask = np.ones(cropped_semantic_masks.shape[1:])
-        if pad_size.sum() > 0:
-            # image
-            im_padding = ((0,0), (0, pad_size[0]), (0, pad_size[1]), (0,0))
-            cropped_images = np.pad(cropped_images, im_padding, mode='constant', constant_values=128.0)
-
-            # binary masks
-            binary_mask_padding = ((0,0), (0,0), (0, pad_size[0]), (0, pad_size[1]))
-            cropped_binary_masks = np.pad(cropped_binary_masks, binary_mask_padding, mode='constant', constant_values=0)
-
-            # semantic masks
-            semantic_mask_padding = ((0,0), (0, pad_size[0]), (0, pad_size[1]))
-            cropped_semantic_masks = np.pad(cropped_semantic_masks, semantic_mask_padding, mode='constant', constant_values=0)
-
-            padding = ((0, pad_size[0]), (0, pad_size[1]))
-            padding_mask = np.pad(padding_mask, padding, mode='constant', constant_values=0)
-
-        padding_mask = np.logical_not(padding_mask)
-        return cropped_images, cropped_binary_masks, cropped_semantic_masks, padding_mask
 
 
 

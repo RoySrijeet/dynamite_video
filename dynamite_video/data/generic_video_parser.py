@@ -271,43 +271,39 @@ class GenericVideoSequence(object):
         Returns:
             binary_masks: binary segmentation masks of the instances in the frames of the video
                 as a list of lists of `np.ndarray`
-            frame_instance_occupancy: dict, mapping each instance to the frame(s) where they appear
             num_instances_per_frame: record of #instances present in each frame separately, as there 
                 may be instances with empty masks which do not count
             instance_ids: IDs of instances in the clip, arranged in the same order as the binary masks
         """
-        instance_ids = sorted(self.instance_ids)
+        clip_instance_ids = sorted(self.instance_ids)
 
         # binary masks of each frame in the clip is made to have same no. 
         # of channels as the total number of instances in the clip. So, 
         # if an instance is not present in a frame, add an empty mask
         binary_masks = []
         
-        instances_per_frame = [[] for _ in range(len(self.segmentations))]
+        # IDs of instances present in each frame
+        instances_per_frame = []
         
-        for fr_idx, fr_mask in enumerate(self.segmentations):
-            # given the instance masks of a frame
+        for fr_idx, fr_masks in enumerate(self.segmentations):
+            instances_per_frame.append(sorted(fr_masks.keys()))
             
             binary_masks_fr = []
-            
-            for inst_id in instance_ids:
-                if inst_id in fr_mask.keys():
+            # add one channel for each instance present in the clip
+            for inst_id in clip_instance_ids:
+                if inst_id in instances_per_frame[-1]:
                     # decode RLE
-                    rle = fr_mask[inst_id]
-                    if isinstance(rle, dict):
-                        img_dims = None
-                    else:
-                        img_dims = self.image_dims
-                    _m = self.decode_mask(rle, img_dims).astype('uint8')
+                    rle = fr_masks[inst_id]
+                    img_dims = None if isinstance(rle, dict) else self.image_dims
+                    _m = self.decode_mask(rle, img_dims)
                     # record
                     binary_masks_fr.append(_m)
-                    instances_per_frame[fr_idx].append(inst_id)
                 else:
                     binary_masks_fr.append(np.zeros(self.image_dims).astype('uint8'))
 
             binary_masks.append(binary_masks_fr)
 
-        return binary_masks, instances_per_frame, instance_ids
+        return binary_masks, instances_per_frame, clip_instance_ids
             
 
     def extract_subsequence(self, frame_idxes: List[int], instance_ids_to_keep: List[int], new_id: str=""):

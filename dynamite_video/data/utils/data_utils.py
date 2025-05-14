@@ -1,86 +1,13 @@
 import cv2
-import math
-import torch
-import numpy as np
 import imgaug.augmenters as iaa
+import numpy as np
+import random
+import torch
 import torch.nn.functional as F
 
-from torch import Tensor
 from einops import rearrange
-from collections import defaultdict
-from typing import List, Tuple, Union, Optional, Dict
-from detectron2.data import transforms as T
-
-
-def scale_and_normalize_images(images, means, scales, invert_channels, normalize_to_unit_scale):
-    """
-    Adapted from https://github.com/Ali2500/TarViS
-    Scales and normalizes images
-    :param images: tensor(T, C, H, W)
-    :param means: list(float)
-    :param scales: list(float)
-    :param invert_channels: bool
-    :param normalize_to_unit_scale: bool
-    :return: tensor(T, C, H, W)
-    """
-    means = torch.as_tensor(means, dtype=torch.float32)[None, :, None, None]  # [1, 3, 1, 1]
-    scales = torch.as_tensor(scales, dtype=torch.float32)[None, :, None, None]  # [1. 3. 1. 1]
-    if normalize_to_unit_scale:
-        images = images / 255.
-
-    images = (images - means) / scales
-    if invert_channels:
-        return images.flip(dims=[1])
-    else:
-        return images
-
-
-def condense_mask(mask: Union[Tensor, np.ndarray], dtype: Optional[Union[np.dtype, torch.dtype]] = None):
-    """
-    Adapted from https://github.com/Ali2500/TarViS
-    Condense a one-hot mask into a mask array where pixel value denotes instance ID
-    :param mask: Numpy or torch array of shape [N, H, W]
-    :param dtype: dtype of output mask
-    :return: Numpy or torch array of shape [H, W]
-    """
-    height, width = mask.shape[1:]
-    if torch.is_tensor(mask):
-        dtype = torch.long if dtype is None else dtype
-        condensed_mask = torch.zeros(height, width, dtype=dtype, device=mask.device)
-        where_fn = torch.where
-    else:
-        dtype = np.int32 if dtype is None else dtype
-        condensed_mask = np.zeros((height, width), dtype)
-        where_fn = np.where
-
-    for iid, mask_per_channel in enumerate(mask, 1):
-        condensed_mask = where_fn(mask_per_channel, iid, condensed_mask)
-
-    return condensed_mask
-
-
-def expand_mask(mask: Union[Tensor, np.ndarray], instance_ids: Optional[List[int]] = None):
-    """
-    Expand a condensed mask into a one-hot mask array
-    :param mask: Numpy or torch array of shape [H, W] where pixel values denote instace/class ID
-    :param instance_ids: Optional list of instance IDs. If not provided, all values in the given mask will be used.
-    :return: Numpy or torch array of shape [N, H, W]
-    """
-    if instance_ids is None:
-        if torch.is_tensor(mask):
-            instance_ids = mask.unique()
-        else:
-            instance_ids = np.unique(mask)
-        instance_ids = instance_ids[instance_ids > 0].tolist()
-
-    expanded_mask = [mask == iid for iid in instance_ids]
-
-    if torch.is_tensor(mask):
-        expanded_mask = torch.stack(expanded_mask, 0).bool()
-    else:
-        expanded_mask = np.stack(expanded_mask).astype(bool)
-
-    return expanded_mask
+from torch import Tensor
+from typing import List, Tuple, Optional
 
 
 def compute_resized_dims(height: int, width: int, min_dim: int, max_dim: int):
@@ -112,7 +39,23 @@ def compute_resized_dims(height: int, width: int, min_dim: int, max_dim: int):
     return new_height, new_width
 
 
-def resize_images(images, new_height, new_width):
+def apply_color_augmentation(images: List[np.ndarray]):
+    """
+    Apply same color augmentation to all frames
+
+    Args:
+        images: list of RGB images [H, W, 3]
+    """
+    color_augmenter = iaa.Sequential([
+        iaa.AddToHueAndSaturation(value_hue=(-12, 12), value_saturation=(-12, 12)),
+        iaa.LinearContrast(alpha=(0.95, 1.05)),
+        iaa.AddToBrightness(add=(-25, 25))
+    ])
+    det_augmenter = color_augmenter.to_deterministic()
+    return [det_augmenter(image=img) for img in images]
+
+
+def resize_images(images, new_height: int, new_width: int):
     """
     Resize images to new dimensions
     
@@ -133,16 +76,16 @@ def resize_images(images, new_height, new_width):
     return images
 
 
-def resize_masks(masks, new_height, new_width, binary=False):
+def resize_masks(masks, new_height:int , new_width: int, binary: bool=False):
     """
     Resize masks to new dimensions
 
     Args:
-        masks: tensor or np.ndarray of shape [N, T, H, W] (for binary masks) 
+        masks: tensor or np.ndarray of shape [N, T, H, W] (for instance masks) 
             or [T, H, W] for semantic masks
         new_height: target height
         new_width: target width
-        binary: whether the masks are binary or semantic
+        binary: whether the masks are instance or semantic
     """
     if not binary:
         # resizing semantic masks
@@ -163,9 +106,9 @@ def resize_masks(masks, new_height, new_width, binary=False):
             resized_mask = np.stack([cv2.resize(m, (new_width, new_height), interpolation=cv2.INTER_NEAREST) for m in masks])
         
             return resized_mask
-    
+
     else:
-        # resizing binary masks
+        # resizing instance masks
         assert masks.ndim == 4, f"Expected shape of semantic mask [T, N, H, W], got {masks.ndim} dimensions instead."
         dtype = masks.dtype
         if torch.is_tensor(masks):
@@ -189,191 +132,207 @@ def resize_masks(masks, new_height, new_width, binary=False):
             resized_masks = np.reshape(resized_masks, (B, N, *resized_masks.shape[1:]))
         
             return resized_masks
-        
-def apply_resizer(
+
+def apply_random_flip(
         images: np.ndarray, 
-        binary_masks: np.ndarray,
-        # semantic_masks: np.ndarray,
-        mode: str,
-        min_dim: int,
-        max_dim: int,
-    ):
-        """
-        Resize video frames to a specified resolution .Shortest edge of each frame 
-        is reduced to the target size.
+        instance_masks: np.ndarray,
+        axis: str="horizontal",
+        prob: float=0.5,
+):
+    """
+    Apply flips with a random probability. Either all frames in a clip are flipped or none.
+    
+    Args:
+        images: [T, H, W, 3]
+        instance_masks: [T, N, H, W]
+        flip_axis: currently only "horizontal" flips are supported
+        prob: apply flip with this probability
 
-        Args:
-            images: [T, H, W, 3]
-            binary_masks: [T, N, H, W]
-            mode: currently only supports "min_dim" which corresponds to resizing the
-                shortest edge
-            min_dim: resize shorter edge to this size
-            max_dim: maximum dimension cut-off for the longer edge
-        """
-        ALLOWED_MODES = ["min_dim"]
-        assert mode in ALLOWED_MODES, f"Desired resize mode {mode} is not available. \
-            Choose from {ALLOWED_MODES}"
+    Returns:
+        images: flipped images
+        instance_masks: flipped instance masks
+    """
+    assert images.ndim == 4 and instance_masks.ndim == 4
+    assert axis == "horizontal", f"Only 'horizontal' flips are allowed, {axis} is not allowed!"
 
-        if mode == "none":
-            return images, binary_masks
+    if torch.rand(1) < prob:
+        # flip along width
+        images = np.flip(images, 2).copy()
+        instance_masks = np.flip(instance_masks, 3).copy()
 
-        # compute target resolution
-        new_height, new_width = compute_resized_dims(
-            *images.shape[1:3], 
-            min_dim, 
-            max_dim,
-        )
-
-        images = resize_images(images, new_height, new_width)
-
-        binary_masks = resize_masks(binary_masks, new_height, new_width, binary=True)
-
-        return images, binary_masks
+    return images, instance_masks
 
 
-
-def apply_color_augmentation(images: List[np.ndarray]):
-        """
-        Apply same color augmentation to all frames
-
-        Args:
-            images: list of RGB images [H, W, 3]
-        """
-        color_augmenter = iaa.Sequential([
-            iaa.AddToHueAndSaturation(value_hue=(-12, 12), value_saturation=(-12, 12)),
-            iaa.LinearContrast(alpha=(0.95, 1.05)),
-            iaa.AddToBrightness(add=(-25, 25))
-        ])
-        det_augmenter = color_augmenter.to_deterministic()
-        return [det_augmenter(image=img) for img in images]
-
-
-def apply_random_horizontal_flip(
+def apply_resize_scale(
         images: np.ndarray, 
-        binary_masks: np.ndarray,
-        flip_axis: str,
-        prob: float
-    ):
-        """
-        Apply random horizontal flips
-        
-        Args:
-            images: [T, H, W, 3]
-            binary_masks: [T, N, H, W]
-            flip_axis: whether to flip horizontal or vertical.
-                Currently only "horizontal" flips are supported
-            prob: apply flip with this probability
-        """
-        assert images.ndim == 4 and binary_masks.ndim == 4
-        
-        # only horizontal flips
-        assert flip_axis == "horizontal", f"Only 'horizontal' flips are allowed, {flip_axis} is not allowed!"
+        instance_masks: np.ndarray, 
+        min_scale: float,
+        max_scale: float,
+        target_dims: Tuple[int],
+):
+    """
+    Takes target size as input and randomly scales the given target size between `min_scale`
+    and `max_scale`. It then scales the input image such that it fits inside the scaled target
+    box, keeping the aspect ratio constant.
 
-        if torch.rand(1) < prob:
-            # flip along width
-            images = np.flip(images, 2).copy()
-            binary_masks = np.flip(binary_masks, 3).copy()
+    For RGB image, it uses bilinear interpolation, and for instance masks, it uses nearest 
+    neighbour interpolation.
 
-        return images, binary_masks
+    Args:
+        images: [T, H, W, 3]
+        instance_masks: [T, N, H, W]
+        min_scale, max_scale: floats, range to pick a random scale to be applied
+        target_dims: Tuple[int, int], target resolution
+    """
+    scale = np.random.uniform(min_scale, max_scale)
+    
+    input_size = images.shape[1:3]
+    # new target size given a scale
+    target_scale_size = np.multiply(target_dims, scale)
+    # Compute actual rescaling applied to input image and output size
+    output_scale = np.minimum(target_scale_size[0] / input_size[0], target_scale_size[1] / input_size[1])
+    output_size = np.round(np.multiply(input_size, output_scale)).astype(int)
+
+    # resize
+    images = resize_images(images, output_size[0], output_size[1])
+    instance_masks = resize_masks(instance_masks, output_size[0], output_size[1], binary=True)
+
+    return images, instance_masks
+
+
+def mask_to_bbox(masks: Tensor, raise_error_if_null_mask: Optional[bool] = True) -> torch.Tensor:
+    """
+    Extracts bounding boxes from masks
+    
+    Args:
+        masks: tensor of shape [N_1, ..., N_d, H, W]
+        raise_error_if_null_mask: Flag for whether or not to raise an error if a mask is all-zeros.
+    
+    Returns: torch.Tensor of shape [N, 4] containing bounding boxes coordinates in [x, y, w, h] format.
+            If `raise_error_if_null_mask` is False, coordinates [-1, -1, -1, -1] will be returned for all-zeros masks.
+    """
+    assert masks.ndim > 2
+
+    # flatten additional leading dims
+    leading_dim_sizes = masks.shape[:-2]
+    masks = masks.reshape(-1, *masks.shape[-2:])  # [N, H, W]
+    assert masks.ndim == 3  # sanity check
+
+    null_masks = torch.logical_not(torch.any(masks.flatten(1), 1))[:, None]  # [N, 1]
+    if torch.any(null_masks) and raise_error_if_null_mask:
+        raise ValueError("One or more all-zero masks found")
+
+    h, w = masks.shape[-2:]
+
+    reduced_rows = torch.any(masks, 2).long()  # [N, H]
+    reduced_cols = torch.any(masks, 1).long()  # [N, W]
+
+    x_min = (reduced_cols * torch.arange(-w-1, -1, dtype=torch.long, device=masks.device)[None]).argmin(1)  # [N]
+    y_min = (reduced_rows * torch.arange(-h-1, -1, dtype=torch.long, device=masks.device)[None]).argmin(1)  # [N]
+
+    x_max = (reduced_cols * torch.arange(w, dtype=torch.long, device=masks.device)[None]).argmax(1)  # [N]
+    y_max = (reduced_rows * torch.arange(h, dtype=torch.long, device=masks.device)[None]).argmax(1)  # [N]
+
+    width = x_max - x_min + 1
+    height = y_max - y_min + 1
+
+    bbox_coords = torch.stack((x_min, y_min, width, height), 1)
+    invalid_box = torch.full_like(bbox_coords, -1)
+
+    bbox_coords = torch.where(null_masks, invalid_box, bbox_coords)  # [N, 4]
+    return bbox_coords.reshape(*leading_dim_sizes, 4)  # [..., 4]
 
 
 def apply_random_crop(
-        images: np.ndarray, 
-        binary_masks: np.ndarray, 
-        instance_ids,
-        crop_size,
-        MIN_MASK_AREA,
-    ):
-        """
-        Apply random horizontal flips
-        
-        Args:
-            images: [T, H, W, 3]
-            binary_masks: [T, N, H, W]
-            instance_ids: list of instances in the clip
-            crop_size: randomly crop area of this dimensions
-            MIN_MASK_AREA: minimum area threshold
-        """
-        assert images.ndim == 4 and binary_masks.ndim == 4 # and semantic_masks.ndim == 3
+        images: np.ndarray,
+        instance_masks: np.ndarray,
+        crop_size: Tuple[int]
+):
+    """
+    Apply random crops on the input tensors. Cropping must preserve all of the foreground 
+    mask region. Mask is preserved by comparing desired crop dimensions with the smallest
+    bounding box that covers all of the instances present in the first frame of the clip.
 
-        # input dims
-        input_size = images.shape[1:3]
-        # crop offset limits
-        max_offset = np.subtract(input_size, crop_size)
-        max_offset = np.maximum(max_offset, 0)
+    If crop size is larger than the input, apply padding.
 
-        num_instances = binary_masks.shape[1]
-        attempt = 0
-        while True:
-            
-            # randomly pick a crop offset
-            offset = np.multiply(max_offset, np.random.uniform(0.0, 1.0))
-            offset = np.round(offset).astype(int)
-            # apply crop
-            cropped_images = images[..., offset[0]:offset[0]+crop_size[0], offset[1]:offset[1]+crop_size[1], :]
-            cropped_binary_masks = binary_masks[:, :, offset[0]:offset[0]+crop_size[0], offset[1]:offset[1]+crop_size[1]]
-            
-            # ensure remaining mask sizes are valid
-            valid = True
-            for inst_id in range(num_instances):
-                if list(np.unique(cropped_binary_masks[:, inst_id,:,:])) == [0]:
-                    # at least one instance is missing
-                    valid = False
-                    break
-            if valid:
-                avg_area = 0
-                for fr_msk in cropped_binary_masks:
-                    avg_area += fr_msk.sum()
-                    for _msk in fr_msk:
-                        if _msk.sum() > 0 and _msk.sum() < MIN_MASK_AREA:
-                            # existing mask is smaller than threshold
-                            valid = False
-                            break
-            if valid:
-                # empty mask
-                if avg_area==0 or avg_area // cropped_binary_masks.shape[0] < MIN_MASK_AREA:
-                    valid = False
-            if valid:
-                break
-            
-            attempt += 1
-            # if can't get a valid crop, resize to target crop dims
-            if attempt >=3:
-                cropped_images = resize_images(images, crop_size[0], crop_size[1])
-                cropped_binary_masks = resize_masks(binary_masks, crop_size[0], crop_size[1], binary=True)
-                break
+    If crop size is smaller than the input, one of the following two cases may apply:
+    A. Crop is mask preserving, no further complication
+    B. Crop cuts some non-zero mask region, i.e., bounding box is larger than the crop area.
+       In that case, scale the crop size to match the bounding box and shrink the cropped 
+       area to match original crop size.
 
-        cropped_size = cropped_images.shape[1:3]
-        pad_size = np.subtract(crop_size, cropped_size)
-        pad_size = np.maximum(pad_size, 0)
-        # account for applied mask
-        padding_mask = np.ones(cropped_binary_masks.shape[2:])
-        if pad_size.sum() > 0:
-            # image
-            im_padding = ((0,0), (0, pad_size[0]), (0, pad_size[1]), (0,0))
-            cropped_images = np.pad(cropped_images, im_padding, mode='constant', constant_values=128.0)
+    Args:
+        images: [T, H, W, 3]
+        instance_masks: [T, N, H, W]
+        crop_size: randomly crop area of this dimension
+    """
 
-            # binary masks
-            binary_mask_padding = ((0,0), (0,0), (0, pad_size[0]), (0, pad_size[1]))
-            cropped_binary_masks = np.pad(cropped_binary_masks, binary_mask_padding, mode='constant', constant_values=0)
+    assert images.ndim == 4 and instance_masks.ndim == 4
+    crop_height, crop_width = crop_size
 
-            padding = ((0, pad_size[0]), (0, pad_size[1]))
-            padding_mask = np.pad(padding_mask, padding, mode='constant', constant_values=0)
+    # find bounding box of the first frame masks
+    ref_mask = np.any(instance_masks[0], 0)
+    ref_mask = torch.from_numpy(np.ascontiguousarray(ref_mask))
+    # bbox corners
+    x1, y1, box_w, box_h = mask_to_bbox(ref_mask.unsqueeze(0), raise_error_if_null_mask=True)[0].tolist()
+    x2 = x1 + box_w
+    y2 = y1 + box_h
 
-        padding_mask = np.logical_not(padding_mask)
-        
-        # generate semantic map
-        semantic_masks = []
-        # record which frame contains which instances
-        frame_instance_occupancy = defaultdict(list)
-        for fr_idx, fr_mask in enumerate(cropped_binary_masks):
-            semantic_mask_fr = np.zeros(fr_mask[0].shape)
-            for idx, inst_id in enumerate(instance_ids):
-                if fr_mask[idx].sum() > 0:
-                    frame_instance_occupancy[inst_id].append(fr_idx)
-                    semantic_mask_fr[np.where(fr_mask[idx]==1)] = inst_id
-            semantic_masks.append(semantic_mask_fr)
-        semantic_masks = np.stack(semantic_masks).astype('uint8')
+    expanded_crop = False
+    if box_w >= crop_width or box_h >= crop_height:
+        # cropping cuts the mask, resize and crop
+        crop_dilate = max(box_h/crop_height, box_w/crop_width)
+        crop_height, crop_width = round(crop_size[0]*crop_dilate), round(crop_size[1]*crop_dilate)
+        expanded_crop = True
 
-        return cropped_images, cropped_binary_masks, semantic_masks, padding_mask, frame_instance_occupancy
+    im_height, im_width = ref_mask.shape[-2:]
+    padding_mask = np.zeros((im_height, im_width))
+    
+    # start offset for crop window
+    x_min = max(0, x2 - crop_width)
+    x_max = min(im_width - crop_width, x1)
+    y_min = max(0, y2 - crop_height)
+    y_max = min(im_height - crop_height, y1)
 
+    if x_max < x_min or y_max < y_min:
+        # crop size larger than input, so apply padding
+        x_pad, y_pad = 0,0
+        if x_max < x_min:
+            crop_x1 = 0
+            x_pad = crop_width - im_width
+        else:
+            crop_x1 = random.randint(x_min, x_max)
+        if y_max < y_min:
+            crop_y1 = 0
+            y_pad = crop_height - im_height
+        else:
+            crop_y1 = random.randint(y_min, y_max)
+        crop_x2, crop_y2 = crop_x1 + crop_width, crop_y1 + crop_height
+
+        im_pad = ((0,0), (0, y_pad), (0, x_pad), (0,0))
+        mask_pad = ((0,0), (0,0), (0, y_pad), (0, x_pad))
+        images = np.pad(images, im_pad, mode='constant', constant_values=128.0)
+        instance_masks = np.pad(instance_masks, mask_pad, mode='constant', constant_values=0)
+        padding_mask = np.pad(padding_mask, ((0, y_pad), (0, x_pad)), mode='constant', constant_values=1)
+
+    else:
+        crop_x1 = random.randint(x_min, x_max)
+        crop_y1 = random.randint(y_min, y_max)
+        crop_x2, crop_y2 = crop_x1 + crop_width, crop_y1 + crop_height
+    
+    # crop
+    images = images[:, crop_y1:crop_y2, crop_x1:crop_x2, :]
+    instance_masks = instance_masks[:, :, crop_y1:crop_y2, crop_x1:crop_x2]
+    padding_mask = padding_mask[crop_y1:crop_y2, crop_x1:crop_x2]
+
+
+    if expanded_crop:
+        # resize the cropped tensors to orig crop size
+        images = resize_images(images, crop_size[0], crop_size[1])
+        instance_masks = resize_masks(instance_masks, crop_size[0], crop_size[1], binary=True)
+        padding_mask = resize_masks(np.expand_dims(padding_mask, 0), crop_size[0], crop_size[1])[0]
+    
+    return images, instance_masks, padding_mask
+    
+
+    
