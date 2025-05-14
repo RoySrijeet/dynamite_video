@@ -24,11 +24,11 @@ class SequenceManager:
         self.orig_h, self.orig_w = metadata["orig_dims"]
         
         # arrays
-        self.images = metadata["images"]                    # [T,3,H,W]
+        self.images = metadata["images"]                       # [T,3,H,W]
         self.gt_instance_masks = metadata["instance_masks"]    # [T,N,H,W]
         self.gt_semantic_maps = metadata["semantic_maps"]      # [T,H,W]
         self.gt_bg_masks = metadata["bg_masks"]                # [T,H,W]
-        self.padding_mask = metadata["padding_mask"]        # [H,W]
+        self.padding_mask = metadata["padding_mask"]           # [H,W]
         
         # in which frame did each instance first appear
         self.instance_discovery = metadata["instance_discovery"]
@@ -109,7 +109,7 @@ class SequenceManager:
                 raise NotImplementedError
 
             # record sampled click
-            self.fg_coords_list[fr_idx][inst_id-1].append([center_coords[0], center_coords[1], inst_id-1, fr_idx, t])
+            self.fg_coords_list[fr_idx][inst_id-1].append([center_coords[0], center_coords[1], inst_id, fr_idx, t])
             self.num_clicks_per_object[fr_idx][inst_id-1] += 1
             self.num_clicks_per_frame[fr_idx] += 1
             self.max_timestamps[fr_idx] = t
@@ -353,7 +353,7 @@ class SequenceManager:
         for idx in range(len(pred_masks)):
             dummy_ = np.zeros((H,W))
             for k in self.instances:
-                dummy_ += pred_masks[idx][self.orig_to_serial_ids[k]-1].numpy() * k
+                dummy_ += pred_masks[idx][k-1].numpy() * k
             out_masks_.append(dummy_)
         
         if indices is None:
