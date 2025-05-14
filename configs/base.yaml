@@ -123,24 +123,15 @@ SOLVER:
 INPUT:
   AUGMENTATION:   # data augmentation parameters
     # color augmentation
-    COLOR_AUG: true
-    # resize parameters
-    MAX_DIM_TRAIN: 910
-    MIN_DIM_TRAIN: 512
-    RESIZE_TEST:
-    MAX_DIM_TEST: 
-    MIN_DIM_TEST:
-
+    COLOR_AUG: false
     # random horizontal flip
     RANDOM_FLIP: true
-    RANDOM_FLIP_PROB: 0.5
     RANDOM_FLIP_AXIS: "horizontal"
-    # random crop (2:1 aspect ratio)
-    RANDOM_CROP: true
-    # IMPORTANT: final frame dimensions, must be divisible by MASK_FORMER.SIZE_DIVISIBILITY
-    IMAGE_SIZE: [512, 512]     # crop target dims
-    #RANDOM_CROP_FACTOR: 0.75
-    #MASK_PRESERVING_CROP_REF_FRAME: 0
+    RANDOM_FLIP_PROB: 0.5
+    # resize scale
+    MIN_SCALE: 0.1
+    MAX_SCALE: 2.0
+    IMAGE_SIZE: [512, 512]   # IMPORTANT: final frame dims must be divisible by MASK_FORMER.SIZE_DIVISIBILITY
 
   NORMALIZE_TO_UNIT_SCALE: false
   RGB: true
