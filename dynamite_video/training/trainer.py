@@ -55,13 +55,6 @@ class Trainer(DefaultTrainer):
                         num_workers=cfg.DATALOADER.NUM_WORKERS,
                     )
 
-        # dataloader = build_detection_train_loader(cfg, 
-        #                                           dataset=dataset, 
-        #                                           mapper=TrainingMapper(cfg),
-        #                                           #collate_fn=Collator(cfg, is_train=True)
-        #                                     )
-        # return dataloader    
-    
     
     @classmethod
     def build_optimizer(cls, cfg, model):
