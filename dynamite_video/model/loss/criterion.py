@@ -143,9 +143,9 @@ class SetFinalCriterion(nn.Module):
             point_coords = get_uncertain_point_coords_with_randomness(
                 src_masks,
                 lambda logits: calculate_uncertainty(logits),
-                self.num_points,
-                self.oversample_ratio,
-                self.importance_sample_ratio,
+                self.num_points,                # N in PointRend paper
+                self.oversample_ratio,          # k in PointRend paper
+                self.importance_sample_ratio,   # beta in PointRend paper
             )
             # get gt labels
             point_labels = point_sample(
@@ -189,7 +189,16 @@ class SetFinalCriterion(nn.Module):
             targets[i]["masks"] = torch.cat((t["masks"], target_bg_mask.unsqueeze(0)), dim=0)   
         
         # Compute the average number of target boxes accross all nodes, for normalization purposes
-        num_masks = sum(len(t["labels"])+1 for t in targets)
+        # num_masks = sum(len(t["labels"])+1 for t in targets)
+        # account for empty frames
+        num_masks = 0
+        for t in targets:
+            if len(t["labels"]) == 0:
+                num_masks += 1
+            else:
+                num_masks += len(t["labels"])
+            num_masks += 1 # BG
+
         num_masks = torch.as_tensor(
             [num_masks], dtype=torch.float, device=outputs['pred_masks'].device
         )
