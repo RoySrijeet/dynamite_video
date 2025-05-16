@@ -43,7 +43,6 @@ class AvgClicksPoolingInitializer(nn.Module):
         super().__init__()
         self.hidden_dim = hidden_dim
         
-        self.register_parameter("bg_query", nn.Parameter(torch.zeros(hidden_dim), requires_grad=True))
         self.register_parameter("no_click_query", nn.Parameter(torch.zeros(hidden_dim), requires_grad=True))
 
     
@@ -56,7 +55,6 @@ class AvgClicksPoolingInitializer(nn.Module):
             batched_bg_coords_list: List,
             img_dims: Tuple,
             max_timestamp: List,
-            use_static_bg_queries: bool,
     ) -> Tensor:
         """
         For the given list of sampled clicks, extract queries from image features
@@ -72,7 +70,6 @@ class AvgClicksPoolingInitializer(nn.Module):
             batched_bg_coords_list: list of background clicks across all frames of the clip
             img_dims: image (height, width)
             max_timestamp: latest timestamp on each frame
-            use_static_bg_queries: whether static background queries are used
         
         Returns:
             descriptors: query descriptors of input clicks
@@ -180,27 +177,6 @@ class AvgClicksPoolingInitializer(nn.Module):
                         torch.cat(desc, dim=1) if len(desc) > 0 else torch.zeros((1, 0, self.hidden_dim), device=device)
                         for desc in descriptors
                     ]
-        
-        # pad descriptors of each frame so that they all have same length
-        max_queries = max([desc.shape[1] for desc in descriptors])
-        for i, desc in enumerate(descriptors):
-            if use_static_bg_queries:
-                pad = max_queries-desc.shape[1]
-                bg_queries = repeat(self.bg_query, "C -> 1 L C", L=pad)
-            else:
-                pad = max_queries+1-desc.shape[1]
-                bg_queries = repeat(self.bg_query, "C -> 1 L C", L=pad)
-            descriptors[i] = torch.cat((descriptors[i], bg_queries), dim=1)
-
-            clks = normalized_clicks[i]
-            if len(clks) < max_queries:
-                diff = max_queries-len(clks)
-                normalized_clicks[i].extend([torch.tensor([-1.0, -1.0, -1.0])] * diff)
-                num_queries_per_object[i][-1] += diff
-        
-        descriptors = torch.cat(descriptors, dim=0)  # TxQxD
-        normalized_clicks = [torch.stack(clks).unsqueeze(0) for clks in normalized_clicks]
-        normalized_clicks = torch.cat(normalized_clicks, dim=0).to(device)  # TxQx3
         
         return descriptors, normalized_clicks, num_queries_per_object.tolist()
     
