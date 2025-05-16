@@ -120,7 +120,9 @@ class DynamiteModel(nn.Module):
             num_clicks_per_object= None,
             fg_coords = None, 
             bg_coords = None, 
-            max_timestamp=None
+            max_timestamp=None,
+            visualize=False,
+            train_iter=None,
     ):
         """
         Forward pass through the DynaMITe model
@@ -177,6 +179,8 @@ class DynamiteModel(nn.Module):
                                                                                             fg_coords[clip_idx],
                                                                                             bg_coords[clip_idx],
                                                                                             max_timestamp[clip_idx],
+                                                                                            visualize,
+                                                                                            train_iter
                                                                                         )
                 
                 losses = self.criterion(clip_outputs, targets[clip_idx], clip_num_queries_per_object)

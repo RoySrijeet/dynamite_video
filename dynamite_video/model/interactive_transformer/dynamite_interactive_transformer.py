@@ -1,9 +1,9 @@
-# Adapted by Amit Rana from: https://github.com/facebookresearch/Mask2Former/blob/main/mask2former/modeling/transformer_decoder/mask2former_transformer_decoder.py
-
+import os
 import fvcore.nn.weight_init as weight_init
 import numpy as np
 import random
 import torch
+import pickle
 
 from einops import repeat, rearrange
 from torch import nn
@@ -44,7 +44,8 @@ class DynamiteInteractiveTransformer(nn.Module):
         pre_norm: bool,
         mask_dim: int,
         enforce_input_project: bool,
-        positional_embeddings: str
+        positional_embeddings: str,
+        visualize_dir: str,
     ):
         """
         Args:
@@ -109,6 +110,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         if self.use_static_bg_queries:
             self.register_parameter("static_bg_pe", nn.Parameter(torch.zeros(self.num_static_bg_queries, hidden_dim), True))
             self.register_parameter("static_bg_query", nn.Parameter(torch.zeros(self.num_static_bg_queries,hidden_dim), True))
+        self.register_parameter("bg_query", nn.Parameter(torch.zeros(hidden_dim), False))
 
         # level embedding (we always use 3 scales)
         self.num_feature_levels = 3
@@ -123,6 +125,7 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         self.mask_embed = MLP(hidden_dim, hidden_dim, mask_dim, 3)
         self._reset_parameters()
+        self.visualize_dir = visualize_dir
 
     
     def _reset_parameters(self):
@@ -164,6 +167,8 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         ret["mask_dim"] = cfg.MODEL.SEM_SEG_HEAD.MASK_DIM
 
+        ret["visualize_dir"] = os.path.join(cfg.OUTPUT_DIR, "visualize")
+        os.makedirs(ret["visualize_dir"], exist_ok=True)
         return ret
 
 
@@ -177,7 +182,9 @@ class DynamiteInteractiveTransformer(nn.Module):
             num_clicks_per_object=None,
             fg_coords=None, 
             bg_coords=None, 
-            max_timestamp=None
+            max_timestamp=None,
+            visualize=False,
+            train_iter=None
     ):
         """
         Forward pass of one video clip through the interactive transformer
@@ -195,6 +202,11 @@ class DynamiteInteractiveTransformer(nn.Module):
         """
 
         assert len(multi_scale_features) == self.num_feature_levels
+
+        if visualize:
+            torch.save(images, os.path.join(self.visualize_dir, f"ckpt_{train_iter}_input_images.pth"))
+            with open(os.path.join(self.visualize_dir, f"ckpt_{train_iter}_input_data.pkl"), "wb") as f:
+                pickle.dump(data, f)
 
         # extract memory features for Transformer (cross-)attention
         memory = []
@@ -226,13 +238,24 @@ class DynamiteInteractiveTransformer(nn.Module):
                 # Given the Transformer output and current query distribution over instances, extract prediction masks
                 processed_results = self.process_results(images, prev_output, data["padding_mask"], instances_per_frame, num_queries_per_object)
 
+                if visualize:
+                    with open(os.path.join(self.visualize_dir, f"ckpt_{train_iter}_iter_{i}_clicks.pkl"), "wb") as f:
+                        pickle.dump([num_clicks_per_object, fg_coords, bg_coords, max_timestamp, num_queries_per_object], f)
+                    torch.save(processed_results, os.path.join(self.visualize_dir, f"ckpt_{train_iter}_iter_{i}_results.pth"))
+
                 # Given the prediction masks of current round, sample corrective click
                 num_clicks_per_object, fg_coords, bg_coords, max_timestamp = get_next_clicks(data, processed_results, num_clicks_per_object,
                                                                                             fg_coords, bg_coords, max_timestamp)
                 
             outputs, num_queries_per_object = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
                                                    mask_features, instances_per_frame, fg_coords, bg_coords, max_timestamp)
-        
+            
+            if visualize:
+                with open(os.path.join(self.visualize_dir, f"ckpt_{train_iter}_iter_{num_iters}_clicks.pkl"), "wb") as f:
+                        pickle.dump([num_clicks_per_object, fg_coords, bg_coords, max_timestamp, num_queries_per_object], f)
+                processed_results = self.process_results(images, outputs, data["padding_mask"], instances_per_frame, num_queries_per_object)
+                torch.save(processed_results, os.path.join(self.visualize_dir, f"ckpt_{train_iter}_iter_{num_iters}_results.pth"))
+            
             return outputs, num_clicks_per_object, num_queries_per_object
         
         else:
@@ -298,6 +321,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         
         _, T, _ = memory[0].shape           # hw, T, D
         B, C, H, W = mask_features.shape
+        device = multi_scale_features[0][0].device
         height = 4*H
         width = 4*W
         
@@ -309,9 +333,30 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                             bg_coords, 
                                                                             (height, width), 
                                                                             max_timestamp=max_timestamp,
-                                                                            use_static_bg_queries=self.use_static_bg_queries,
+                                                                            # use_static_bg_queries=self.use_static_bg_queries,
                                                                         ) # TxQxD, TxQx3
         
+        # pad descriptors of each frame so that they all have same length
+        max_queries = max([desc.shape[1] for desc in descriptors])
+        for i, desc in enumerate(descriptors):
+            if self.use_static_bg_queries:
+                pad = max_queries-desc.shape[1]
+                bg_queries = repeat(self.bg_query, "C -> 1 L C", L=pad)
+            else:
+                pad = max_queries+1-desc.shape[1]
+                bg_queries = repeat(self.bg_query, "C -> 1 L C", L=pad)
+            descriptors[i] = torch.cat((descriptors[i], bg_queries), dim=1)
+
+            clks = normalized_click_coords[i]
+            if len(clks) < max_queries:
+                diff = max_queries-len(clks)
+                normalized_click_coords[i].extend([torch.tensor([-1.0, -1.0, -1.0])] * diff)
+                num_queries_per_object[i][-1] += diff
+        
+        descriptors = torch.cat(descriptors, dim=0)  # TxQxD
+        normalized_click_coords = [torch.stack(clks).unsqueeze(0) for clks in normalized_click_coords]
+        normalized_click_coords = torch.cat(normalized_click_coords, dim=0).to(device)  # TxQx3
+
         query_embed = repeat(self.query_embed, "C -> Q N C", N=T, Q=descriptors.shape[1])  # QxTxD
 
         if self.positional_embeddings:
@@ -340,7 +385,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             level_index = i % self.num_feature_levels
             attn_mask[torch.where(attn_mask.sum(-1) == attn_mask.shape[-1])] = False
             # cross-attention between image features and queries in each frame
-            output = self.encoder.image_query_cross_attention_layers[i](
+            output = self.encoder.cross_attention_layers[i](
                                                             tgt=output,                     # QxTxD
                                                             memory=memory[level_index],     # (hw)xTxD
                                                             memory_mask=attn_mask,          # (T*#attn_heads)xQx(hw)
@@ -350,14 +395,14 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                         )
 
             # cross-attention between queries of different frames
-            Q,T,D = output.shape
-            output = self.encoder.query_query_cross_attention_layers[i](
-                                                            output.view(Q*T,1,D),
-                                                            tgt_mask=None,
-                                                            tgt_key_padding_mask=None,
-                                                            query_pos=query_embed.view(Q*T,1,D)
-                                                        )
-            output = output.view(Q,T,D)
+            # Q,T,D = output.shape
+            # output = self.encoder.query_query_cross_attention_layers[i](
+            #                                                 output.view(Q*T,D),
+            #                                                 tgt_mask=None,
+            #                                                 tgt_key_padding_mask=None,
+            #                                                 query_pos=query_embed.view(Q*T,D)
+            #                                             )
+            # output = output.view(Q,T,D)
             
             # self-attention between queries within frame
             output = self.encoder.self_attention_layers[i](

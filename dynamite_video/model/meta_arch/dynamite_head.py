@@ -75,7 +75,9 @@ class DynamiteHead(nn.Module):
             num_clicks_per_object=None,
             fg_coords = None, 
             bg_coords = None, 
-            max_timestamp=None
+            max_timestamp=None,
+            visualize=False,
+            train_iter=None
     ):
         """
         Forward pass through DynaMITe segmentation head
@@ -99,7 +101,8 @@ class DynamiteHead(nn.Module):
         if self.transformer_in_feature == "multi_scale_pixel_decoder":
             predictions, num_clicks_per_object, num_queries_per_object = self.interactive_transformer(data, images, instances_per_frame, multi_scale_features,
                                         mask_features,  num_clicks_per_object,
-                                        fg_coords, bg_coords, max_timestamp)
+                                        fg_coords, bg_coords, max_timestamp,
+                                        visualize,train_iter)
         if self.training:
             return predictions, num_clicks_per_object, num_queries_per_object
         else:
