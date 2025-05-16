@@ -5,7 +5,6 @@ from detectron2.engine import DefaultTrainer
 from detectron2.utils.logger import setup_logger
 
 from dynamite_video.data.dataset_builder import build_evaluation_dataset
-from dynamite_video.evaluation.interactive_evaluation import evaluate
 
 class Evaluator(DefaultTrainer):
     
@@ -51,7 +50,12 @@ class Evaluator(DefaultTrainer):
             logger.info(f"Loading dataset: {dataset_name} ...")
             
             # build clips from input dataset
-            data = build_evaluation_dataset(cfg, dataset_name, single_instance=cfg.ITERATIVE.TEST.SINGLE_INSTANCE)
+            data = build_evaluation_dataset(cfg, dataset_name)
+            
+            if cfg.ITERATIVE.TEST.SINGLE_INSTANCE:
+                from dynamite_video.evaluation.single_instance_evaluation import evaluate
+            else:
+                from dynamite_video.evaluation.multi_instance_evaluation import evaluate
             
             result = evaluate(model,
                             data,
@@ -62,7 +66,7 @@ class Evaluator(DefaultTrainer):
                             seed_id=seed_id,
                             output_path=cfg.OUTPUT_DIR,
                             save_vis=save_vis,
-                    )
+            )
         
             # save result
             mean_score = np.mean(np.asarray(result), axis=0)
