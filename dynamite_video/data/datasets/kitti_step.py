@@ -67,8 +67,118 @@ class KITTISTEPTrainingDataset(TrainingDataset):
             self.fallback_candidates[num_instances].add(i)
 
 
-
     def map_annotations(
+            self, 
+            annotations_path: str
+    ):
+        """
+        Read KITTI-STEP annotations from JSON file
+
+        Args:
+            path_to_annotations: path to JSON annotations
+
+        Returns a dictionary with annotation content from the entire dataset
+        """
+        
+        # read JSON file
+        with open(annotations_path, 'r') as fh:
+            content = json.load(fh)
+
+        sequences = []
+
+        MIN_MASK_AREA = self.cfg.TRAINING.MIN_MASK_AREA # no filtering applied
+
+        for seq in content["sequences"]:
+            
+            seq['id'] = f"{self.name}/{seq['id']}"
+            seq['dataset'] = self.name
+            
+            # video resolution
+            img_dims = (seq['height'], seq['width'])
+            
+            updated_segmentations = []
+            accepted_track_ids = {}
+
+            # read semantic maps
+            for fr_idx, sem_masks in enumerate(seq["semantic_segmentations"]):
+                updated_segmentations.append(dict())
+
+                for class_id, sem_seg_rle in sem_masks.items():    
+                    if class_id == '255':
+                        continue    # ignore 'void' class
+                    
+                    if self.mask_area(sem_seg_rle, img_dims) >= MIN_MASK_AREA:
+                        # lowest class_id could be 0
+                        track_id = int(class_id) + 1
+                        updated_segmentations[-1][track_id] = sem_seg_rle
+                        accepted_track_ids[track_id] = int(class_id)
+
+            # NOTE: the semantic classes in KITTI_STEP have IDs from 0-18 (and void/255).
+            # The instance segmentations have their independent IDs that overlap with the
+            # class IDs. To resolve this issue, the instances are assigned a new id as 
+            # follows: new_id = max_track_id + 1 + real_id where max_track_id is the ID
+            # of the highest class ID
+            
+            max_track_id = max(accepted_track_ids.keys())
+
+            # store the IDs of the salient classes which have some of their instances 
+            # segmented. This is used later to create a hole in the semantic map where 
+            # instance-level masks are available
+            salient_classes = []
+            
+            # read instance masks
+            for fr_idx, inst_masks in enumerate(seq["segmentations"]):
+                salient_classes.append(defaultdict(list))
+
+                for track_id, inst_rle in inst_masks.items():
+
+                    if self.mask_area(inst_rle, img_dims) >= MIN_MASK_AREA:
+                        # new track ID
+                        new_track_id = max_track_id + 1 + int(track_id)
+
+                        updated_segmentations[fr_idx][new_track_id] = inst_rle
+                        accepted_track_ids[new_track_id] = seq['categories'][track_id]
+                        salient_classes[-1][int(seq['categories'][track_id]) + 1].append(self.decode_mask(inst_rle, img_dims))
+            
+            # cut out holes from the semantic map of the salient classes where instance masks are available
+            for fr_idx, fr_rles in enumerate(updated_segmentations):
+                overlapping_masks = salient_classes[fr_idx]
+                if len(overlapping_masks) == 0:
+                    continue
+                
+                for class_id in overlapping_masks.keys():
+                    sem_mask = self.decode_mask(fr_rles[class_id], img_dims)
+                    for inst_mask in overlapping_masks[class_id]:
+                        sem_mask[np.where(inst_mask==1)] = 0
+                
+                    if np.any(sem_mask):
+                        updated_sem_mask = mt.encode(np.asfortranarray(sem_mask))["counts"].decode('utf-8')
+                        updated_segmentations[fr_idx][class_id] = updated_sem_mask
+                    else:
+                        updated_segmentations[fr_idx].pop(class_id, None)
+
+            seq['segmentations'] = updated_segmentations
+            seq["categories"] = accepted_track_ids
+            
+            seq.pop("semantic_segmentations")
+            sequences.append(seq)
+
+        # store category id to name mapping
+        meta_info = content["meta"]["category_labels"]
+        meta_info = {
+            "category_labels": {
+                int(id): name for id, name in content["meta"]["category_labels"].items()
+            }
+        }
+
+        return {
+            "sequences": sequences,
+            "meta": meta_info
+        }
+
+    
+    
+    def map_annotations_2(
             self, 
             annotations_path: str
     ):

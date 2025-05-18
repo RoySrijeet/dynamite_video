@@ -60,7 +60,7 @@ MODEL:
     APE: False
     DROP_PATH_RATE: 0.3
     PATCH_NORM: True
-  WEIGHTS: "weights/dynamite_swin_tiny.pth" #"weights/swin_tiny_patch4_window7_224.pkl"
+  WEIGHTS: "weights/swin_tiny_patch4_window7_224.pkl"
   PIXEL_MEAN: [123.675, 116.280, 103.530]   # RGB order
   PIXEL_STD: [58.395, 57.120, 57.375]
   # PIXEL_MEAN: [103.53, 116.28, 123.675]       # BGR order
@@ -123,15 +123,24 @@ SOLVER:
 INPUT:
   AUGMENTATION:   # data augmentation parameters
     # color augmentation
-    COLOR_AUG: false
+    COLOR_AUG: true
+    # resize parameters
+    MAX_DIM_TRAIN: 910
+    MIN_DIM_TRAIN: 512
+    RESIZE_TEST:
+    MAX_DIM_TEST: 
+    MIN_DIM_TEST:
+
     # random horizontal flip
     RANDOM_FLIP: true
-    RANDOM_FLIP_AXIS: "horizontal"
     RANDOM_FLIP_PROB: 0.5
-    # resize scale
-    MIN_SCALE: 0.1
-    MAX_SCALE: 2.0
-    IMAGE_SIZE: [512, 512]   # IMPORTANT: final frame dims must be divisible by MASK_FORMER.SIZE_DIVISIBILITY
+    RANDOM_FLIP_AXIS: "horizontal"
+    # random crop (2:1 aspect ratio)
+    RANDOM_CROP: true
+    # IMPORTANT: final frame dimensions, must be divisible by MASK_FORMER.SIZE_DIVISIBILITY
+    IMAGE_SIZE: 512     # crop target dims
+    #RANDOM_CROP_FACTOR: 0.75
+    #MASK_PRESERVING_CROP_REF_FRAME: 0
 
   NORMALIZE_TO_UNIT_SCALE: false
   RGB: true
