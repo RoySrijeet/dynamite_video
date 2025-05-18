@@ -395,14 +395,14 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                         )
 
             # cross-attention between queries of different frames
-            # Q,T,D = output.shape
-            # output = self.encoder.query_query_cross_attention_layers[i](
-            #                                                 output.view(Q*T,D),
-            #                                                 tgt_mask=None,
-            #                                                 tgt_key_padding_mask=None,
-            #                                                 query_pos=query_embed.view(Q*T,D)
-            #                                             )
-            # output = output.view(Q,T,D)
+            Q,T,D = output.shape
+            output = self.encoder.query_query_cross_attention_layers[i](
+                                                            output.view(Q*T,D),
+                                                            tgt_mask=None,
+                                                            tgt_key_padding_mask=None,
+                                                            query_pos=query_embed.view(Q*T,D)
+                                                        )
+            output = output.view(Q,T,D)
             
             # self-attention between queries within frame
             output = self.encoder.self_attention_layers[i](
@@ -483,6 +483,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         processed_results = []
         for mask_pred_per_image, instances_per_image, queries_per_instance in zip(mask_pred_results, instances_per_frame, num_queries_per_object):
             processed_r = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image * padding_mask, instances_per_image, queries_per_instance, seq_instances)
+            processed_r = processed_r * padding_mask
             processed_results.append(processed_r)
 
         return processed_results
