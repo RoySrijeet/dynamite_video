@@ -57,14 +57,17 @@ class KITTISTEPTrainingDataset(TrainingDataset):
         self.videos: Dict[str, GenericVideoSequence] = {vid.id: vid for vid in videos}
 
         # create samples
-        self.samples, self.sample_image_dims, self.sample_instance_counts = self.create_training_samples(
-            self.videos, num_samples, max_num_instances
-        )
+        self.samples = self.create_training_samples(self.videos, num_samples)
+        
+        # # create samples
+        # self.samples, self.sample_image_dims, self.sample_instance_counts = self.create_training_samples(
+        #     self.videos, num_samples, max_num_instances
+        # )
 
-        # store fallback candidates
-        self.fallback_candidates = defaultdict(set)
-        for i, num_instances in enumerate(self.sample_instance_counts):
-            self.fallback_candidates[num_instances].add(i)
+        # # store fallback candidates
+        # self.fallback_candidates = defaultdict(set)
+        # for i, num_instances in enumerate(self.sample_instance_counts):
+        #     self.fallback_candidates[num_instances].add(i)
 
     
     def map_annotations(
@@ -404,13 +407,3 @@ class KITTISTEPInferenceDataset(InferenceDataset):
             sequences.append(metadata)
 
         return sequences
-    
-        
-    def mask_area(self, rle, img_dims):
-        """
-        Area of an RLE segment
-        """
-        return mt.area({
-            "counts": rle.encode("utf-8"),
-            "size": img_dims
-        })

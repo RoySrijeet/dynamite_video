@@ -306,7 +306,7 @@ class GenericVideoSequence(object):
         return binary_masks, instances_per_frame, clip_instance_ids
             
 
-    def extract_subsequence(self, frame_idxes: List[int], instance_ids_to_keep: List[int], new_id: str=""):
+    def extract_subsequence(self, frame_idxes: List[int], instance_ids_to_keep: List[int]=None, new_id: str=""):
         """
         Extract the specified frames from the video and return it as a clip
 
@@ -330,26 +330,35 @@ class GenericVideoSequence(object):
             "image_paths": [self.image_paths[t] for t in frame_idxes]
         }
         
-        # all instances that are present in the frames to be extracted
-        # instance_ids_to_keep = set(sum([list(self.segmentations[t].keys()) for t in frame_idxes], []))
+        if instance_ids_to_keep is None:
+            
+            subseq_dict["segmentations"] = []
+            subseq_instances = []
+            for fr_idx in frame_idxes:
+                subseq_dict["segmentations"].append(self.segmentations[fr_idx])
+                subseq_instances.extend(self.segmentations[fr_idx].keys())
 
-        subseq_dict["segmentations"] = [
-            {
-                iid: segmentations_t[iid]
-                for iid in segmentations_t if iid in instance_ids_to_keep
-            }
-            for t, segmentations_t in enumerate(self.segmentations) if t in frame_idxes
-        ]
+            subseq_instances = set(subseq_instances)
+            subseq_dict["categories"] = {iid: self.instance_categories[iid] for iid in subseq_instances}
+        
+        else:
+            subseq_dict["segmentations"] = [
+                {
+                    iid: segmentations_t[iid]
+                    for iid in segmentations_t if iid in instance_ids_to_keep
+                }
+                for t, segmentations_t in enumerate(self.segmentations) if t in frame_idxes
+            ]
 
-        if self.has_semantic_masks:
-            subseq_semantic_segmentation = {}
-            _t = 0
-            for t, semantic_seg_t in self.semantic_segmentations.items():
-                if t in frame_idxes:
-                    subseq_semantic_segmentation[_t] = semantic_seg_t
-                    _t += 1
-            subseq_dict["semantic_segmentations"] = subseq_semantic_segmentation
+            # if self.has_semantic_masks:
+            #     subseq_semantic_segmentation = {}
+            #     _t = 0
+            #     for t, semantic_seg_t in self.semantic_segmentations.items():
+            #         if t in frame_idxes:
+            #             subseq_semantic_segmentation[_t] = semantic_seg_t
+            #             _t += 1
+            #     subseq_dict["semantic_segmentations"] = subseq_semantic_segmentation
 
-        subseq_dict["categories"] = {iid: self.instance_categories[iid] for iid in instance_ids_to_keep}
+            subseq_dict["categories"] = {iid: self.instance_categories[iid] for iid in instance_ids_to_keep}
         
         return self.__class__(subseq_dict, self.path_to_images, serialize=True)
