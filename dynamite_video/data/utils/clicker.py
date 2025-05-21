@@ -18,7 +18,7 @@ def _generate_probs(max_num_points, gamma):
         gamma: probability scaling factor
     """
     probs = []
-    last_value = 1
+    last_value = 1.
     for i in range(max_num_points):
         probs.append(last_value)
         last_value *= gamma

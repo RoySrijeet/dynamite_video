@@ -3,6 +3,7 @@ import numpy as np
 import random
 import torch
 
+from collections import defaultdict
 from functools import lru_cache
 
 
@@ -58,7 +59,11 @@ def get_next_clicks(
     fg_coords,
     bg_coords,
     max_timestamp,
-    max_num_points=2
+    num_instances_to_refine,
+    max_num_points=2,
+    visualize=False,
+    visualize_dir=None,
+    train_iter=None
 ):
     """
     Given the predicted masks of current round, sample corrective clicks
@@ -82,33 +87,43 @@ def get_next_clicks(
     semantic_maps_clip = [x.cpu().numpy() for x in data['semantic_masks']] # [T,H,W]
     padding_mask = data["padding_mask"].cpu().numpy()                      # [H,W]
     
-    for fr_idx, (gt_masks, pred_masks, semantic_map) in enumerate(zip(gt_masks_clip, pred_masks_clip, semantic_maps_clip)):
+    candidates_for_refinement = defaultdict(list)
+    for fr_idx, (gt_masks, pred_masks) in enumerate(zip(gt_masks_clip, pred_masks_clip)):
         
         # id of the instance to be refined
         indices = compute_iou(gt_masks, pred_masks)
+        for inst_id in indices:
+            candidates_for_refinement[inst_id.item()].append(fr_idx)
+
+    instances_to_refine = np.random.choice(list(candidates_for_refinement.keys()), num_instances_to_refine)
+
+    for inst_id in instances_to_refine:
+        fr_idx = np.random.choice(candidates_for_refinement[inst_id])
+        gt_masks = gt_masks_clip[fr_idx]
+        pred_masks = pred_masks_clip[fr_idx]
+        semantic_map = semantic_maps_clip[fr_idx]
+
         # timestamp of the latest click so far
         timestamp = max(max_timestamp)
+        sampled_clicks = _get_corrective_clicks(pred_masks[inst_id], gt_masks[inst_id], semantic_map, padding_mask,
+                                                    timestamp+1, 1, visualize, visualize_dir, f"{train_iter}_fr_{fr_idx}_inst_{inst_id}")
+        
+        if sampled_clicks is not None:
+            for click in sampled_clicks:
+                # click is in the format [y,x,i,t]
+                click_y, click_x, click_obj, click_time = click
+                
+                # BG click
+                if click_obj == -1:
+                    bg_coords[fr_idx].append([click_y, click_x, click_obj, fr_idx, click_time])
+                
+                # FG click
+                else:
+                    fg_coords[fr_idx][click_obj].append([click_y, click_x, click_obj, fr_idx, click_time])
+                    num_clicks_per_object[fr_idx][click_obj]+= 1
 
-        for inst_id in indices:
-            sampled_clicks = _get_corrective_clicks(pred_masks[inst_id], gt_masks[inst_id], semantic_map, padding_mask,
-                                                        timestamp+1, max_num_points)
-            
-            if sampled_clicks is not None:
-                for click in sampled_clicks:
-                    # click is in the format [y,x,i,t]
-                    click_y, click_x, click_obj, click_time = click
-                    
-                    # BG click
-                    if click_obj == -1:
-                        bg_coords[fr_idx].append([click_y, click_x, click_obj, fr_idx, click_time])
-                    
-                    # FG click
-                    else:
-                        fg_coords[fr_idx][click_obj].append([click_y, click_x, click_obj, fr_idx, click_time])
-                        num_clicks_per_object[fr_idx][click_obj]+= 1
-
-                    max_timestamp[fr_idx] = click_time
-                    timestamp = click_time
+                max_timestamp[fr_idx] = click_time
+                timestamp = click_time
 
     return num_clicks_per_object, fg_coords, bg_coords, max_timestamp
 
@@ -124,7 +139,7 @@ def _generate_probs(max_num_points, gamma=0.25):
         gamma: probability scaling factor (float, default=0.25)
     """
     probs = []
-    last_value = 1
+    last_value = 1.
     for i in range(max_num_points):
         probs.append(last_value)
         last_value *= gamma
@@ -139,7 +154,10 @@ def _get_corrective_clicks(
     semantic_map,
     padding_mask,
     timestamp,
-    max_num_points=2
+    max_num_points=2,
+    visualize=False,
+    visualize_dir=None,
+    train_iter=None,
 ):
     """
     Sample corrective click on an instance, in a frame
@@ -152,11 +170,15 @@ def _get_corrective_clicks(
         timestamp: timestamp of current click (int)
         max_num_points: maximum #clicks to sample (int, default: 2)
     """
-
+    import os
     gt_mask = np.asarray(gt_mask, dtype = np.bool_)
     pred_mask = np.asarray(pred_mask, dtype = np.bool_)
     padding_mask = np.asarray(padding_mask, dtype = np.bool_)
 
+    if visualize:
+        torch.save(gt_mask, os.path.join(visualize_dir, f"ckpt_{train_iter}_gt_mask.pth"))
+        torch.save(pred_mask, os.path.join(visualize_dir, f"ckpt_{train_iter}_pred_mask.pth"))
+    
     # negative error map - g.t. foreground missed by the prediction
     fn_mask =  np.logical_and(gt_mask, np.logical_not(pred_mask))
     fn_mask = np.logical_and(fn_mask, np.logical_not(padding_mask))
@@ -164,6 +186,10 @@ def _get_corrective_clicks(
     # positive error map - g.t. background covered by the prediction
     fp_mask =  np.logical_and(np.logical_not(gt_mask), pred_mask)
     fp_mask = np.logical_and(fp_mask, np.logical_not(padding_mask))
+
+    if visualize:
+        torch.save(fn_mask, os.path.join(visualize_dir, f"ckpt_{train_iter}_fn_mask.pth"))
+        torch.save(fp_mask, os.path.join(visualize_dir, f"ckpt_{train_iter}_fp_mask.pth"))
     
     # distance transform to find the center of the error region
     fn_mask = np.pad(fn_mask, ((1, 1), (1, 1)), 'constant')
@@ -205,4 +231,6 @@ def _get_corrective_clicks(
             points_coords.append([coords[0], coords[1], obj_indx, timestamp])   # [y,x,i,t]
             timestamp+=1
 
+    if visualize:
+        torch.save(points_coords, os.path.join(visualize_dir, f"ckpt_{train_iter}_points_coords.pth"))
     return points_coords

@@ -46,6 +46,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         enforce_input_project: bool,
         positional_embeddings: str,
         visualize_dir: str,
+        num_instances_to_refine: int,
     ):
         """
         Args:
@@ -76,6 +77,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         self.max_num_interactions = max_num_interactions
 
         self.num_static_bg_queries = num_static_bg_queries
+        self.num_instances_to_refine = num_instances_to_refine
         
         # Reverse Cross Attn
         self.use_decoder = use_decoder
@@ -169,6 +171,8 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         ret["visualize_dir"] = os.path.join(cfg.OUTPUT_DIR, "visualize")
         os.makedirs(ret["visualize_dir"], exist_ok=True)
+
+        ret["num_instances_to_refine"] = cfg.CLICKER.TRAINING.MAX_NUM_INSTANCES_REFINED_PER_ROUND
         return ret
 
 
@@ -245,7 +249,11 @@ class DynamiteInteractiveTransformer(nn.Module):
 
                 # Given the prediction masks of current round, sample corrective click
                 num_clicks_per_object, fg_coords, bg_coords, max_timestamp = get_next_clicks(data, processed_results, num_clicks_per_object,
-                                                                                            fg_coords, bg_coords, max_timestamp)
+                                                                                            fg_coords, bg_coords, max_timestamp, 
+                                                                                            num_instances_to_refine=self.num_instances_to_refine,
+                                                                                            visualize=visualize,
+                                                                                            visualize_dir=self.visualize_dir,
+                                                                                            train_iter=f"{train_iter}_iter_{i}_correction")
                 
             outputs, num_queries_per_object = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
                                                    mask_features, instances_per_frame, fg_coords, bg_coords, max_timestamp)

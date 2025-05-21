@@ -197,6 +197,7 @@ ITERATIVE:
 
 CLICKER:
   TRAINING:
+    MAX_NUM_INSTANCES_REFINED_PER_ROUND: 1
     # max #clicks *per-instance* to be sampled from a frame
     MAX_NUM_CLICKS_PER_INSTANCE: 6            # default: 6
     # whether to add first click at object center
