@@ -65,6 +65,11 @@ def evaluate(model,
         
         for sequence in dataset:
 
+            sequence_instance_ids = sequence["serial_to_orig_ids"].keys()
+
+            for inst_id in sequence_instance_ids:
+                ...
+
             # a fresh model for each sequence
             predictor = Predictor(model)
             manager = SequenceManager(sequence)

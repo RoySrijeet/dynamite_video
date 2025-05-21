@@ -368,7 +368,7 @@ class KITTISTEPInferenceDataset(InferenceDataset):
                         instance_masks[-1].append(np.zeros(metadata["orig_dims"]).astype(np.uint8))
                 instances_per_frame[-1] = sorted(instances_per_frame[-1])
 
-            # instance_masks = np.stack([np.stack(masks) for masks in instance_masks])    # T,N,H,W
+            instance_masks = np.stack([np.stack(masks) for masks in instance_masks])    # T,N,H,W
             semantic_maps = np.stack(semantic_maps)                                     # T,H,W
 
             # resize
@@ -392,8 +392,8 @@ class KITTISTEPInferenceDataset(InferenceDataset):
 
             metadata["instance_discovery"] = instance_discovery
             metadata["images"] = images
-            metadata["padding_mask"] = np.zeros(metadata["orig_dims"]).astype('uint8')
-            # metadata["instance_masks"] = instance_masks
+            # metadata["padding_mask"] = np.zeros(metadata["orig_dims"]).astype('uint8')
+            metadata["instance_masks"] = instance_masks
             metadata["semantic_maps"] = semantic_maps
             # metadata["bg_masks"] = (semantic_maps==0).astype(np.uint8)
             metadata["instances_per_frame"] = instances_per_frame

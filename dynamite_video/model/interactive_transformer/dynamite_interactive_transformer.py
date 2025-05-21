@@ -395,14 +395,14 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                         )
 
             # cross-attention between queries of different frames
-            Q,T,D = output.shape
-            output = self.encoder.query_query_cross_attention_layers[i](
-                                                            output.view(Q*T,D),
-                                                            tgt_mask=None,
-                                                            tgt_key_padding_mask=None,
-                                                            query_pos=query_embed.view(Q*T,D)
-                                                        )
-            output = output.view(Q,T,D)
+            # Q,T,D = output.shape
+            # output = self.encoder.query_query_cross_attention_layers[i](
+            #                                                 output.view(Q*T,D),
+            #                                                 tgt_mask=None,
+            #                                                 tgt_key_padding_mask=None,
+            #                                                 query_pos=query_embed.view(Q*T,D)
+            #                                             )
+            # output = output.view(Q,T,D)
             
             # self-attention between queries within frame
             output = self.encoder.self_attention_layers[i](
