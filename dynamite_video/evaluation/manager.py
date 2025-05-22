@@ -27,7 +27,7 @@ class SequenceManager:
         self.images = metadata["images"]                       # [T,3,H,W]
         self.gt_instance_masks = metadata["instance_masks"]    # [T,N,H,W]
         self.gt_semantic_maps = metadata["semantic_maps"]      # [T,H,W]
-        self.gt_bg_masks = metadata["bg_masks"]                # [T,H,W]
+        self.gt_bg_masks = (self.gt_semantic_maps == 0).astype(np.uint8)    # [T,H,W]
         self.padding_mask = metadata["padding_mask"]           # [H,W]
         
         # in which frame did each instance first appear
@@ -267,8 +267,10 @@ class SequenceManager:
         # some from the predicted masks of the overlapping frames
         net_clicks = np.sum(clip["num_clicks_per_object"], axis=0)
         instances_in_clip = np.asarray(list(set(item for sublist in self.instances_per_frame[indices[0]:indices[-1]+1] for item in sublist))) - 1
-        if not all(net_clicks[instances_in_clip]):
         
+        # TODO: empty clip
+        # TODO: before an instance appears
+        if not all(net_clicks[instances_in_clip]):
         # if not all(np.sum(clip["num_clicks_per_object"], axis=0)):
             
             overlapping_frame_indices = sorted(_indices[:self.num_overlapping_frames])
@@ -315,7 +317,7 @@ class SequenceManager:
         return clip
     
 
-    def store_pred_masks(self, pred_masks, indices):
+    def store_pred_masks(self, pred_masks, indices=None):
         """
         Store predicted masks of a clip
 
@@ -323,6 +325,10 @@ class SequenceManager:
             pred_masks: predicted masks, list of [T,H,W] tensors where T=length of the clip
             indices: list of indices (w.r.t. the whole sequence) specifying the clip
         """
+        if indices is None:
+            self.pred_masks = pred_masks
+            return
+        
         # add empty masks for instances that were not present in this clip
         instance_id_to_index = {id_: i for i, id_ in enumerate(self.instances)}
         N = len(self.instances)
@@ -342,6 +348,10 @@ class SequenceManager:
         """
         Convert model-returned instance binary masks to semantic maps
         """
+        if len(self.instances) == 1:
+            self.pred_semantic_maps = [m.squeeze(0).numpy() for m in self.pred_masks]
+            return
+        
         out_masks_ = []
         H,W = self.pred_masks[0].shape[-2:]
 

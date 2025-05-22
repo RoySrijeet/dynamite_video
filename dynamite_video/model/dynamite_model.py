@@ -183,7 +183,7 @@ class DynamiteModel(nn.Module):
                                                                                             train_iter
                                                                                         )
                 
-                losses = self.criterion(clip_outputs, targets[clip_idx], clip_num_queries_per_object)
+                losses = self.criterion(clip_outputs, targets[clip_idx], inputs[clip_idx]["instance_ids"], clip_num_queries_per_object)
 
                 for k in list(losses.keys()):
                     if k in self.criterion.weight_dict:
@@ -281,14 +281,18 @@ class DynamiteModel(nn.Module):
         for clip in inputs:
             clip_targets = []
             for i in range(clip["images"].shape[0]):
-                labels = [0] * len(clip["instances_per_frame"][i])
+                labels = clip["instances_per_frame"][i]
                 inst_mask = clip["instance_masks"][i].to(self.device)
+                sem_mask = clip["semantic_masks"][i].to(self.device)
+                ignore_mask = clip["ignore_masks"][i].to(self.device)
                 bg_mask = clip["bg_masks"][i].to(self.device)
                 padding_mask = clip["padding_mask"].to(self.device)
                 clip_targets.append({
                     "labels": labels,
-                    "masks": inst_mask,
-                    "bg_mask": bg_mask,
+                    "semantic_masks": sem_mask,
+                    "ignore_masks": ignore_mask,
+                    "instance_masks": inst_mask,
+                    "bg_masks": bg_mask,
                     "padding_mask": padding_mask,
                 })
             targets.append(clip_targets)

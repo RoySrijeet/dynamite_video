@@ -104,7 +104,8 @@ class GenericVideoSequence(object):
                 self.segmentations, self.semantic_segmentations = self.serialize_masks(segmentations, semantic_segmentations, self.orig_to_serial_id)
                 # update IDs in category map
                 self.instance_categories = {self.orig_to_serial_id.get(inst_id): value for inst_id, value in seq_dict["categories"].items()}
-            
+
+        self.ignore_masks = seq_dict.get("ignore_masks", None)
         self.instance_areas = None
         self.fpack_reader = None
 
@@ -227,6 +228,7 @@ class GenericVideoSequence(object):
                 raise ValueError("No image found at path: {}".format(os.path.join(self.path_to_images, self.image_paths[t])))
             images.append(im)
 
+        images = np.stack(images)       # [T, H, W, 3]
         return images
 
     
@@ -302,8 +304,16 @@ class GenericVideoSequence(object):
                     binary_masks_fr.append(np.zeros(self.image_dims).astype('uint8'))
 
             binary_masks.append(binary_masks_fr)
-
-        return binary_masks, instances_per_frame, clip_instance_ids
+        
+        binary_masks = np.stack([np.stack(fr_masks) for fr_masks in binary_masks])      # [T, N, H, W]
+        
+        # ignore masks
+        ignore_masks = None
+        if self.ignore_masks is not None:
+            ignore_masks = [self.decode_mask(ig_msk, img_dims) for ig_msk in self.ignore_masks]
+            ignore_masks = np.stack(ignore_masks)
+        
+        return binary_masks, instances_per_frame, clip_instance_ids, ignore_masks
             
 
     def extract_subsequence(self, frame_idxes: List[int], instance_ids_to_keep: List[int]=None, new_id: str=""):
@@ -350,6 +360,8 @@ class GenericVideoSequence(object):
                 for t, segmentations_t in enumerate(self.segmentations) if t in frame_idxes
             ]
 
+            subseq_dict["categories"] = {iid: self.instance_categories[iid] for iid in instance_ids_to_keep}
+
             # if self.has_semantic_masks:
             #     subseq_semantic_segmentation = {}
             #     _t = 0
@@ -358,7 +370,8 @@ class GenericVideoSequence(object):
             #             subseq_semantic_segmentation[_t] = semantic_seg_t
             #             _t += 1
             #     subseq_dict["semantic_segmentations"] = subseq_semantic_segmentation
-
-            subseq_dict["categories"] = {iid: self.instance_categories[iid] for iid in instance_ids_to_keep}
+        
+        if self.ignore_masks is not None:
+            subseq_dict["ignore_masks"] =  [self.ignore_masks[t] for t in frame_idxes]
         
         return self.__class__(subseq_dict, self.path_to_images, serialize=True)

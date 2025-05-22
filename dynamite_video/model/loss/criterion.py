@@ -1,6 +1,5 @@
-# Modified by Amit Rana from: https://github.com/facebookresearch/Mask2Former/blob/main/mask2former/modeling/criterion.py
 """
-DynaMITe criterion.
+DynaMITe-Video criterion.
 """
 import logging
 
@@ -15,82 +14,12 @@ from detectron2.projects.point_rend.point_features import ( # type: ignore
 )
 
 import dynamite_video.utils.distributed as dist_utils
-
-
-def dice_loss(
-        inputs: torch.Tensor,
-        targets: torch.Tensor,
-        num_masks: float,
-    ):
-    """
-    Compute the DICE loss, similar to generalized IOU for masks
-    Args:
-        inputs: A float tensor of arbitrary shape.
-                The predictions for each example.
-        targets: A float tensor with the same shape as inputs. Stores the binary
-                 classification label for each element in inputs
-                (0 for the negative class and 1 for the positive class).
-    """
-    inputs = inputs.sigmoid()
-    inputs = inputs.flatten(1)
-    numerator = 2 * (inputs * targets).sum(-1)
-    denominator = inputs.sum(-1) + targets.sum(-1)
-    loss = 1 - (numerator + 1) / (denominator + 1)
-    return loss.sum() / num_masks
-
-
-dice_loss_jit = torch.jit.script(
-    dice_loss
-)  # type: torch.jit.ScriptModule
-
-
-def sigmoid_ce_loss(
-        inputs: torch.Tensor,
-        targets: torch.Tensor,
-        num_masks: float,
-    ):
-    """
-    Args:
-        inputs: A float tensor of arbitrary shape.
-                The predictions for each example.
-        targets: A float tensor with the same shape as inputs. Stores the binary
-                 classification label for each element in inputs
-                (0 for the negative class and 1 for the positive class).
-    Returns:
-        Loss tensor
-    """
-    loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
-
-    return loss.mean(1).sum() / num_masks
-
-
-sigmoid_ce_loss_jit = torch.jit.script(
-    sigmoid_ce_loss
-)  # type: torch.jit.ScriptModule
-
-
-def calculate_uncertainty(logits):
-    """
-    We estimate uncerainty as L1 distance between 0.0 and the logit prediction in 'logits' for the
-        foreground class in `classes`.
-    Args:
-        logits (Tensor): A tensor of shape (R, 1, ...) for class-specific or
-            class-agnostic, where R is the total number of predicted masks in all images and C is
-            the number of foreground classes. The values are logits.
-    Returns:
-        scores (Tensor): A tensor of shape (R, 1, ...) that contains uncertainty scores with
-            the most uncertain locations having the highest uncertainty score.
-    """
-    assert logits.shape[1] == 1
-    gt_class_logits = logits.clone()
-    return -(torch.abs(gt_class_logits))
+from dynamite_video.model.loss.loss_functions import sigmoid_ce_loss_jit, dice_loss_jit, calculate_uncertainty
 
 
 class SetFinalCriterion(nn.Module):
-    """This class computes the loss for DETR.
-    The process happens in two steps:
-        1) we compute hungarian assignment between ground truth boxes and the outputs of the model
-        2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
+    """
+    Meta
     """
 
     def __init__(self, weight_dict, losses,
@@ -104,79 +33,69 @@ class SetFinalCriterion(nn.Module):
         self.weight_dict = weight_dict
         self.losses = losses
 
-        # pointwise mask loss parameters
-        self.num_points = num_points
-        self.oversample_ratio = oversample_ratio
-        self.importance_sample_ratio = importance_sample_ratio
+        # PointRend (pointwise mask loss) parameters
+        self.num_points = num_points                             # N in PointRend paper
+        self.oversample_ratio = oversample_ratio                 # k in PointRend paper
+        self.importance_sample_ratio = importance_sample_ratio   # beta in PointRend paper
     
-    def loss_masks(self, outputs, targets, num_masks, num_queries_per_object = None):
-        """Compute the losses related to the masks: the focal loss and the dice loss.
+
+    def loss_masks(self, outputs, targets, num_masks, num_queries_per_object):
+        """
+        Compute the losses related to the masks: the focal loss and the dice loss.
         targets dicts must contain the key "masks" containing a tensor of dim [nb_target_boxes, h, w]
         """
         assert "pred_masks" in outputs
+        pred_masks = outputs["pred_masks"] # T,Q,H,W
 
-        # Accumulate mask for each object (as there might be multiple clicks per object) and background
-        new_outputs = []
-        if num_queries_per_object is not None:
-            for fr_idx, mask_pred in enumerate(outputs['pred_masks']):
-                H,W = mask_pred.shape[1:]
-                temp_out = []
-                splited_masks = torch.split(mask_pred, num_queries_per_object[fr_idx], dim=0)
-                for m in splited_masks:
-                    if len(m) == 0:
-                        temp_out.append(torch.zeros(H,W).to(mask_pred.device))
-                    else:
-                        temp_out.append(torch.max(m, dim=0).values)
-                new_outputs.append(torch.stack(temp_out))
-        src_masks = torch.cat(new_outputs,dim=0)
+        # gt semantic masks, T,H,W
+        target_masks = torch.stack([t["semantic_masks"] for t in targets]).to(dtype=torch.float32)
+        target_masks = target_masks[:, None]    # T,1,H,W
+        # ignore masks, T,H,W
+        ignore_masks = torch.stack([t["ignore_masks"] for t in targets])
+        ignore_masks = ignore_masks[:, None]    # T,1,H,W
 
-        masks = [t["masks"] for t in targets]
-        target_masks = torch.cat(masks,dim=0).to(dtype=torch.float32)
-
-        # No need to upsample predictions as we are using normalized coordinates :)
-        # N x 1 x H x W
-        src_masks = src_masks[:, None]
-        target_masks = target_masks[:, None]
+        # resize ignore mask to pred_masks resolution (1/4)
+        ignore_masks_ds = F.interpolate(
+            ignore_masks.type_as(pred_masks), scale_factor=0.25, mode='bilinear', align_corners=False
+        )
+        ignore_masks_ds = (ignore_masks_ds > 0.5).type_as(pred_masks).detach()
+        assert ignore_masks_ds.shape[-2:] == pred_masks.shape[-2:], f"Shape mismatch: {ignore_masks.shape}, {pred_masks.shape}"
 
         with torch.no_grad():
-            # sample point_coords
-            point_coords = get_uncertain_point_coords_with_randomness(
-                src_masks,
-                lambda logits: calculate_uncertainty(logits),
-                self.num_points,                # N in PointRend paper
-                self.oversample_ratio,          # k in PointRend paper
-                self.importance_sample_ratio,   # beta in PointRend paper
-            )
+            concat_ignore_mask_logits = torch.cat((ignore_masks_ds, pred_masks), 1)
+            # sample point_coords (PointRend) - [T, P, 2]
+            point_coords = get_uncertain_point_coords_with_randomness(concat_ignore_mask_logits,
+                                                                    lambda logits: calculate_uncertainty(logits),
+                                                                    self.num_points,
+                                                                    self.oversample_ratio,
+                                                                    self.importance_sample_ratio,
+                                                                )
             # get gt labels
-            point_labels = point_sample(
-                target_masks,
-                point_coords,
-                align_corners=False,
-            ).squeeze(1)
+            point_labels = point_sample(target_masks.float(), point_coords, mode='nearest', align_corners=False).long().squeeze(1)  # [T, P]
+            point_ignore = point_sample(ignore_masks.float(), point_coords, mode='nearest', align_corners=False).bool().squeeze(1)  # [T, P]
 
-        point_logits = point_sample(
-            src_masks,
-            point_coords,
-            align_corners=False,
-        ).squeeze(1)
+        point_logits = point_sample(pred_masks, point_coords, align_corners=False)                  # T,Q,P
+        point_labels = torch.where(point_ignore, torch.full_like(point_labels, -100), point_labels) # T,P
+
+        loss_mask = sigmoid_ce_loss_jit(point_logits, point_labels)
 
         losses = {
-            "loss_mask": sigmoid_ce_loss_jit(point_logits, point_labels, num_masks),
-            "loss_dice": dice_loss_jit(point_logits, point_labels, num_masks),
+            "loss_mask": loss_mask,
+            "loss_dice": torch.tensor([0.]).to(loss_mask.device), #dice_loss_jit(point_logits, point_labels, num_masks),
         }
 
-        del src_masks
+        del pred_masks
         del target_masks
         return losses
 
-    def get_loss(self, loss, outputs, targets, num_masks, num_queries_per_object=None):
+    def get_loss(self, loss, outputs, targets, num_masks, num_queries_per_object):
         loss_map = {
             'masks': self.loss_masks,
         }
         assert loss in loss_map, f"do you really want to compute {loss} loss?"
         return loss_map[loss](outputs, targets, num_masks, num_queries_per_object)
 
-    def forward(self, outputs, targets, num_queries_per_object = None):
+    def forward(self, outputs, targets, instance_ids, num_queries_per_object):
         """This performs the loss computation.
         Parameters:
              outputs: dict of tensors, see the output specification of the model for the format
@@ -184,24 +103,14 @@ class SetFinalCriterion(nn.Module):
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
 
-        for i,t in enumerate(targets):
-            target_bg_mask = t['bg_mask']
-            targets[i]["masks"] = torch.cat((t["masks"], target_bg_mask.unsqueeze(0)), dim=0)   
+        # for i,t in enumerate(targets):
+        #     target_bg_mask = t['bg_mask']
+        #     targets[i]["masks"] = torch.cat((t["masks"], target_bg_mask.unsqueeze(0)), dim=0)   
         
         # Compute the average number of target boxes accross all nodes, for normalization purposes
-        # num_masks = sum(len(t["labels"])+1 for t in targets)
-        # account for empty frames
-        num_masks = 0
-        for t in targets:
-            if len(t["labels"]) == 0:
-                num_masks += 1
-            else:
-                num_masks += len(t["labels"])
-            num_masks += 1 # BG
-
-        num_masks = torch.as_tensor(
-            [num_masks], dtype=torch.float, device=outputs['pred_masks'].device
-        )
+        # num of masks to be predicted = (num of instances in each frame + BG) * num of frames
+        num_masks = len(instance_ids) * len(targets)
+        num_masks = torch.as_tensor([num_masks], dtype=torch.float, device=outputs['pred_masks'].device)
         if dist_utils.is_distributed():
             torch.distributed.all_reduce(num_masks)
         num_masks = torch.clamp(num_masks / get_world_size(), min=1).item()

@@ -58,6 +58,8 @@ class KITTISTEPTrainingDataset(TrainingDataset):
 
         # create samples
         self.samples = self.create_training_samples(self.videos, num_samples)
+
+        self.sample_image_dims = [[1, 1] for _ in range(num_samples)]
         
         # # create samples
         # self.samples, self.sample_image_dims, self.sample_instance_counts = self.create_training_samples(
@@ -101,13 +103,15 @@ class KITTISTEPTrainingDataset(TrainingDataset):
             
             updated_segmentations = []
             accepted_track_ids = {}
+            ignore_masks = []
 
             # read semantic maps
             for fr_idx, sem_masks in enumerate(seq["semantic_segmentations"]):
                 updated_segmentations.append(dict())
-
+                ignore_masks.append([])
                 for class_id, sem_seg_rle in sem_masks.items():    
                     if class_id == '255':
+                        ignore_masks[-1] = sem_seg_rle
                         continue    # ignore 'void' class
                     
                     if self.mask_area(sem_seg_rle, img_dims) >= MIN_MASK_AREA:
@@ -115,6 +119,9 @@ class KITTISTEPTrainingDataset(TrainingDataset):
                         track_id = int(class_id) + 1
                         updated_segmentations[-1][track_id] = sem_seg_rle
                         accepted_track_ids[track_id] = int(class_id)
+                if len(ignore_masks[-1]) == 0:
+                    # no void mask found
+                    ignore_masks[-1] = mt.encode(np.asfortranarray(np.zeros(img_dims).astype(np.uint8)))["counts"].decode('utf-8')
 
             # NOTE: the semantic classes in KITTI_STEP have IDs from 0-18 (and void/255).
             # The instance segmentations have their independent IDs that overlap with the
@@ -165,6 +172,7 @@ class KITTISTEPTrainingDataset(TrainingDataset):
                         updated_segmentations[fr_idx].pop(class_id, None)
 
             seq['segmentations'] = updated_segmentations
+            seq["ignore_masks"] = ignore_masks
             seq["categories"] = accepted_track_ids
             
             seq.pop("semantic_segmentations")
@@ -384,7 +392,7 @@ class KITTISTEPInferenceDataset(InferenceDataset):
                 )
                 if (new_height, new_width) != metadata["orig_dims"]:
                     images = resize_images(images, new_height, new_width)
-                    # instance_masks = resize_masks(instance_masks, new_height, new_width, binary=True)
+                    instance_masks = resize_masks(instance_masks, new_height, new_width, binary=True)
                     semantic_maps = resize_masks(semantic_maps, new_height, new_width, binary=False)
             
             # arrange dimensions
@@ -395,7 +403,7 @@ class KITTISTEPInferenceDataset(InferenceDataset):
 
             metadata["instance_discovery"] = instance_discovery
             metadata["images"] = images
-            # metadata["padding_mask"] = np.zeros(metadata["orig_dims"]).astype('uint8')
+            metadata["padding_mask"] = np.zeros(metadata["orig_dims"]).astype('uint8')
             metadata["instance_masks"] = instance_masks
             metadata["semantic_maps"] = semantic_maps
             # metadata["bg_masks"] = (semantic_maps==0).astype(np.uint8)
@@ -405,5 +413,6 @@ class KITTISTEPInferenceDataset(InferenceDataset):
             metadata["num_overlapping_frames"] = self.num_overlapping_frames
 
             sequences.append(metadata)
+            break
 
         return sequences

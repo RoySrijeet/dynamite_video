@@ -66,68 +66,72 @@ def evaluate(model,
         for sequence in dataset:
 
             sequence_instance_ids = sequence["serial_to_orig_ids"].keys()
-
-            for inst_id in sequence_instance_ids:
-                ...
+            sub_sequence_list = []
+            manager_list = []
 
             # a fresh model for each sequence
             predictor = Predictor(model)
-            manager = SequenceManager(sequence)
+            
+            for inst_id in sequence_instance_ids:
+                
+                # instances per frame
+                inst_per_frame = []
+                for record in sequence["instances_per_frame"]:
+                    if inst_id in record:
+                        inst_per_frame.append([1])
+                    else:
+                        inst_per_frame.append([])
+                
+                sub_sequence = {
+                    "id": sequence["id"],
+                    "length": sequence["length"],
+                    "orig_dims": sequence["orig_dims"],
+                    "orig_to_serial_ids": {inst_id: 1},
+                    "serial_to_orig_ids": {1: inst_id},
+                    "instance_discovery": {1: sequence["instance_discovery"][inst_id]},
+                    "images": sequence["images"],
+                    "instance_masks": np.expand_dims(sequence["instance_masks"][:, inst_id-1, :, :], 1),
+                    "semantic_maps": sequence["instance_masks"][:, inst_id-1, :, :],
+                    "instances_per_frame": inst_per_frame,
+                    "padding_mask": sequence["padding_mask"],
+                    "clip_length": sequence["clip_length"],
+                    "num_overlapping_frames": sequence["num_overlapping_frames"],
+                }
+                sub_sequence_list.append([sub_sequence])
+                manager_list.append(SequenceManager(sub_sequence))
 
+            manager = SequenceManager(sequence)
             # ground truth semantic maps [T,H,W] of the sequence frames
             gt_semantic_maps = manager.gt_semantic_maps
             # click budget per frame
             max_iters_for_image = max_interactions * manager.num_instances
-
-            ####### Rounds #######
-            # 1. Obtain predicted masks across the whole sequence
-            # 2. Find the frame with the worst instance segmentation map
-            # 3. Get corrective clicks on that frame/instance
-            # Repeat
-            ######################
-
-            # round 1 starts from the first frame
+            
             round_num = 1
             lowest_frame_index = 0
             while True:
+        
+                pred_semantic_maps = np.zeros_like(sequence["semantic_maps"])
                 
-                # generate indices of shorter clips from whole sequence
-                clip_indices = manager.create_clip_indices(start=lowest_frame_index)
-                
-                # TODO: propagation cut-off
-    
-                # forward prediction
-                for indices in clip_indices:
-                    # extract a clip with first set of foreground clicks
-                    inputs = manager.extract_clip(indices)
-                    
-                    pred_masks = []
-                    # single instance evaluation for each instance in the sequence
-                    for inst_id in inputs["instance_ids"]:
-                        
-                        single_instance_input = {
-                            "seq_name": inputs["seq_name"],
-                            "images": inputs["images"],
-                            "frame_indices": inputs["frame_indices"],
-                            "instance_ids": [1],
-                        }
-                        # instances_per_frame
-                        instances_per_frame = []
-                        for fr_record in inputs["instances_per_frame"]:
-                            if inst_id in fr_record:
-                                instances_per_frame.append([1])
-                        single_instance_input["instances_per_frame"] = instances_per_frame
-                        # clicks
+                for inst_id, sub_manager in zip(sequence_instance_ids, manager_list):
+                    assert inst_id == list(sub_manager.orig_to_serial_ids.keys())[0]
 
+                    sub_clip_indices = sub_manager.create_clip_indices(start=lowest_frame_index)
+
+                    # forward prediction
+                    for sub_indices in sub_clip_indices:
+                        # extract a clip with first set of foreground clicks
+                        sub_inputs = sub_manager.extract_clip(sub_indices)
                         # obtain predicted instance-wise binary segmentation masks
-                        single_instance_pred_masks = predictor.get_prediction([single_instance_input])
+                        sub_pred_masks = predictor.get_prediction([sub_inputs])
+                        sub_manager.store_pred_masks(sub_pred_masks, sub_indices)
 
-                        pred_masks.append(single_instance_pred_masks)
-                    
-                    manager.store_pred_masks(pred_masks, indices)
+                    if save_vis:
+                        sub_manager.store_predicted_semantic_maps(sub_pred_masks)
+                        sub_manager.save_visualization(vis_path, round_num)
+                        
+                    pred_semantic_maps[np.where(sub_manager.pred_masks==1)] = inst_id
                 
-                # convert predicted binary masks to semantic maps
-                manager.store_predicted_semantic_maps()
+                manager.store_predicted_semantic_maps(pred_semantic_maps)
                 
                 if save_vis:
                     manager.save_visualization(vis_path, round_num)

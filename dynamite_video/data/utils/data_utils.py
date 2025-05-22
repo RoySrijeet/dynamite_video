@@ -52,7 +52,7 @@ def apply_color_augmentation(images: List[np.ndarray]):
         iaa.AddToBrightness(add=(-25, 25))
     ])
     det_augmenter = color_augmenter.to_deterministic()
-    return [det_augmenter(image=img) for img in images]
+    return np.stack([det_augmenter(image=img) for img in images])
 
 
 def resize_images(images, new_height: int, new_width: int):
@@ -136,6 +136,7 @@ def resize_masks(masks, new_height:int , new_width: int, binary: bool=False):
 def apply_random_flip(
         images: np.ndarray, 
         instance_masks: np.ndarray,
+        ignore_masks: np.ndarray|None,
         axis: str="horizontal",
         prob: float=0.5,
 ):
@@ -145,12 +146,9 @@ def apply_random_flip(
     Args:
         images: [T, H, W, 3]
         instance_masks: [T, N, H, W]
+        ignore_masks: [T, H, W]
         flip_axis: currently only "horizontal" flips are supported
         prob: apply flip with this probability
-
-    Returns:
-        images: flipped images
-        instance_masks: flipped instance masks
     """
     assert images.ndim == 4 and instance_masks.ndim == 4
     assert axis == "horizontal", f"Only 'horizontal' flips are allowed, {axis} is not allowed!"
@@ -159,13 +157,16 @@ def apply_random_flip(
         # flip along width
         images = np.flip(images, 2).copy()
         instance_masks = np.flip(instance_masks, 3).copy()
+        if ignore_masks is not None:
+            ignore_masks = np.flip(ignore_masks, 2).copy()
 
-    return images, instance_masks
+    return images, instance_masks, ignore_masks
 
 
 def apply_resize_scale(
         images: np.ndarray, 
         instance_masks: np.ndarray, 
+        ignore_masks: np.ndarray|None,
         min_scale: float,
         max_scale: float,
         target_dims: Tuple[int],
@@ -181,6 +182,7 @@ def apply_resize_scale(
     Args:
         images: [T, H, W, 3]
         instance_masks: [T, N, H, W]
+        ignore_masks: [T, H, W]
         min_scale, max_scale: floats, range to pick a random scale to be applied
         target_dims: Tuple[int, int], target resolution
     """
@@ -196,8 +198,10 @@ def apply_resize_scale(
     # resize
     images = resize_images(images, output_size[0], output_size[1])
     instance_masks = resize_masks(instance_masks, output_size[0], output_size[1], binary=True)
+    if ignore_masks is not None:
+        ignore_masks = resize_masks(ignore_masks, output_size[0], output_size[1], binary=False)
 
-    return images, instance_masks
+    return images, instance_masks, ignore_masks
 
 
 def mask_to_bbox(masks: Tensor, raise_error_if_null_mask: Optional[bool] = True) -> torch.Tensor:
@@ -246,6 +250,7 @@ def mask_to_bbox(masks: Tensor, raise_error_if_null_mask: Optional[bool] = True)
 def apply_random_crop(
         images: np.ndarray,
         instance_masks: np.ndarray,
+        ignore_masks: np.ndarray|None,
         crop_size: Tuple[int]
 ):
     """
@@ -264,6 +269,7 @@ def apply_random_crop(
     Args:
         images: [T, H, W, 3]
         instance_masks: [T, N, H, W]
+        ignore_masks: [T, H, W]
         crop_size: randomly crop area of this dimension
     """
 
@@ -313,6 +319,9 @@ def apply_random_crop(
         mask_pad = ((0,0), (0,0), (0, y_pad), (0, x_pad))
         images = np.pad(images, im_pad, mode='constant', constant_values=128.0)
         instance_masks = np.pad(instance_masks, mask_pad, mode='constant', constant_values=0)
+        if ignore_masks is not None:
+            mask_pad = ((0,0), (0, y_pad), (0, x_pad))
+            ignore_masks = np.pad(ignore_masks, mask_pad, mode='constant', constant_values=0)
         padding_mask = np.pad(padding_mask, ((0, y_pad), (0, x_pad)), mode='constant', constant_values=1)
 
     else:
@@ -323,16 +332,19 @@ def apply_random_crop(
     # crop
     images = images[:, crop_y1:crop_y2, crop_x1:crop_x2, :]
     instance_masks = instance_masks[:, :, crop_y1:crop_y2, crop_x1:crop_x2]
+    if ignore_masks is not None:
+        ignore_masks = ignore_masks[:, crop_y1:crop_y2, crop_x1:crop_x2]
     padding_mask = padding_mask[crop_y1:crop_y2, crop_x1:crop_x2]
-
 
     if expanded_crop:
         # resize the cropped tensors to orig crop size
         images = resize_images(images, crop_size[0], crop_size[1])
         instance_masks = resize_masks(instance_masks, crop_size[0], crop_size[1], binary=True)
+        if ignore_masks is not None:
+            ignore_masks = resize_masks(ignore_masks, crop_size[0], crop_size[1], binary=False)
         padding_mask = resize_masks(np.expand_dims(padding_mask, 0), crop_size[0], crop_size[1])[0]
     
-    return images, instance_masks, padding_mask
+    return images, instance_masks, ignore_masks, padding_mask
     
 
     
