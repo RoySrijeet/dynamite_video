@@ -130,6 +130,10 @@ def get_foreground_clicks(
         _eroded_m = cv2.erode(_mask, kernel, iterations=1)
         sample_locations = np.argwhere(_eroded_m)
 
+        if sample_locations.shape[0] == 0:
+            # the instance is super small, just sample from the original mask
+            sample_locations = np.argwhere(_mask)
+
         # how many points to sample is determined by the probabilities
         pos_click_probs = _generate_probs(max_num_points, gamma=gamma)
         num_points = np.random.choice(np.arange(1,max_num_points+1), p=pos_click_probs)
