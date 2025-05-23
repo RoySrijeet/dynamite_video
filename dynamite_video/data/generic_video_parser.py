@@ -87,6 +87,7 @@ class GenericVideoSequence(object):
             inst_ids = sorted(seq_dict["categories"].keys())
             self.orig_to_serial_id = OrderedDict(zip(inst_ids, inst_ids))
             self.serial_to_orig_id = OrderedDict(zip(inst_ids, inst_ids))
+            self.max_class_id = seq_dict["max_class_id"]
 
         # serialize non-sequential instance IDs
         else:
@@ -105,6 +106,8 @@ class GenericVideoSequence(object):
                 # update IDs in category map
                 self.instance_categories = {self.orig_to_serial_id.get(inst_id): value for inst_id, value in seq_dict["categories"].items()}
 
+            self.max_class_id = self.orig_to_serial_id[seq_dict["max_class_id"]]
+        
         self.ignore_masks = seq_dict.get("ignore_masks", None)
         self.instance_areas = None
         self.fpack_reader = None
@@ -337,7 +340,7 @@ class GenericVideoSequence(object):
             "id": new_id if new_id else self.id,
             "height": self.image_dims[0],
             "width": self.image_dims[1],
-            "image_paths": [self.image_paths[t] for t in frame_idxes]
+            "image_paths": [self.image_paths[t] for t in frame_idxes],
         }
         
         if instance_ids_to_keep is None:
@@ -370,6 +373,9 @@ class GenericVideoSequence(object):
             #             subseq_semantic_segmentation[_t] = semantic_seg_t
             #             _t += 1
             #     subseq_dict["semantic_segmentations"] = subseq_semantic_segmentation
+        
+        sub_seq_instance_ids = sorted(subseq_dict["categories"].keys())
+        subseq_dict["max_class_id"] =  max([x for x in sub_seq_instance_ids if x <= self.max_class_id])
         
         if self.ignore_masks is not None:
             subseq_dict["ignore_masks"] =  [self.ignore_masks[t] for t in frame_idxes]

@@ -41,7 +41,6 @@ def get_center_coords(mask, k=1.7):
 
     if torch.is_tensor(mask):
         mask = mask.numpy()
-    
     mask = mask.astype(np.uint8)
 
     # find distance transform - distance of each object pixel from nearest object boundary
@@ -58,29 +57,36 @@ def get_center_coords(mask, k=1.7):
 
 def get_foreground_clicks(
         frame_idx,
-        instance_ids,
+        object_ids,
+        max_class_id,
         binary_masks,
-        key_instances,
-        pos_click_probs,
-        kernel,
-        optional_frames_fg_prob=0.7,
-        first_click_center=True,
+        key_objects,
+        optional_frames_fg_prob=0.5,
+        max_num_points=6,
+        gamma=0.7,
         t=1,
 ):
     """
-    Sample foreground clicks from the binary instance masks of a frame
+    Sample foreground clicks from a frame.
+
+    Key objects specify the object IDs for which clicks must be sampled from this frame.
+    If an object has ID > max_class_id, it is an instance and one click is sampled at 
+    its center. If object ID <= max_class_id, the object is a semantic class, and clicks
+    are sampled randomly from the foreground area.
+
+    For objects that appear in the frame, but are not key objects - clicks are sampled
+    with a probability specified by `optional_frames_fg_prob`. All clicks sampled in this
+    way are chosen randomly from foreground area.
 
     Args:
         frame_idx: frame index
-        instance_ids: IDs of the instance present in the clip, in the same order
-            as they appear in the binary instance masks
+        object_ids: IDs of the instance present in the clip
+        max_class_id: maximum ID of stuff classes
         binary_masks: [N, H, W] binary masks of the instances in this frame
-        key_instances: sample at least one click on each of the key instances
-        pos_click_probs: list of probabilities for sampling a certain num of clicks
-        kernel: erosion kernel for `cv2.erode()`
-        optional_frames_fg_prob: if there's no key instances in a frame, optionally
-            sample fg clicks from this frame with this specified probability
-        first_click_center: whether to sample first click at object center
+        key_objects: sample at least one click on each of the key instances
+        optional_frames_fg_prob: optional sampling probability of non-key objects
+        max_num_points: maximum number of points to sample from each object in any frame
+        gamma: probability scaling factor of sampling n no. of clicks
         t: starting time stamp
 
     Returns:
@@ -92,46 +98,43 @@ def get_foreground_clicks(
 
     fg_coords_list = []
     # instance_ids are serial and 1-indexed
-    num_clicks_per_object_fr = np.zeros(len(instance_ids)).astype('int')
+    num_clicks_per_object_fr = np.zeros(len(object_ids)).astype('int')
     
     count = 0
     
-    for inst_id, _mask in zip(instance_ids, binary_masks):
-        # for each instance present in the frame
-
+    for inst_id, _mask in zip(object_ids, binary_masks):
         coords = []
+        
         if not _mask.any():
-            # if the mask is empty, no fg click
+            # if the mask is empty, no fg click can be sampled
             fg_coords_list.append(coords)
             continue
 
-        if inst_id not in key_instances:
-            # if instance does not need to be sampled from this frame OR
-            # if the frame is an optional frame (no key instances), then
+        if inst_id not in key_objects:
             # sample only with some probability
             if np.random.rand() > optional_frames_fg_prob:
                 fg_coords_list.append(coords)
                 continue
         
-        if inst_id in key_instances and first_click_center:
-            # fetch center coordinates
+        if inst_id > max_class_id and inst_id in key_objects:
+            # object is a key instance, fetch center coordinates
             center_coords = get_center_coords(_mask)
-            # record click
             coords.append([center_coords[0], center_coords[1], inst_id, frame_idx, t])
             num_clicks_per_object_fr[inst_id-1] += 1
             count+=1
             t+=1
+            
         
-        # sample more foreground clicks
         # erode mask area to avoid sampling clicks too close to object boundary
+        kernel = np.ones((3,3),np.uint8)
         _eroded_m = cv2.erode(_mask, kernel, iterations=1)
         sample_locations = np.argwhere(_eroded_m)
 
         # how many points to sample is determined by the probabilities
-        num_points = np.random.choice(np.arange(len(pos_click_probs)), p=pos_click_probs)
+        pos_click_probs = _generate_probs(max_num_points, gamma=gamma)
+        num_points = np.random.choice(np.arange(1,max_num_points+1), p=pos_click_probs)
         
-        # in case there's not as many positive mask 
-        # locations as the number of clicks to be sampled
+        # in case there's not as many positive mask locations as the number of clicks to be sampled
         num_points = min(num_points,sample_locations.shape[0]//2)
 
         # randomly sample clicks
@@ -147,13 +150,11 @@ def get_foreground_clicks(
         fg_coords_list.append(coords)
     return num_clicks_per_object_fr, fg_coords_list, t, count
 
-
-
 def get_background_clicks(
         frame_idx,
         bg_mask,
-        neg_click_probs,
-        kernel,
+        max_num_points=2,
+        gamma=0.7,
         t=1,
 ):
     """
@@ -162,18 +163,20 @@ def get_background_clicks(
     Args:
         frame_idx: frame index
         bg_mask: binary background mask of shape [H, W]
-        neg_click_probs: list of probabilities for sampling a certain num of clicks
-        kernel: erosion kernel for `cv2.erode()`
+        max_num_points: maximum number of points to sample from each object in any frame
+        gamma: probability scaling factor of sampling n no. of clicks
         t: starting time stamp
     
     Returns:
         A list of background clicks sampled from the frame
     """
     # erode to avoid sampling clicks too close to the boundary
+    kernel = np.ones((7,7),np.uint8)
     _eroded_bg_mask = cv2.erode(bg_mask, kernel, iterations=3)
     sample_locations = np.argwhere(_eroded_bg_mask)
 
-    num_points = np.random.choice(np.arange(len(neg_click_probs)), p=neg_click_probs)
+    neg_click_probs = _generate_probs(max_num_points, gamma=gamma)
+    num_points = np.random.choice(np.arange(max_num_points), p=neg_click_probs)
     num_points = min(num_points,sample_locations.shape[0]//2)
     indices = random.sample(range(sample_locations.shape[0]), num_points)
 
@@ -188,87 +191,75 @@ def get_background_clicks(
 
 
 def get_clicks_coords(
-        instance_ids,       
-        instance_masks,     # [N, T, H, W]
+        object_ids,
+        object_masks,     # [N, T, H, W]
         bg_masks,           # [T, H, W]
-        frame_instance_occupancy,
+        frame_object_occupancy,
+        max_class_id,
         max_num_points=6, 
-        first_click_center=True, 
-        optional_frames_fg_prob=0.7,
+        optional_frames_fg_prob=0.5,
         bg_prob=0.2,
         gamma=0.7,
         start_t=1,
 ):
     """
-    Add clicks randomly on the frames of a video clip. Each click is stored in the 
-    following format: [y,x,i,f,t] where:
+    Sample clicks from the frames of a video clip. Each click is stored in the following format: 
+    [y,x,i,f,t], where:
         y,x: spatial coordinates
-        i: instance ID at the location in g.t. mask
+        i: object ID at the location in g.t. mask
         f: frame index
         t: timestamp
 
     Args:
-        instance_ids: list of IDs of the instances present in the clip
-        instance_masks: binary instance masks of all the frames in the video,
-            used to sample foreground clicks from. [T, N, H, W] np.ndarray
-        bg_masks: semantic masks of all the frames in the video, used to sample
-            background clicks from. [T, H, W] np.ndarray
-        frame_instance_occupancy: list of mappings. For each instance, lists which frames
-            they appear in
-        max_num_points: maximum number of points to sample from a *frame*
-        first_click_center: whether to sample first click at object center, (default: True)
+        object_ids: list of IDs of the objects present in the clip
+        object_masks: [T, N, H, W] np.ndarray
+        bg_masks: [T, H, W] np.ndarray
+        frame_object_occupancy: mapping {object_id: [frames it appears in]}
+        max_class_id: maximum ID of stuff classes
+        max_num_points: maximum number of points to sample from each object in any frame
         optional_frames_fg_prob: probability of sampling fg clicks on more frames
         bg_prob: probability of sampling bg clicks on any given frame
         gamma: probability scaling factor of sampling n no. of clicks
         start_t: starting time stamp for each clip, (default: 1)
     """ 
+    assert object_ids == sorted(frame_object_occupancy.keys())  # sanity check
     # no. of frames in the clip
     num_frames = bg_masks.shape[0]
     
-    # how many clicks each instance receives in each frame
-    # num_clicks_per_object = [[0] * len(instance_ids) for _ in range(num_frames)]
-    num_clicks_per_object = np.zeros((num_frames, len(instance_ids))).astype('int')
-    # timestamp of the final click on each frame
+    # how many clicks each object receives in each frame
+    num_clicks_per_object = np.zeros((num_frames, len(object_ids))).astype('int')
+    # timestamp of the latest click on each frame
     max_timestamp_clip = [0] * num_frames
 
-    # for each instance, randomly a select a frame (where it appears)
-    # we add clicks in the selected frame on this specific instance. 
-    # This ensures that each instance receives a click
-    sample_instances_from = defaultdict(list)
-    for inst_id, frame_idxs in frame_instance_occupancy.items():
-        choice = random.choice(frame_idxs)
+    # for each object, randomly a select a frame (wherein it appears) and sample clicks in the 
+    # selected frame for this specific object. This ensures that each object receives a click
+    sample_object_from = defaultdict(list)
+    for obj_id, fr_idxs in frame_object_occupancy.items():
+        choice = random.choice(fr_idxs)
         # add a click on instance `inst_id` in frame `choice`
-        sample_instances_from[choice].append(inst_id)
-
-    sampling_probs = _generate_probs(max_num_points, gamma=gamma)
-    erosion_kernel = np.ones((3,3),np.uint8)
+        sample_object_from[choice].append(obj_id)
     
     # all clicks in a clip share a single timeline
     t = start_t
+    
     fg_coords_list = []
-    # Sample clicks from a given frame
     for fr_idx in range(num_frames):
 
-        key_instances = []
-        if fr_idx in sample_instances_from.keys():
-            # there must be clicks sampled on these instances in this frame
-            key_instances = sample_instances_from[fr_idx]
-            center_click = first_click_center
-        else:
-            # optional frames get fg clicks sampled with some probability
-            center_click = False
+        key_objects = []
+        if fr_idx in sample_object_from.keys():
+            # there must be clicks sampled on these objects in this frame
+            key_objects = sample_object_from[fr_idx]
 
-        num_clicks_per_object_fr, fg_coords_list_fr, t, count = get_foreground_clicks(
-                                                            fr_idx,                     # sample clicks from this frame
-                                                            instance_ids,               # IDs of the instances present in the clip
-                                                            instance_masks[fr_idx],     # binary instance masks of the frame
-                                                            key_instances,              # mandatorily add clicks on these instances
-                                                            sampling_probs,             # sampling probability for diff click counts
-                                                            erosion_kernel,             # erosion kernel for `cv2.erode()`
-                                                            optional_frames_fg_prob,    # if there's no key instances, optionally sample from this frame
-                                                            center_click,               # whether to add the 1st click at object center or not
-                                                            t,                          # current timestamp
-                                                        )
+        num_clicks_per_object_fr, fg_coords_list_fr, t, count = get_foreground_clicks(fr_idx,
+                                                                                    object_ids,
+                                                                                    max_class_id,
+                                                                                    object_masks[fr_idx],
+                                                                                    key_objects,
+                                                                                    optional_frames_fg_prob,
+                                                                                    max_num_points,
+                                                                                    gamma,
+                                                                                    t,
+                                                                                )
         # update click records
         num_clicks_per_object[fr_idx] += num_clicks_per_object_fr
         fg_coords_list.append(fg_coords_list_fr)
@@ -276,21 +267,19 @@ def get_clicks_coords(
             max_timestamp_clip[fr_idx]=t-1
 
     # BG clicks
-    erosion_kernel = np.ones((7,7),np.uint8)  # larger erosion to increase gap from fg
     bg_coords_list = []
     for fr_idx in range(num_frames):
 
         # with some probability, sample -ve clicks from this frame
         if np.random.rand() > bg_prob:
-            bg_prob += bg_prob * gamma
             bg_coords_list.append([])
             continue
 
         bg_coords_list_fr, t = get_background_clicks(
                                             fr_idx,
                                             bg_masks[fr_idx],
-                                            sampling_probs,
-                                            erosion_kernel,
+                                            max_num_points,
+                                            gamma,
                                             t
                                         )
         bg_coords_list.append(bg_coords_list_fr)

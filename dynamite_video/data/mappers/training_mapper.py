@@ -58,7 +58,8 @@ class TrainingMapper:
             "seq_name": video.id,
             "frame_indices": frame_indices,
             "orig_to_serial_id": clip.orig_to_serial_id, 
-            "serial_to_orig_id": clip.serial_to_orig_id,
+            "serial_to_orig_id": clip.serial_to_orig_id, 
+            "max_class_id": clip.max_class_id,
         }
         
         # data augmentations
@@ -107,12 +108,12 @@ class TrainingMapper:
         
         # sample clicks
         num_clicks_per_object, fg_coords_list, bg_coords_list, max_timestamp_list = get_clicks_coords(
-                                                                                    instance_ids=instance_ids,
-                                                                                    instance_masks=instance_masks, 
+                                                                                    object_ids=instance_ids,
+                                                                                    object_masks=instance_masks, 
                                                                                     bg_masks=bg_masks,
-                                                                                    frame_instance_occupancy=frame_instance_occupancy,
+                                                                                    frame_object_occupancy=frame_instance_occupancy,
+                                                                                    max_class_id = clip.max_class_id,
                                                                                     max_num_points=self.cfg.CLICKER.TRAINING.MAX_NUM_CLICKS_PER_INSTANCE,
-                                                                                    first_click_center=self.cfg.CLICKER.TRAINING.FIRST_CLICK_CENTER,
                                                                                     optional_frames_fg_prob=self.cfg.CLICKER.TRAINING.OPTIONAL_FRAMES_FG_SAMPLE_PROB,
                                                                                     bg_prob=self.cfg.CLICKER.TRAINING.BACKGROUND_SAMPLING_PROB,
                                                                                     gamma=self.cfg.CLICKER.TRAINING.GAMMA,

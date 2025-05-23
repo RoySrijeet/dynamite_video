@@ -119,10 +119,10 @@ class KITTISTEPTrainingDataset(TrainingDataset):
             # NOTE: the semantic classes in KITTI_STEP have IDs from 0-18 (and void/255).
             # The instance segmentations have their independent IDs that overlap with the
             # class IDs. To resolve this issue, the instances are assigned a new id as 
-            # follows: new_id = max_track_id + 1 + real_id where max_track_id is the ID
+            # follows: new_id = max_class_id + 1 + real_id where max_class_id is the ID
             # of the highest class ID
             
-            max_track_id = max(accepted_track_ids.keys())
+            max_class_id = max(accepted_track_ids.keys())
 
             # read instance masks
             for fr_idx, inst_masks in enumerate(seq["segmentations"]):
@@ -130,7 +130,7 @@ class KITTISTEPTrainingDataset(TrainingDataset):
 
                     if self.mask_area(inst_rle, img_dims) >= MIN_MASK_AREA:
                         # new track ID
-                        new_track_id = max_track_id + 1 + int(track_id)
+                        new_track_id = max_class_id + 1 + int(track_id)
                         updated_segmentations[fr_idx][new_track_id] = inst_rle
                         accepted_track_ids[new_track_id] = seq['categories'][track_id]
                     
@@ -149,6 +149,7 @@ class KITTISTEPTrainingDataset(TrainingDataset):
             seq['segmentations'] = updated_segmentations
             seq["ignore_masks"] = [mt.encode(np.asfortranarray(ig_msk))["counts"].decode('utf-8') for ig_msk in ignore_masks]
             seq["categories"] = accepted_track_ids
+            seq["max_class_id"] = max_class_id
             
             seq.pop("semantic_segmentations")
             sequences.append(seq)
