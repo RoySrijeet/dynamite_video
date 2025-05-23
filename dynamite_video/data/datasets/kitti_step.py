@@ -60,16 +60,6 @@ class KITTISTEPTrainingDataset(TrainingDataset):
         self.samples = self.create_training_samples(self.videos, num_samples)
 
         self.sample_image_dims = [[1, 1] for _ in range(num_samples)]
-        
-        # # create samples
-        # self.samples, self.sample_image_dims, self.sample_instance_counts = self.create_training_samples(
-        #     self.videos, num_samples, max_num_instances
-        # )
-
-        # # store fallback candidates
-        # self.fallback_candidates = defaultdict(set)
-        # for i, num_instances in enumerate(self.sample_instance_counts):
-        #     self.fallback_candidates[num_instances].add(i)
 
     
     def map_annotations(
@@ -110,18 +100,21 @@ class KITTISTEPTrainingDataset(TrainingDataset):
                 updated_segmentations.append(dict())
                 ignore_masks.append([])
                 for class_id, sem_seg_rle in sem_masks.items():    
+                    
+                    # ignore 'void' class
                     if class_id == '255':
-                        ignore_masks[-1] = sem_seg_rle
-                        continue    # ignore 'void' class
+                        ignore_masks[-1] = self.decode_mask(sem_seg_rle, img_dims)
+                        continue
                     
                     if self.mask_area(sem_seg_rle, img_dims) >= MIN_MASK_AREA:
                         # lowest class_id could be 0
                         track_id = int(class_id) + 1
                         updated_segmentations[-1][track_id] = sem_seg_rle
                         accepted_track_ids[track_id] = int(class_id)
+                
                 if len(ignore_masks[-1]) == 0:
-                    # no void mask found
-                    ignore_masks[-1] = mt.encode(np.asfortranarray(np.zeros(img_dims).astype(np.uint8)))["counts"].decode('utf-8')
+                    # if no void mask found, add an empty one   (e.g., in sequence '0009')
+                    ignore_masks[-1] = np.zeros(img_dims).astype(np.uint8)
 
             # NOTE: the semantic classes in KITTI_STEP have IDs from 0-18 (and void/255).
             # The instance segmentations have their independent IDs that overlap with the
@@ -131,48 +124,30 @@ class KITTISTEPTrainingDataset(TrainingDataset):
             
             max_track_id = max(accepted_track_ids.keys())
 
-            # store the IDs of the salient classes which have some of their instances 
-            # segmented. This is used later to create a hole in the semantic map where 
-            # instance-level masks are available
-            salient_classes = []
-            
             # read instance masks
             for fr_idx, inst_masks in enumerate(seq["segmentations"]):
-                salient_classes.append(defaultdict(list))
-
                 for track_id, inst_rle in inst_masks.items():
 
                     if self.mask_area(inst_rle, img_dims) >= MIN_MASK_AREA:
                         # new track ID
                         new_track_id = max_track_id + 1 + int(track_id)
-
                         updated_segmentations[fr_idx][new_track_id] = inst_rle
                         accepted_track_ids[new_track_id] = seq['categories'][track_id]
-                        salient_classes[-1][int(seq['categories'][track_id]) + 1].append(self.decode_mask(inst_rle, img_dims))
-            
-            # cut out holes from the semantic map of the salient classes where instance masks are available
-            for fr_idx, fr_rles in enumerate(updated_segmentations):
-                # instances of the salient ('thing') classes are potentially overlapping
-                overlapping_masks = salient_classes[fr_idx]
-                if len(overlapping_masks) == 0:
-                    continue
-                
-                for class_id in overlapping_masks.keys():
-                    # for each of the salient ('thing') classes, obtain its semantic map (np.ndarray in uint8)
-                    sem_mask = self.decode_mask(fr_rles[class_id], img_dims)
-                    # given the mask of each instance of this class, remove 
-                    # corresponding area from the semantic map
-                    for inst_mask in overlapping_masks[class_id]:
-                        sem_mask[np.where(inst_mask==1)] = 0
-                
-                    if sem_mask.sum() >= MIN_MASK_AREA:
-                        updated_sem_mask = mt.encode(np.asfortranarray(sem_mask))["counts"].decode('utf-8')
-                        updated_segmentations[fr_idx][class_id] = updated_sem_mask
-                    else:
-                        updated_segmentations[fr_idx].pop(class_id, None)
+                    
+                        class_id = int(seq['categories'][track_id]) + 1
+                        # cut out holes from the semantic map of the salient classes where instance masks are available
+                        sem_mask = self.decode_mask(updated_segmentations[fr_idx][class_id], img_dims)
+                        inst_mask = self.decode_mask(inst_rle, img_dims)
+                        sem_mask[np.where(inst_mask==1)] = 0    
+                        if sem_mask.sum() >= MIN_MASK_AREA:
+                            updated_segmentations[fr_idx][class_id] = mt.encode(np.asfortranarray(sem_mask))["counts"].decode('utf-8')
+                        else:
+                            updated_segmentations[fr_idx].pop(class_id, None)
+                            ignore_masks[fr_idx][np.where(sem_mask==1)] = 1
+
 
             seq['segmentations'] = updated_segmentations
-            seq["ignore_masks"] = ignore_masks
+            seq["ignore_masks"] = [mt.encode(np.asfortranarray(ig_msk))["counts"].decode('utf-8') for ig_msk in ignore_masks]
             seq["categories"] = accepted_track_ids
             
             seq.pop("semantic_segmentations")
