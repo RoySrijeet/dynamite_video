@@ -130,8 +130,10 @@ def get_foreground_clicks(
         _eroded_m = cv2.erode(_mask, kernel, iterations=1)
         sample_locations = np.argwhere(_eroded_m)
 
-        if sample_locations.shape[0] == 0:
+        if sample_locations.shape[0] <= 64:
             # the instance is super small, just sample from the original mask
+            # NOTE: In DynaMITe, instances with area smaller than 400 are filtered out.
+            # Applying a 3x3 erosion on a mask area of 400 erodes it down to 64.
             sample_locations = np.argwhere(_mask)
 
         # how many points to sample is determined by the probabilities

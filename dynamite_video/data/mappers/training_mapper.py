@@ -120,6 +120,12 @@ class TrainingMapper:
                                                                                     start_t=1,
                                                                                 )
         if not all(np.sum(num_clicks_per_object, axis=0)):
+            import os
+            error_assets = os.path.join(self.cfg.OUTPUT_DIR, "error_assets")
+            os.makedirs(error_assets, exist_ok=True)
+            torch.save(instance_masks, os.path.join(error_assets, "no_click_sampled_inst_mask.pth"))
+            torch.save(frame_instance_occupancy, os.path.join(error_assets, "no_click_sampled_frame_instance_occupancy.pth"))
+            torch.save(num_clicks_per_object, os.path.join(error_assets, "no_click_sampled_num_clicks_per_object.pth"))
             raise "One or more instances did not receive a click!"
 
         return {
