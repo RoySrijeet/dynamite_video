@@ -60,6 +60,7 @@ class TrainingMapper:
             "orig_to_serial_id": clip.orig_to_serial_id, 
             "serial_to_orig_id": clip.serial_to_orig_id, 
             "max_class_id": clip.max_class_id,
+            "instance_categories": clip.instance_categories
         }
         
         # data augmentations

@@ -44,6 +44,10 @@ class AvgClicksPoolingInitializer(nn.Module):
         self.hidden_dim = hidden_dim
         
         self.register_parameter("no_click_query", nn.Parameter(torch.zeros(hidden_dim), requires_grad=True))
+        
+        # with semantic queries
+        # self.num_semantic_classes = 19
+        # self.register_parameter("no_click_query", nn.Parameter(torch.zeros(self.num_semantic_classes, hidden_dim), requires_grad=True))
 
     
     # QUERY NOT STACKING - GROUP FRAME WISE (TxQxD)
@@ -51,6 +55,7 @@ class AvgClicksPoolingInitializer(nn.Module):
             self,
             features: Tensor,
             instances_per_frame: List,
+            instance_categories: Dict,
             batched_fg_coords_list: List, 
             batched_bg_coords_list: List,
             img_dims: Tuple,
@@ -100,42 +105,51 @@ class AvgClicksPoolingInitializer(nn.Module):
             # stack queries for each instance in the frame
             for inst_id, inst_fg_coords in enumerate(fr_fg_coords):
 
-                if inst_id+1 not in instances_per_frame[fr_idx]:
-                    continue
+                # if inst_id+1 not in instances_per_frame[fr_idx]:
+                #     continue
 
-                # if there are no clicks on a certain instance, insert empty query
-                if len(inst_fg_coords) == 0:
-                    fr_fg_queries.append(repeat(self.no_click_query, "C -> 1 1 C"))
-                    fr_fg_normalized_clicks.append(torch.tensor([-1.0, -1.0, -1.0]))
-                    num_queries_per_object[fr_idx][inst_id] += 1
-                    continue
+                # # if there are no clicks on a certain instance, insert empty query
+                # if len(inst_fg_coords) == 0:
+                #     fr_fg_queries.append(repeat(self.no_click_query, "C -> 1 1 C"))
+                #     fr_fg_normalized_clicks.append(torch.tensor([-1.0, -1.0, -1.0]))
+                #     num_queries_per_object[fr_idx][inst_id] += 1
+                #     continue
 
-                for coords in inst_fg_coords:
-                    fr_fg_normalized_clicks.append(torch.tensor([coords[0]/norm_h, coords[1]/norm_w, coords[-1]/norm_t]))
-                    num_queries_per_object[fr_idx][inst_id] += 1
-
-                clicks = torch.tensor(inst_fg_coords, dtype=torch.float, device=device)
-                # extract and scale spatial coordinates
-                clicks = clicks[:,:2]
-                clicks[:,0]/=H
-                clicks[:,1]/=W
-                # invert (y,x) -> (x,y)
-                clicks = clicks.flip(-1)
+                # with semantic queries
+                # fr_fg_queries.append(repeat(self.no_click_query[instance_categories[inst_id+1]], "C -> 1 1 C"))
                 
-                inst_queries = []
-                # extract click features in each scale of multi-res features
-                for i in range(feature_levels):
-                    # feature maps at i-th feature scale
-                    fmap_scale = features[i]
-                    # map of particular frame at i-th feature scale
-                    fmap_scale_fr = fmap_scale[fr_idx].unsqueeze(0)
+                # always add a learnable query
+                fr_fg_queries.append(repeat(self.no_click_query, "C -> 1 1 C"))
+                fr_fg_normalized_clicks.append(torch.tensor([-1.0, -1.0, -1.0]))
+                num_queries_per_object[fr_idx][inst_id] += 1
 
-                    nbd_features = self.get_features_descriptors(fmap_scale_fr, clicks.unsqueeze(0))
-                    inst_queries.append(nbd_features)
+                if len(inst_fg_coords) > 0:
+                    for coords in inst_fg_coords:
+                        fr_fg_normalized_clicks.append(torch.tensor([coords[0]/norm_h, coords[1]/norm_w, coords[-1]/norm_t]))
+                        num_queries_per_object[fr_idx][inst_id] += 1
 
-                # take the average of the features from multiple scales as the query for the clicks on this instance
-                avg_inst_query = torch.mean(torch.stack(inst_queries, -1), dim = -1)
-                fr_fg_queries.append(avg_inst_query)
+                    clicks = torch.tensor(inst_fg_coords, dtype=torch.float, device=device)
+                    # extract and scale spatial coordinates
+                    clicks = clicks[:,:2]
+                    clicks[:,0]/=H
+                    clicks[:,1]/=W
+                    # invert (y,x) -> (x,y)
+                    clicks = clicks.flip(-1)
+                    
+                    inst_queries = []
+                    # extract click features in each scale of multi-res features
+                    for i in range(feature_levels):
+                        # feature maps at i-th feature scale
+                        fmap_scale = features[i]
+                        # map of particular frame at i-th feature scale
+                        fmap_scale_fr = fmap_scale[fr_idx].unsqueeze(0)
+
+                        nbd_features = self.get_features_descriptors(fmap_scale_fr, clicks.unsqueeze(0))
+                        inst_queries.append(nbd_features)
+
+                    # take the average of the features from multiple scales as the query for the clicks on this instance
+                    avg_inst_query = torch.mean(torch.stack(inst_queries, -1), dim = -1)
+                    fr_fg_queries.append(avg_inst_query)
             
             descriptors.append(fr_fg_queries)
             normalized_clicks.append(fr_fg_normalized_clicks)

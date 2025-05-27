@@ -155,7 +155,7 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         # Iterative Pipeline
         ret["max_num_interactions"] = cfg.ITERATIVE.TRAIN.MAX_NUM_INTERACTIONS
-        ret["use_qqca"] = False #True # TODO: add to config
+        ret["use_qqca"] = True # TODO: add to config
         ret["positional_embeddings"] = cfg.ITERATIVE.TRAIN.POSITIONAL_EMBED
 
         ret["use_static_bg_queries"] = cfg.ITERATIVE.TRAIN.USE_STATIC_BG_QUERIES
@@ -239,7 +239,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             for i in range(num_iters):
 
                 # Given a set of clicks, generate click qureies and pass them throught the Transformer architecture
-                prev_output, num_queries_per_object = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list,
+                prev_output, num_queries_per_object = self.iterative_batch_forward(data, multi_scale_features, memory, memory_pe, size_list,
                                                             mask_features, instances_per_frame, fg_coords, bg_coords, max_timestamp)
                 
                 # Given the Transformer output and current query distribution over instances, extract prediction masks
@@ -258,7 +258,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                                             visualize_dir=self.visualize_dir,
                                                                                             train_iter=f"{train_iter}_iter_{i}_correction")
                 
-            outputs, num_queries_per_object = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
+            outputs, num_queries_per_object = self.iterative_batch_forward(data, multi_scale_features, memory, memory_pe, size_list, 
                                                    mask_features, instances_per_frame, fg_coords, bg_coords, max_timestamp)
             
             if visualize:
@@ -271,7 +271,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         
         else:
             # evaluation
-            outputs, num_queries_per_object = self.iterative_batch_forward(multi_scale_features, memory, memory_pe, size_list, 
+            outputs, num_queries_per_object = self.iterative_batch_forward(data, multi_scale_features, memory, memory_pe, size_list, 
                                                    mask_features, instances_per_frame, fg_coords, bg_coords, max_timestamp)
         
             return outputs, num_clicks_per_object, num_queries_per_object
@@ -316,6 +316,7 @@ class DynamiteInteractiveTransformer(nn.Module):
     
     def iterative_batch_forward(
             self, 
+            data,
             multi_scale_features, 
             memory, 
             memory_pe, 
@@ -340,6 +341,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         descriptors, normalized_click_coords, num_queries_per_object = self.query_descriptors_initializer(
                                                                             multi_scale_features, 
                                                                             instances_per_frame,
+                                                                            data["meta"]["instance_categories"],
                                                                             fg_coords, 
                                                                             bg_coords, 
                                                                             (height, width), 
@@ -408,26 +410,26 @@ class DynamiteInteractiveTransformer(nn.Module):
 
             if self.use_qqca:
                 # cross-attention between queries of different frames
-                Q,T,D = output.shape
-                output = self.encoder.query_query_cross_attention_layers[i](
-                                                                output.view(Q*T,1,D),
-                                                                tgt_mask=None,
-                                                                tgt_key_padding_mask=None,
-                                                                query_pos=query_embed.view(Q*T,1,D)
-                                                            )
-                output = output.view(Q,T,D)
-                # for inst_id, indices in instance_to_indices.items():
-                #     q_indices, t_indices = zip(*indices)
-                #     q_indices = torch.tensor(q_indices)
-                #     t_indices = torch.tensor(t_indices)
-                    
-                #     inst_output = self.encoder.query_query_cross_attention_layers[i](
-                #                                                 output[q_indices, t_indices],
+                # Q,T,D = output.shape
+                # output = self.encoder.query_query_cross_attention_layers[i](
+                #                                                 output.view(Q*T,1,D),
                 #                                                 tgt_mask=None,
                 #                                                 tgt_key_padding_mask=None,
-                #                                                 query_pos=query_embed[q_indices, t_indices]
+                #                                                 query_pos=query_embed.view(Q*T,1,D)
                 #                                             )
-                #     output[q_indices, t_indices] = inst_output
+                # output = output.view(Q,T,D)
+                for inst_id, indices in instance_to_indices.items():
+                    q_indices, t_indices = zip(*indices)
+                    q_indices = torch.tensor(q_indices)
+                    t_indices = torch.tensor(t_indices)
+                    
+                    inst_output = self.encoder.query_query_cross_attention_layers[i](
+                                                                output[q_indices, t_indices],
+                                                                tgt_mask=None,
+                                                                tgt_key_padding_mask=None,
+                                                                query_pos=query_embed[q_indices, t_indices]
+                                                            )
+                    output[q_indices, t_indices] = inst_output
             
             # self-attention between queries within frame
             output = self.encoder.self_attention_layers[i](

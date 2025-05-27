@@ -6,6 +6,20 @@ import torch
 from collections import defaultdict
 from functools import lru_cache
 
+def get_instance_to_indices(num_queries_per_object):
+    """
+    Given the num of queries per instance in each frame, return a mapping of 
+    each instance to the query and frame index in the Q,T,D query tensor
+    """
+    instance_to_indices = defaultdict(list)
+    for fr_idx, num_queries_at_frame in enumerate(num_queries_per_object):
+        q_offset = 0
+        for inst_id, q_count in enumerate(num_queries_at_frame):
+            for local_idx in range(q_count):
+                global_q_idx = q_offset + local_idx
+                instance_to_indices[inst_id].append((global_q_idx, fr_idx))
+            q_offset += q_count
+    return instance_to_indices
 
 def compute_iou(
     gt_masks,
@@ -95,6 +109,7 @@ def get_next_clicks(
         for inst_id in indices:
             candidates_for_refinement[inst_id.item()].append(fr_idx)
 
+    num_instances_to_refine = np.random.randint(1, min(len(candidates_for_refinement), num_instances_to_refine)+1)
     instances_to_refine = np.random.choice(list(candidates_for_refinement.keys()), num_instances_to_refine)
 
     for inst_id in instances_to_refine:
@@ -119,7 +134,7 @@ def get_next_clicks(
                 
                 # FG click
                 else:
-                    fg_coords[fr_idx][click_obj].append([click_y, click_x, click_obj, fr_idx, click_time])
+                    fg_coords[fr_idx][click_obj].append([click_y, click_x, click_obj+1, fr_idx, click_time])
                     num_clicks_per_object[fr_idx][click_obj]+= 1
 
                 max_timestamp[fr_idx] = click_time
