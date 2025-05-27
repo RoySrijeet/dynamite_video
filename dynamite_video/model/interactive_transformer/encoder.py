@@ -3,7 +3,7 @@ from .utils import SelfAttentionLayer, CrossAttentionLayer, FFNLayer
 
 class Encoder(nn.Module):
 
-    def __init__(self, hidden_dim, dim_feedforward, nheads, enc_layers, pre_norm):
+    def __init__(self, hidden_dim, dim_feedforward, nheads, enc_layers, pre_norm, use_qqca):
 
         super().__init__()
 
@@ -14,7 +14,9 @@ class Encoder(nn.Module):
         self.num_layers = enc_layers
         self.self_attention_layers = nn.ModuleList()
         self.cross_attention_layers = nn.ModuleList()
-        # self.query_query_cross_attention_layers = nn.ModuleList()
+        self.use_qqca = use_qqca
+        if self.use_qqca:
+            self.query_query_cross_attention_layers = nn.ModuleList()
         self.ffn_layers = nn.ModuleList()
 
         for _ in range(self.num_layers):
@@ -35,15 +37,16 @@ class Encoder(nn.Module):
                     normalize_before=self.pre_norm,
                 )
             )
-
-            # self.query_query_cross_attention_layers.append(
-            #     SelfAttentionLayer(
-            #         d_model=self.hidden_dim,
-            #         nhead=self.num_heads,
-            #         dropout=0.0,
-            #         normalize_before=self.pre_norm,
-            #     )
-            # )
+            
+            if self.use_qqca:
+                self.query_query_cross_attention_layers.append(
+                    SelfAttentionLayer(
+                        d_model=self.hidden_dim,
+                        nhead=self.num_heads,
+                        dropout=0.0,
+                        normalize_before=self.pre_norm,
+                    )
+                )
 
             self.ffn_layers.append(
                 FFNLayer(

@@ -18,7 +18,7 @@ from dynamite_video.model.interactive_transformer.descriptor_initializer import 
 from dynamite_video.model.interactive_transformer.utils import INTERACTIVE_TRANSFORMER_REGISTRY, MLP
 from dynamite_video.model.interactive_transformer.encoder import Encoder
 from dynamite_video.model.interactive_transformer.decoder import Decoder
-from dynamite_video.training.train_utils import get_next_clicks
+from dynamite_video.training.train_utils import get_next_clicks, get_instance_to_indices
 
 
 @INTERACTIVE_TRANSFORMER_REGISTRY.register()
@@ -32,6 +32,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         in_channels,
         *,
         max_num_interactions: int,
+        use_qqca,
         use_decoder, 
         dec_layers,
         dec_scale_factor,
@@ -86,7 +87,8 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         self.num_heads = nheads
         self.enc_layers = enc_layers
-        self.encoder = Encoder(hidden_dim, dim_feedforward, nheads, self.enc_layers, pre_norm)
+        self.use_qqca = use_qqca
+        self.encoder = Encoder(hidden_dim, dim_feedforward, nheads, self.enc_layers, pre_norm, self.use_qqca)
         if self.use_decoder:
             self.decoder = Decoder(hidden_dim, nheads, self.dec_layers, pre_norm)
         
@@ -153,6 +155,7 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         # Iterative Pipeline
         ret["max_num_interactions"] = cfg.ITERATIVE.TRAIN.MAX_NUM_INTERACTIONS
+        ret["use_qqca"] = False #True # TODO: add to config
         ret["positional_embeddings"] = cfg.ITERATIVE.TRAIN.POSITIONAL_EMBED
 
         ret["use_static_bg_queries"] = cfg.ITERATIVE.TRAIN.USE_STATIC_BG_QUERIES
@@ -381,11 +384,12 @@ class DynamiteInteractiveTransformer(nn.Module):
                 num_queries_per_object[i][-1] += static_bg_queries.shape[1]
     
         output = self.queries_nonlinear_projection(descriptors).permute(1,0,2)
+        instance_to_indices = get_instance_to_indices(num_queries_per_object)
+
         predictions_mask = []
        
         # prediction heads on learnable query features
         outputs_mask, attn_mask = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[0])
-            
         
         predictions_mask.append(outputs_mask)
 
@@ -402,15 +406,28 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                             query_pos=query_embed           # QxTxD pos emb for query
                                                         )
 
-            # cross-attention between queries of different frames
-            # Q,T,D = output.shape
-            # output = self.encoder.query_query_cross_attention_layers[i](
-            #                                                 output.view(Q*T,D),
-            #                                                 tgt_mask=None,
-            #                                                 tgt_key_padding_mask=None,
-            #                                                 query_pos=query_embed.view(Q*T,D)
-            #                                             )
-            # output = output.view(Q,T,D)
+            if self.use_qqca:
+                # cross-attention between queries of different frames
+                Q,T,D = output.shape
+                output = self.encoder.query_query_cross_attention_layers[i](
+                                                                output.view(Q*T,1,D),
+                                                                tgt_mask=None,
+                                                                tgt_key_padding_mask=None,
+                                                                query_pos=query_embed.view(Q*T,1,D)
+                                                            )
+                output = output.view(Q,T,D)
+                # for inst_id, indices in instance_to_indices.items():
+                #     q_indices, t_indices = zip(*indices)
+                #     q_indices = torch.tensor(q_indices)
+                #     t_indices = torch.tensor(t_indices)
+                    
+                #     inst_output = self.encoder.query_query_cross_attention_layers[i](
+                #                                                 output[q_indices, t_indices],
+                #                                                 tgt_mask=None,
+                #                                                 tgt_key_padding_mask=None,
+                #                                                 query_pos=query_embed[q_indices, t_indices]
+                #                                             )
+                #     output[q_indices, t_indices] = inst_output
             
             # self-attention between queries within frame
             output = self.encoder.self_attention_layers[i](
