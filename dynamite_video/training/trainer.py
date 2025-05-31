@@ -1,34 +1,19 @@
-import os
 import copy
-import torch
 import itertools
+import torch
 
-from multiprocessing import cpu_count
-from torch.utils.data import DataLoader
 from typing import Any, Dict, List, Set
 
 from detectron2.engine import DefaultTrainer
-from detectron2.utils.comm import get_world_size
-from detectron2.data.samplers import TrainingSampler
-from detectron2.data.common import DatasetFromList, MapDataset
 from detectron2.data.build import build_batch_data_loader
+from detectron2.data.common import DatasetFromList, MapDataset
+from detectron2.data.samplers import TrainingSampler
 from detectron2.solver.build import maybe_add_gradient_clipping
 
 from dynamite_video.data.mappers import TrainingMapper
-from dynamite_video.data.utils.collate import Collator
-from dynamite_video.data.dataset_builder import build_training_dataset, listify
+from dynamite_video.data.dataset_builder import build_training_dataset
 
 class Trainer(DefaultTrainer):
-    
-    @staticmethod
-    def get_num_available_cpu_cores() -> int:
-        # When running under SLURM, we need to check the `SLURM_CPUS_PER_TASK` environment variable to get the
-        # correct number of available CPU cores because multiprocessing.cpu_count() just returns the total number of
-        # CPU cores on the machine regardless of how many SLURM has allocated for the given job.
-        total_cores = int(os.environ.get("SLURM_CPUS_PER_TASK", cpu_count()))
-        local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
-        return min(8, max(1, total_cores // local_world_size))
-    
     
     @classmethod
     def build_train_loader(cls, cfg):

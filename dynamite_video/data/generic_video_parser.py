@@ -37,12 +37,12 @@ def parse_generic_video_dataset(
     meta_info = dataset["meta"]
 
     if "category_labels" in meta_info:
-        # sanity check: instance IDs in "segmentations" must match those in "categories"
+        # sanity check: object IDs in "segmentations" must match those in "categories"
         for seq in dataset["sequences"]:
             if "categories" in seq:
                 
                 seg_iids = set(sum([list(seg_t.keys()) for seg_t in seq["segmentations"]], []))
-                assert seg_iids == set(seq["categories"].keys()), "Instance ID mismatch in seq {}: {} vs. {}".format(
+                assert seg_iids == set(seq["categories"].keys()), "Object ID mismatch in seq {}: {} vs. {}".format(
                     seq["id"], seg_iids, set(seq["categories"].keys())
                 )
 
@@ -71,7 +71,7 @@ class GenericVideoSequence(object):
             seq_dict: dictionary containing info (resolution, annotation) of a 
                 single video sequence from a dataset
             path_to_images: path to dataset images
-            serialize: serialize non-sequential instance ids
+            serialize: serialize non-sequential object ids
         """
         assert len(seq_dict["image_paths"]) == len(seq_dict["segmentations"])
 
@@ -83,43 +83,43 @@ class GenericVideoSequence(object):
         if not serialize:
             self.segmentations = seq_dict["segmentations"]
             self.semantic_segmentations = seq_dict.get("semantic_segmentations", None)
-            self.instance_categories = seq_dict["categories"]
-            inst_ids = sorted(seq_dict["categories"].keys())
-            self.orig_to_serial_id = OrderedDict(zip(inst_ids, inst_ids))
-            self.serial_to_orig_id = OrderedDict(zip(inst_ids, inst_ids))
+            self.object_categories = seq_dict["categories"]
+            obj_ids = sorted(seq_dict["categories"].keys())
+            self.orig_to_serial_id = OrderedDict(zip(obj_ids, obj_ids))
+            self.serial_to_orig_id = OrderedDict(zip(obj_ids, obj_ids))
             self.max_class_id = seq_dict["max_class_id"]
 
-        # serialize non-sequential instance IDs
+        # serialize non-sequential object IDs
         else:
             # obtain mappings between original and sequential IDs
-            self.orig_to_serial_id, self.serial_to_orig_id = self.serialize_instance_ids(sorted(seq_dict["categories"].keys()))
+            self.orig_to_serial_id, self.serial_to_orig_id = self.serialize_object_ids(sorted(seq_dict["categories"].keys()))
             if all(key == value for key, value in self.orig_to_serial_id.items()):
                 # already serial
                 self.segmentations = seq_dict["segmentations"]
                 self.semantic_segmentations = seq_dict.get("semantic_segmentations", None)
-                self.instance_categories = seq_dict["categories"]
+                self.object_categories = seq_dict["categories"]
             else:
                 # serialize seg keys and labels
                 segmentations = seq_dict["segmentations"]
                 semantic_segmentations = seq_dict.get("semantic_segmentations", None)
                 self.segmentations, self.semantic_segmentations = self.serialize_masks(segmentations, semantic_segmentations, self.orig_to_serial_id)
                 # update IDs in category map
-                self.instance_categories = {self.orig_to_serial_id.get(inst_id): value for inst_id, value in seq_dict["categories"].items()}
+                self.object_categories = {self.orig_to_serial_id.get(obj_id): value for obj_id, value in seq_dict["categories"].items()}
 
             self.max_class_id = self.orig_to_serial_id[seq_dict["max_class_id"]]
         
         self.ignore_masks = seq_dict.get("ignore_masks", None)
-        self.instance_areas = None
+        self.object_areas = None
         self.fpack_reader = None
 
 
-    def serialize_instance_ids(self, orig_ids):
+    def serialize_object_ids(self, orig_ids):
         """
-        Serialize instance IDs. IDs are 1-indexed to avoid conflict in semantic mask
+        Serialize object IDs. IDs are 1-indexed to avoid conflict in semantic mask
         with background pixels (0)
 
         Args:
-            orig_ids: original instance IDs, potentially non-sequential
+            orig_ids: original object IDs, potentially non-sequential
 
         Returns:
             orig_to_serial_id: mapping from original IDs to sequential IDs
@@ -135,21 +135,21 @@ class GenericVideoSequence(object):
     
     def serialize_masks(self, segmentations, semantic_segmentations, orig_to_serial_id):
         """
-        Rename annotation keys from original instance IDs to sequential IDs
+        Rename annotation keys from original object IDs to sequential IDs
 
         Args:
-            segmentations: dictionary of instance masks where original instance IDs
+            segmentations: dictionary of object masks where original object IDs
                 were used as keys
             semantic_segmentation: dictionary of semantic masks where original
-                instance IDs are used as pixel labels
+                object IDs are used as pixel labels
             orig_to_serial_ids: mapping from original IDs to sequential IDs
         """
         
-        # update instance masks
+        # update object masks
         updated_segmentations = []
         for fr_idx, segs_t in enumerate(segmentations):
             # update keys
-            new_seg = {orig_to_serial_id.get(inst_id): value for inst_id, value in segs_t.items()}
+            new_seg = {orig_to_serial_id.get(obj_id): value for obj_id, value in segs_t.items()}
             updated_segmentations.append(new_seg)
             
         updated_semantic_segmentations = None
@@ -179,15 +179,15 @@ class GenericVideoSequence(object):
 
 
     @property
-    def instance_ids(self):
-        """IDs of instances present in the video"""
-        return list(self.instance_categories.keys())
+    def object_ids(self):
+        """IDs of objects present in the video"""
+        return list(self.object_categories.keys())
 
 
     @property
     def category_labels(self):
-        """Category labels of the instances in the video"""
-        return {inst_id: self.instance_categories[inst_id] for inst_id in self.instance_ids}
+        """Category labels of the objects in the video"""
+        return {obj_id: self.object_categories[obj_id] for obj_id in self.object_ids}
 
 
     @property
@@ -274,31 +274,31 @@ class GenericVideoSequence(object):
         Decode RLE masks to numpy arrays of segmentation maps
 
         Returns:
-            binary_masks: binary segmentation masks of the instances in the frames of the video
+            binary_masks: binary segmentation masks of the objects in the frames of the video
                 as a list of lists of `np.ndarray`
-            num_instances_per_frame: record of #instances present in each frame separately, as there 
-                may be instances with empty masks which do not count
-            instance_ids: IDs of instances in the clip, arranged in the same order as the binary masks
+            num_objects_per_frame: record of #objects present in each frame separately, as there 
+                may be objects with empty masks which do not count
+            object_ids: IDs of objects in the clip, arranged in the same order as the binary masks
         """
-        clip_instance_ids = sorted(self.instance_ids)
+        clip_object_ids = sorted(self.object_ids)
 
         # binary masks of each frame in the clip is made to have same no. 
-        # of channels as the total number of instances in the clip. So, 
-        # if an instance is not present in a frame, add an empty mask
+        # of channels as the total number of objects in the clip. So, 
+        # if an object is not present in a frame, add an empty mask
         binary_masks = []
         
-        # IDs of instances present in each frame
-        instances_per_frame = []
+        # IDs of objects present in each frame
+        objects_per_frame = []
         
         for fr_idx, fr_masks in enumerate(self.segmentations):
-            instances_per_frame.append(sorted(fr_masks.keys()))
+            objects_per_frame.append(sorted(fr_masks.keys()))
             
             binary_masks_fr = []
-            # add one channel for each instance present in the clip
-            for inst_id in clip_instance_ids:
-                if inst_id in instances_per_frame[-1]:
+            # add one channel for each object present in the clip
+            for obj_id in clip_object_ids:
+                if obj_id in objects_per_frame[-1]:
                     # decode RLE
-                    rle = fr_masks[inst_id]
+                    rle = fr_masks[obj_id]
                     img_dims = None if isinstance(rle, dict) else self.image_dims
                     _m = self.decode_mask(rle, img_dims)
                     # record
@@ -316,10 +316,10 @@ class GenericVideoSequence(object):
             ignore_masks = [self.decode_mask(ig_msk, img_dims) for ig_msk in self.ignore_masks]
             ignore_masks = np.stack(ignore_masks)
         
-        return binary_masks, instances_per_frame, clip_instance_ids, ignore_masks
+        return binary_masks, objects_per_frame, clip_object_ids, ignore_masks
             
 
-    def extract_subsequence(self, frame_idxes: List[int], instance_ids_to_keep: List[int]=None, new_id: str=""):
+    def extract_subsequence(self, frame_idxes: List[int], object_ids_to_keep: List[int]=None, new_id: str=""):
         """
         Extract the specified frames from the video and return it as a clip
 
@@ -327,11 +327,11 @@ class GenericVideoSequence(object):
 
         Args:
             frame_idxes: frames to be extracted from the main video
-            instance_ids_to_keep: instances to keep
+            object_ids_to_keep: objects to keep
             new_id: new id for the subsequence
 
         Returns:
-            A GenericVideoSequence object with the specified frames and instances
+            A GenericVideoSequence object with the specified frames and objects
         """
 
         assert all([t in range(len(self)) for t in frame_idxes])
@@ -343,39 +343,30 @@ class GenericVideoSequence(object):
             "image_paths": [self.image_paths[t] for t in frame_idxes],
         }
         
-        if instance_ids_to_keep is None:
+        if object_ids_to_keep is None:
             
             subseq_dict["segmentations"] = []
-            subseq_instances = []
+            subseq_objects = []
             for fr_idx in frame_idxes:
                 subseq_dict["segmentations"].append(self.segmentations[fr_idx])
-                subseq_instances.extend(self.segmentations[fr_idx].keys())
+                subseq_objects.extend(self.segmentations[fr_idx].keys())
 
-            subseq_instances = set(subseq_instances)
-            subseq_dict["categories"] = {iid: self.instance_categories[iid] for iid in subseq_instances}
+            subseq_objects = set(subseq_objects)
+            subseq_dict["categories"] = {iid: self.object_categories[iid] for iid in subseq_objects}
         
         else:
             subseq_dict["segmentations"] = [
                 {
                     iid: segmentations_t[iid]
-                    for iid in segmentations_t if iid in instance_ids_to_keep
+                    for iid in segmentations_t if iid in object_ids_to_keep
                 }
                 for t, segmentations_t in enumerate(self.segmentations) if t in frame_idxes
             ]
 
-            subseq_dict["categories"] = {iid: self.instance_categories[iid] for iid in instance_ids_to_keep}
-
-            # if self.has_semantic_masks:
-            #     subseq_semantic_segmentation = {}
-            #     _t = 0
-            #     for t, semantic_seg_t in self.semantic_segmentations.items():
-            #         if t in frame_idxes:
-            #             subseq_semantic_segmentation[_t] = semantic_seg_t
-            #             _t += 1
-            #     subseq_dict["semantic_segmentations"] = subseq_semantic_segmentation
+            subseq_dict["categories"] = {iid: self.object_categories[iid] for iid in object_ids_to_keep}
         
-        sub_seq_instance_ids = sorted(subseq_dict["categories"].keys())
-        subseq_dict["max_class_id"] =  max([x for x in sub_seq_instance_ids if x <= self.max_class_id])
+        sub_seq_object_ids = sorted(subseq_dict["categories"].keys())
+        subseq_dict["max_class_id"] =  max([x for x in sub_seq_object_ids if x <= self.max_class_id])
         
         if self.ignore_masks is not None:
             subseq_dict["ignore_masks"] =  [self.ignore_masks[t] for t in frame_idxes]

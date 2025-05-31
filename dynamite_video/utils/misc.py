@@ -1,10 +1,9 @@
 import os
 import sys
-import yaml
 import argparse
-import numpy as np
 
 from datetime import datetime
+import torch.distributed as dist
 
 from dynamite_video.utils.paths import Paths
 from dynamite_video.utils.detectron2_custom import default_setup
@@ -12,7 +11,6 @@ from dynamite_video.utils.config import add_maskformer2_config
 
 from detectron2.utils import comm
 from detectron2.config import get_cfg
-# from detectron2.engine import default_setup
 from detectron2.utils.logger import setup_logger
 from detectron2.projects.deeplab import add_deeplab_config # type: ignore
 
@@ -284,3 +282,10 @@ def get_cl_arguments():
 def tuple_type(strings):
     strings = strings.replace("(", "").replace(")", "")
     return tuple(strings.split(","))
+
+def is_dist_avail_and_initialized():
+    if not dist.is_available():
+        return False
+    if not dist.is_initialized():
+        return False
+    return True

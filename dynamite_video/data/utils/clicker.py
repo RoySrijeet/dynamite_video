@@ -70,7 +70,7 @@ def get_foreground_clicks(
     Sample foreground clicks from a frame.
 
     Key objects specify the object IDs for which clicks must be sampled from this frame.
-    If an object has ID > max_class_id, it is an instance and one click is sampled at 
+    If an object has ID > max_class_id, it is an object and one click is sampled at 
     its center. If object ID <= max_class_id, the object is a semantic class, and clicks
     are sampled randomly from the foreground area.
 
@@ -80,10 +80,10 @@ def get_foreground_clicks(
 
     Args:
         frame_idx: frame index
-        object_ids: IDs of the instance present in the clip
+        object_ids: IDs of the object present in the clip
         max_class_id: maximum ID of stuff classes
-        binary_masks: [N, H, W] binary masks of the instances in this frame
-        key_objects: sample at least one click on each of the key instances
+        binary_masks: [N, H, W] binary masks of the objects in this frame
+        key_objects: sample at least one click on each of the key objects
         optional_frames_fg_prob: optional sampling probability of non-key objects
         max_num_points: maximum number of points to sample from each object in any frame
         gamma: probability scaling factor of sampling n no. of clicks
@@ -91,13 +91,13 @@ def get_foreground_clicks(
 
     Returns:
         A list of lists. A sub-list consists of the foregound clicks sampled from
-        an instance in the frame
+        an object in the frame
     """
 
     assert binary_masks.ndim == 3
 
     fg_coords_list = []
-    # instance_ids are serial and 1-indexed
+    # object_ids are serial and 1-indexed
     num_clicks_per_object_fr = np.zeros(len(object_ids)).astype('int')
     
     count = 0
@@ -117,7 +117,7 @@ def get_foreground_clicks(
                 continue
         
         if inst_id > max_class_id and inst_id in key_objects:
-            # object is a key instance, fetch center coordinates
+            # object is a key object, fetch center coordinates
             center_coords = get_center_coords(_mask)
             coords.append([center_coords[0], center_coords[1], inst_id, frame_idx, t])
             num_clicks_per_object_fr[inst_id-1] += 1
@@ -131,8 +131,8 @@ def get_foreground_clicks(
         sample_locations = np.argwhere(_eroded_m)
 
         if sample_locations.shape[0] <= 64:
-            # the instance is super small, just sample from the original mask
-            # NOTE: In DynaMITe, instances with area smaller than 400 are filtered out.
+            # the object is super small, just sample from the original mask
+            # NOTE: In DynaMITe, objects with area smaller than 400 are filtered out.
             # Applying a 3x3 erosion on a mask area of 400 erodes it down to 64.
             sample_locations = np.argwhere(_mask)
 
@@ -181,8 +181,11 @@ def get_background_clicks(
     _eroded_bg_mask = cv2.erode(bg_mask, kernel, iterations=3)
     sample_locations = np.argwhere(_eroded_bg_mask)
 
+    if sample_locations.shape[0] <= 64:
+        sample_locations = np.argwhere(bg_mask)
+
     neg_click_probs = _generate_probs(max_num_points, gamma=gamma)
-    num_points = np.random.choice(np.arange(max_num_points), p=neg_click_probs)
+    num_points = np.random.choice(np.arange(1, max_num_points+1), p=neg_click_probs)
     num_points = min(num_points,sample_locations.shape[0]//2)
     indices = random.sample(range(sample_locations.shape[0]), num_points)
 
@@ -242,7 +245,7 @@ def get_clicks_coords(
     sample_object_from = defaultdict(list)
     for obj_id, fr_idxs in frame_object_occupancy.items():
         choice = random.choice(fr_idxs)
-        # add a click on instance `inst_id` in frame `choice`
+        # add a click on object `inst_id` in frame `choice`
         sample_object_from[choice].append(obj_id)
     
     # all clicks in a clip share a single timeline

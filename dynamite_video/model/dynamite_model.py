@@ -113,7 +113,7 @@ class DynamiteModel(nn.Module):
             self, 
             inputs, 
             images=None,
-            instances_per_frame=None,
+            objects_per_frame=None,
             features=None, 
             mask_features=None, 
             multi_scale_features=None, 
@@ -121,8 +121,6 @@ class DynamiteModel(nn.Module):
             fg_coords = None, 
             bg_coords = None, 
             max_timestamp=None,
-            visualize=False,
-            train_iter=None,
     ):
         """
         Forward pass through the DynaMITe model
@@ -132,11 +130,11 @@ class DynamiteModel(nn.Module):
             features, mask_features, multi_scale_features:
                 computed once per clip and passed as an argument to avoid 
                 recomputation during iterative evaluation/inference
-            fg_coords: batched per clip, list of clicks coordinates for each instance in each frame
+            fg_coords: batched per clip, list of clicks coordinates for each object in each frame
             bg_coords: batched per clip, list of background click coordinates from each frame
-            num_clicks_per_object: batched per clip, number of clicks per instance in each frame
+            num_clicks_per_object: batched per clip, number of clicks per object in each frame
             max_timestamp: batched per clip, timestamp of last click sampled from each clip
-            instances_per_frame: batched per clip, list of instances present in the frame
+            objects_per_frame: batched per clip, list of objects present in the frame
         """
 
         assert len(inputs) == 1, "Don't try more than one clip in a batch"  # TODO
@@ -145,7 +143,7 @@ class DynamiteModel(nn.Module):
         if (images is None) or (num_clicks_per_object is None) or (fg_coords is None):
             (
                 images, 
-                instances_per_frame, 
+                objects_per_frame, 
                 num_clicks_per_object,
                 fg_coords, 
                 bg_coords, 
@@ -168,22 +166,19 @@ class DynamiteModel(nn.Module):
                 clip_mask_features = mask_features[clip_idx] if mask_features is not None else None
                 clip_multi_scale_features = multi_scale_features[clip_idx] if multi_scale_features is not None else None
                 
-                clip_outputs, clip_num_clicks_per_object, clip_num_queries_per_object = self.sem_seg_head(
-                                                                                            inputs[clip_idx], 
-                                                                                            images[clip_idx],
-                                                                                            features[clip_idx],
-                                                                                            instances_per_frame[clip_idx],
-                                                                                            clip_mask_features, 
-                                                                                            clip_multi_scale_features,
-                                                                                            num_clicks_per_object[clip_idx],
-                                                                                            fg_coords[clip_idx],
-                                                                                            bg_coords[clip_idx],
-                                                                                            max_timestamp[clip_idx],
-                                                                                            visualize,
-                                                                                            train_iter
-                                                                                        )
+                clip_outputs, _, clip_num_queries_per_object = self.sem_seg_head(inputs[clip_idx], 
+                                                                                images[clip_idx],
+                                                                                features[clip_idx],
+                                                                                objects_per_frame[clip_idx],
+                                                                                clip_mask_features, 
+                                                                                clip_multi_scale_features,
+                                                                                num_clicks_per_object[clip_idx],
+                                                                                fg_coords[clip_idx],
+                                                                                bg_coords[clip_idx],
+                                                                                max_timestamp[clip_idx]
+                                                                            )
                 
-                losses = self.criterion(clip_outputs, targets[clip_idx], inputs[clip_idx]["instance_ids"], clip_num_queries_per_object)
+                losses = self.criterion(clip_outputs, targets[clip_idx], clip_num_queries_per_object)
 
                 for k in list(losses.keys()):
                     if k in self.criterion.weight_dict:
@@ -205,7 +200,7 @@ class DynamiteModel(nn.Module):
                                         inputs[0],
                                         images[0],
                                         features[0],
-                                        instances_per_frame[0],
+                                        objects_per_frame[0],
                                         mask_features, 
                                         multi_scale_features, 
                                         num_clicks_per_object[0],
@@ -214,9 +209,9 @@ class DynamiteModel(nn.Module):
                                         max_timestamp[0]
                                     )
 
-            processed_results = self.process_results(images[0], outputs, instances_per_frame[0], num_queries_per_object)
+            processed_results = self.process_results(images[0], outputs, objects_per_frame[0], num_queries_per_object)
             
-            return (processed_results, outputs, images, instances_per_frame, features, mask_features,
+            return (processed_results, outputs, images, objects_per_frame, features, mask_features,
                         multi_scale_features, num_clicks_per_object, fg_coords, bg_coords)
 
 
@@ -229,15 +224,15 @@ class DynamiteModel(nn.Module):
             images: list of (d2) ImageList objects, one for each clip in the batch. Each 
                 ImageList object contains the image tensors of the frames in the corres
                 -ponding clip as [T,3,H,W] tensors, where T: #frames in the clip
-            instances_per_frame: list of instance count in each frame of each clip in the batch.
+            objects_per_frame: list of object count in each frame of each clip in the batch.
                 If a clip has T frames, then one element in this list would be 
-                [c1, c2, ..., cT] where cn is the #instances in the n-th frame of the clip
-            num_clicks_per_object: list of click count per instance
+                [c1, c2, ..., cT] where cn is the #objects in the n-th frame of the clip
+            num_clicks_per_object: list of click count per object
             fg_coords: list of foreground clicks
             bg_coords: list of background clicks
         """
         images = []
-        instances_per_frame = []
+        objects_per_frame = []
         num_clicks_per_object = []
         fg_coords = []
         bg_coords = []
@@ -252,27 +247,27 @@ class DynamiteModel(nn.Module):
             images_sample = ImageList.from_tensors(images_sample, self.size_divisibility)
             
             images.append(images_sample)
-            # extract instance and click info
-            instances_per_frame.append(clip["instances_per_frame"])
+            # extract object and click info
+            objects_per_frame.append(clip["objects_per_frame"])
             num_clicks_per_object.append(clip["num_clicks_per_object"])
             fg_coords.append(clip["fg_coords_list"])
             bg_coords.append(clip["bg_coords_list"])
             max_timestamp.append(clip["max_timestamp_list"])
 
-        return images, instances_per_frame, num_clicks_per_object, fg_coords, bg_coords, max_timestamp
+        return images, objects_per_frame, num_clicks_per_object, fg_coords, bg_coords, max_timestamp
 
 
     def prepare_targets(self, inputs):
         """
-        Extract ground truth masks and labels of the instances. Relevant only in the training.
+        Extract ground truth masks and labels of the objects. Relevant only in the training.
 
         Args:
             inputs: batch
 
         Returns:
             A list of dictionaries, one for each clip (of T frames) in the batch. Each dict contains:
-                * labels - labels of the instances in the clip (a list of ints)
-                * masks - binary instance masks of the frames in the clip (a list of T [N,H,W] tensors)
+                * labels - labels of the objects in the clip (a list of ints)
+                * masks - binary object masks of the frames in the clip (a list of T [N,H,W] tensors)
                 * padding_mask - padding applied to the clip, [H,W] np.ndarray
                 * bg_mask - background mask of the frames in the clip (a list of T [H,W] tensors)
         """
@@ -281,19 +276,13 @@ class DynamiteModel(nn.Module):
         for clip in inputs:
             clip_targets = []
             for i in range(clip["images"].shape[0]):
-                labels = clip["instances_per_frame"][i]
-                inst_mask = clip["instance_masks"][i].to(self.device)
-                sem_mask = clip["semantic_masks"][i].to(self.device)
-                ignore_mask = clip["ignore_masks"][i].to(self.device)
-                bg_mask = clip["bg_masks"][i].to(self.device)
-                padding_mask = clip["padding_mask"].to(self.device)
                 clip_targets.append({
-                    "labels": labels,
-                    "semantic_masks": sem_mask,
-                    "ignore_masks": ignore_mask,
-                    "instance_masks": inst_mask,
-                    "bg_masks": bg_mask,
-                    "padding_mask": padding_mask,
+                    "labels": clip["objects_per_frame"][i],
+                    "semantic_masks": clip["semantic_masks"][i].to(self.device),
+                    "ignore_masks": clip["ignore_masks"][i].to(self.device),
+                    "binary_masks": clip["binary_masks"][i].to(self.device),
+                    "bg_masks": clip["bg_masks"][i].to(self.device),
+                    "padding_mask": clip["padding_mask"].to(self.device),
                 })
             targets.append(clip_targets)
         return targets
@@ -304,15 +293,15 @@ class DynamiteModel(nn.Module):
             self, 
             images, 
             outputs, 
-            instances_per_frame,
+            objects_per_frame,
             num_queries_per_object,
     ):
         """
         Args:
             images: [T, 3, H, W] tensors of the images in the clip (d2 ImageList)
             outputs: prediction 
-            instances_per_frame: list of instance IDs in the i-th frame
-            num_queries_per_object: count of queries on each instance in each frame
+            objects_per_frame: list of object IDs in the i-th frame
+            num_queries_per_object: count of queries on each object in each frame
         """
         
         mask_pred_results = outputs["pred_masks"]   # [T,Q,H,W]
@@ -325,38 +314,38 @@ class DynamiteModel(nn.Module):
         )
         del outputs
 
-        # instances in the whole clip
-        seq_instances = sorted(list(set(x for ids in instances_per_frame for x in ids)))
+        # objects in the whole clip
+        seq_objects = sorted(list(set(x for ids in objects_per_frame for x in ids)))
 
         processed_results = []
-        for mask_pred_per_image, image_size, instances_per_image, queries_per_instance in zip(mask_pred_results, images.image_sizes, instances_per_frame, num_queries_per_object):
+        for mask_pred_per_image, image_size, objects_per_image, queries_per_object in zip(mask_pred_results, images.image_sizes, objects_per_frame, num_queries_per_object):
             mask_pred_per_image = retry_if_cuda_oom(sem_seg_postprocess)(mask_pred_per_image, image_size, image_size[0], image_size[1])
-            processed_r = retry_if_cuda_oom(self.interactive_instance_inference)(mask_pred_per_image, instances_per_image, queries_per_instance, seq_instances)
+            processed_r = retry_if_cuda_oom(self.interactive_object_inference)(mask_pred_per_image, objects_per_image, queries_per_object, seq_objects)
             processed_results.append(processed_r)
 
         return processed_results
 
     
-    def interactive_instance_inference(
+    def interactive_object_inference(
             self, 
             mask_pred, 
-            instances_per_image, 
-            queries_per_instance,
-            seq_instances
+            objects_per_image, 
+            queries_per_object,
+            seq_objects
     ):
         """
         Given the raw predictions from Transformer, obtain binary segmentation masks
 
         Args:
             mask_pred: raw prediction from Transformer, TxQxHxW
-            instances_per_image: list of instance IDs in current frame
-            queries_per_instances: count of queries on each instance in current frame
-            seq_instances: all instances present in the clip
+            objects_per_image: list of object IDs in current frame
+            queries_per_objects: count of queries on each object in current frame
+            seq_objects: all objects present in the clip
         """
 
         H,W = mask_pred.shape[1:]
         temp_out = []
-        splited_masks = torch.split(mask_pred, queries_per_instance, dim=0)
+        splited_masks = torch.split(mask_pred, queries_per_object, dim=0)
         for m in splited_masks:
             if len(m) == 0:
                 temp_out.append(torch.zeros(H,W).to(mask_pred.device))
@@ -367,9 +356,9 @@ class DynamiteModel(nn.Module):
         mask_pred = torch.argmax(mask_pred,0)
         
         m = []
-        for inst_id in seq_instances:
-            if inst_id in instances_per_image:
-                m.append((mask_pred == inst_id-1).float())
+        for obj_id in seq_objects:
+            if obj_id in objects_per_image:
+                m.append((mask_pred == obj_id-1).float())
             else:
                 m.append(torch.zeros(H,W).to(mask_pred.device))
         

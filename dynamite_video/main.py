@@ -48,7 +48,7 @@ def training_pipeline(cfg, args):
     trainer = Trainer(cfg)
     if cfg.WANDB.ENABLE:
         if comm.get_rank()==0:
-            wandb.watch(trainer.model, log="all", log_freq=10)
+            wandb.watch(trainer.model, log="all", log_freq=5000)
     trainer.resume_or_load(args.resume)
     trainer.train()
 

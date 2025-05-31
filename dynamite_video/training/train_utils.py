@@ -6,35 +6,20 @@ import torch
 from collections import defaultdict
 from functools import lru_cache
 
-def get_instance_to_indices(num_queries_per_object):
-    """
-    Given the num of queries per instance in each frame, return a mapping of 
-    each instance to the query and frame index in the Q,T,D query tensor
-    """
-    instance_to_indices = defaultdict(list)
-    for fr_idx, num_queries_at_frame in enumerate(num_queries_per_object):
-        q_offset = 0
-        for inst_id, q_count in enumerate(num_queries_at_frame):
-            for local_idx in range(q_count):
-                global_q_idx = q_offset + local_idx
-                instance_to_indices[inst_id].append((global_q_idx, fr_idx))
-            q_offset += q_count
-    return instance_to_indices
-
 def compute_iou(
     gt_masks,
     pred_masks,
-    max_insts_to_refine=15,
+    max_objects_to_refine=15,
     iou_thres=0.90
 ):
     """
-    Given the ground truth masks and prediction masks, compute instances-wise IoU and return the 
-    indices of the worst segmented instances
+    Given the ground truth masks and prediction masks, compute object-wise IoU and return the 
+    indices of the worst segmented objects
 
     Args:
         gt_masks: ground truth masks [T, N, H, W]
         pred_masks: prediction masks [T, N, H, W]
-        max_insts_to_refine: sample corrective clicks on upto this many objects (int, default=15)
+        max_objects_to_refine: sample corrective clicks on upto this many objects (int, default=15)sque
         iou_thres: refine an object if computed IoU is lower than this threshold (float, default=0.90)
     
     Returns:
@@ -44,24 +29,24 @@ def compute_iou(
     intersections = np.sum(np.logical_and(gt_masks, pred_masks), (1,2))
     unions = np.sum(np.logical_or(gt_masks,pred_masks), (1,2))
     
-    # some instance(s) may be absent in some frame(s) in the clip. In such cases, intersection is 0,
+    # some object(s) may be absent in some frame(s) in the clip. In such cases, intersection is 0,
     # regardless of the prediction. However, if the union is 0, that means the prediction was correct
     # (and empty, just like prediction). In that case, IoU should be 1.
     if not unions.all():
-        # at least for one of the instances, there's no gt mask and no pred mask that's a correct prediction
+        # at least for one of the objects, there's no gt mask and no pred mask that's a correct prediction
         pos = np.where(unions==0)
         unions[pos] = 1
         intersections[pos] = 1
 
     ious = intersections/unions
 
-    # identify the instances with worst IoUs
+    # identify the objects with worst IoUs
     indices = torch.topk(torch.tensor(ious), len(ious),largest=False).indices
     worst_indices = []
-    for inst_id in indices:
-        if ious[inst_id] < iou_thres:
-            worst_indices.append(inst_id)
-        if len(worst_indices)==max_insts_to_refine:
+    for obj_id in indices:
+        if ious[obj_id] < iou_thres:
+            worst_indices.append(obj_id)
+        if len(worst_indices)==max_objects_to_refine:
             break
     return worst_indices
 
@@ -73,7 +58,7 @@ def get_next_clicks(
     fg_coords,
     bg_coords,
     max_timestamp,
-    num_instances_to_refine,
+    num_objects_to_refine,
     max_num_points=2,
     visualize=False,
     visualize_dir=None,
@@ -85,18 +70,18 @@ def get_next_clicks(
     Args:
         data: dataloader input
         pred_output: predicted masks, [T, N, H, W]
-        num_clicks_per_object: list of click counts on each instance, in each frame of the clip
+        num_clicks_per_object: list of click counts on each object, in each frame of the clip
         fg_coords: list of fg clicks on the frames of the clip
         bg_coords: list bg clicks on the frames of the clip
         max_timestamp: list of timestamps of the last clip on each frame of the clip
-        max_num_points: maximum number of corrective clicks to sample per instance (int, default=2)
+        max_num_points: maximum number of corrective clicks to sample per object (int, default=2)
 
     Returns:
         num_clicks_per_object, fg_coords, bg_coords, max_timestamp: updated with sampled clicks
     """
 
     # directly take data as input as they are already on the device
-    gt_masks_clip = [x.cpu().numpy() for x in data["instance_masks"]]      # [T,N,H,W]
+    gt_masks_clip = [x.cpu().numpy() for x in data["binary_masks"]]      # [T,N,H,W]
     pred_masks_clip = [x.cpu().numpy() for x in pred_output]               # [T,N,H,W]
     semantic_maps_clip = [x.cpu().numpy() for x in data['semantic_masks']] # [T,H,W]
     padding_mask = data["padding_mask"].cpu().numpy()                      # [H,W]
@@ -104,24 +89,24 @@ def get_next_clicks(
     candidates_for_refinement = defaultdict(list)
     for fr_idx, (gt_masks, pred_masks) in enumerate(zip(gt_masks_clip, pred_masks_clip)):
         
-        # id of the instance to be refined
+        # id of the object to be refined
         indices = compute_iou(gt_masks, pred_masks)
-        for inst_id in indices:
-            candidates_for_refinement[inst_id.item()].append(fr_idx)
+        for obj_id in indices:
+            candidates_for_refinement[obj_id.item()].append(fr_idx)
 
-    num_instances_to_refine = np.random.randint(1, min(len(candidates_for_refinement), num_instances_to_refine)+1)
-    instances_to_refine = np.random.choice(list(candidates_for_refinement.keys()), num_instances_to_refine)
+    num_objects_to_refine = np.random.randint(1, min(len(candidates_for_refinement), num_objects_to_refine)+1)
+    objects_to_refine = np.random.choice(list(candidates_for_refinement.keys()), num_objects_to_refine)
 
-    for inst_id in instances_to_refine:
-        fr_idx = np.random.choice(candidates_for_refinement[inst_id])
+    for obj_id in objects_to_refine:
+        fr_idx = np.random.choice(candidates_for_refinement[obj_id])
         gt_masks = gt_masks_clip[fr_idx]
         pred_masks = pred_masks_clip[fr_idx]
         semantic_map = semantic_maps_clip[fr_idx]
 
         # timestamp of the latest click so far
         timestamp = max(max_timestamp)
-        sampled_clicks = _get_corrective_clicks(pred_masks[inst_id], gt_masks[inst_id], semantic_map, padding_mask,
-                                                    timestamp+1, 1, visualize, visualize_dir, f"{train_iter}_fr_{fr_idx}_inst_{inst_id}")
+        sampled_clicks = _get_corrective_clicks(pred_masks[obj_id], gt_masks[obj_id], semantic_map, padding_mask,
+                                                    timestamp+1, 1, visualize, visualize_dir, f"{train_iter}_fr_{fr_idx}_obj_{obj_id}")
         
         if sampled_clicks is not None:
             for click in sampled_clicks:
@@ -175,11 +160,11 @@ def _get_corrective_clicks(
     train_iter=None,
 ):
     """
-    Sample corrective click on an instance, in a frame
+    Sample corrective click on an object, in a frame
 
     Args:
-        pred_mask: H,W predicted segmentation mask of the instance
-        gt_mask: H,W ground truth segmentation mask of the instance
+        pred_mask: H,W predicted segmentation mask of the object
+        gt_mask: H,W ground truth segmentation mask of the object
         semantic_map: H,W ground truth semantic map of the frame
         padding_mask: H,W padding mask applied during data-loading
         timestamp: timestamp of current click (int)
@@ -241,7 +226,7 @@ def _get_corrective_clicks(
         for index in indices:
             coords = sample_locations[index]
 
-            # ID of the instance in the g.t. mask at the sampled click location
+            # ID of the object in the g.t. mask at the sampled click location
             obj_indx = semantic_map[coords[0]][coords[1]] - 1
             points_coords.append([coords[0], coords[1], obj_indx, timestamp])   # [y,x,i,t]
             timestamp+=1

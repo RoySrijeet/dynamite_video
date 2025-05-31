@@ -34,7 +34,6 @@ class KITTISTEPTrainingDataset(TrainingDataset):
         # given a starting frame of a clip (a training sample), this value defines the span of the window 
         # in front of the starting frame, from where the rest of the frames of the clip are to be sampled
         frame_sampling_multiplicative_factor = cfg.DATASETS.KITTI_STEP.TRAINING.FRAME_SAMPLING_MULTIPLICATIVE_FACTOR
-        max_num_instances = cfg.DATASETS.KITTI_STEP.TRAINING.MAX_NUM_INSTANCES
 
         super().__init__(cfg, "KITTI_STEP", clip_length, num_samples, fps, frame_sampling_multiplicative_factor)
 
@@ -118,15 +117,15 @@ class KITTISTEPTrainingDataset(TrainingDataset):
 
             # NOTE: the semantic classes in KITTI_STEP have IDs from 0-18 (and void/255).
             # The instance segmentations have their independent IDs that overlap with the
-            # class IDs. To resolve this issue, the instances are assigned a new id as 
+            # class IDs. To resolve this issue, the objects are assigned a new id as 
             # follows: new_id = max_class_id + 1 + real_id where max_class_id is the ID
             # of the highest class ID
             
             max_class_id = max(accepted_track_ids.keys())
 
             # read instance masks
-            for fr_idx, inst_masks in enumerate(seq["segmentations"]):
-                for track_id, inst_rle in inst_masks.items():
+            for fr_idx, fr_inst_masks in enumerate(seq["segmentations"]):
+                for track_id, inst_rle in fr_inst_masks.items():
 
                     if self.mask_area(inst_rle, img_dims) >= MIN_MASK_AREA:
                         # new track ID
@@ -267,11 +266,11 @@ class KITTISTEPInferenceDataset(InferenceDataset):
             
             updated_segmentations = []
             accepted_track_ids = {}
-            instances_per_frame = []
+            objects_per_frame = []
             # read semantic maps
             for fr_idx, sem_masks in enumerate(seq["semantic_segmentations"]):
                 updated_segmentations.append({})
-                instances_per_frame.append([])
+                objects_per_frame.append([])
 
                 for class_id, sem_seg_rle in sem_masks.items():    
                     if class_id == '255':
@@ -283,7 +282,7 @@ class KITTISTEPInferenceDataset(InferenceDataset):
                         track_id = int(class_id) + 1
                         updated_segmentations[-1][track_id] = np_msk
                         accepted_track_ids[track_id] = int(class_id)
-                        instances_per_frame[-1].append(track_id)
+                        objects_per_frame[-1].append(track_id)
 
             # NOTE: the semantic classes in KITTI_STEP have IDs from 0-18 (and void/255).
             # The instance segmentations have their independent IDs that overlap with the
@@ -293,13 +292,13 @@ class KITTISTEPInferenceDataset(InferenceDataset):
             max_track_id = max(accepted_track_ids.keys())
             
             # read instance masks
-            for fr_idx, inst_masks in enumerate(seq["segmentations"]):
+            for fr_idx, fr_inst_masks in enumerate(seq["segmentations"]):
 
-                # store the class-wise instance masks for each salient/'thing' class appearing in the frame. 
-                # This is used to create a hole in the semantic map where instance-level masks are available
+                # store the class-wise object masks for each salient/'thing' class appearing in the frame. 
+                # This is used to create a hole in the semantic map where object-level masks are available
                 overlapping_masks = defaultdict(list)
 
-                for track_id, inst_rle in inst_masks.items():
+                for track_id, inst_rle in fr_inst_masks.items():
 
                     np_msk = self.decode_mask(inst_rle, metadata["orig_dims"])
                     if np_msk.sum() >= MIN_MASK_AREA:
@@ -308,9 +307,9 @@ class KITTISTEPInferenceDataset(InferenceDataset):
                         updated_segmentations[fr_idx][new_track_id] = np_msk
                         accepted_track_ids[new_track_id] = seq['categories'][track_id]
                         overlapping_masks[int(seq['categories'][track_id]) + 1].append(np_msk)
-                        instances_per_frame[fr_idx].append(new_track_id)
+                        objects_per_frame[fr_idx].append(new_track_id)
             
-                # instances of the salient/'thing' classes are potentially overlapping
+                # objects of the salient/'thing' classes are potentially overlapping
                 if len(overlapping_masks) == 0:
                     continue
                 
@@ -318,7 +317,7 @@ class KITTISTEPInferenceDataset(InferenceDataset):
                     # for each of the salient/'thing' classes, obtain its semantic map
                     sem_mask = updated_segmentations[fr_idx][thing_class_id]
 
-                    # cut out holes from the semantic map of the salient/'thing' classes where instance masks are available
+                    # cut out holes from the semantic map of the salient/'thing' classes where object masks are available
                     for inst_mask in overlapping_masks[thing_class_id]:
                         sem_mask[np.where(inst_mask==1)] = 0
                 
@@ -328,34 +327,34 @@ class KITTISTEPInferenceDataset(InferenceDataset):
                         updated_segmentations[fr_idx][thing_class_id] = sem_mask
                     else:
                         updated_segmentations[fr_idx].pop(thing_class_id, None)
-                        instances_per_frame[fr_idx].remove(thing_class_id)
+                        objects_per_frame[fr_idx].remove(thing_class_id)
 
-            orig_instance_ids = sorted(set(num for sublist in instances_per_frame for num in sublist))
-            orig_to_serial_ids, serial_to_orig_ids = self.serialize_instance_ids(orig_instance_ids)
-            assert orig_instance_ids == list(orig_to_serial_ids.keys())
+            orig_object_ids = sorted(set(num for sublist in objects_per_frame for num in sublist))
+            orig_to_serial_ids, serial_to_orig_ids = self.serialize_instance_ids(orig_object_ids)
+            assert orig_object_ids == list(orig_to_serial_ids.keys())
             metadata["orig_to_serial_ids"] = orig_to_serial_ids
             metadata["serial_to_orig_ids"] = serial_to_orig_ids
             
-            instance_discovery = {}
-            instances_per_frame = []
-            instance_masks = []
+            object_discovery = {}
+            objects_per_frame = []
+            binary_masks = []
             semantic_maps = []
             for fr_idx, mask_dict in enumerate(updated_segmentations):
                 semantic_maps.append(np.zeros(metadata["orig_dims"]).astype(np.uint8))
-                instance_masks.append([])
-                instances_per_frame.append([])
-                for inst_id in orig_instance_ids:
+                binary_masks.append([])
+                objects_per_frame.append([])
+                for inst_id in orig_object_ids:
                     if inst_id in mask_dict.keys():
-                        instance_masks[-1].append(mask_dict[inst_id])
+                        binary_masks[-1].append(mask_dict[inst_id])
                         semantic_maps[-1][np.where(mask_dict[inst_id]==1)] = orig_to_serial_ids[inst_id]
-                        if orig_to_serial_ids[inst_id] not in instance_discovery.keys():
-                            instance_discovery[orig_to_serial_ids[inst_id]] = fr_idx
-                        instances_per_frame[-1].append(orig_to_serial_ids[inst_id])
+                        if orig_to_serial_ids[inst_id] not in object_discovery.keys():
+                            object_discovery[orig_to_serial_ids[inst_id]] = fr_idx
+                        objects_per_frame[-1].append(orig_to_serial_ids[inst_id])
                     else:
-                        instance_masks[-1].append(np.zeros(metadata["orig_dims"]).astype(np.uint8))
-                instances_per_frame[-1] = sorted(instances_per_frame[-1])
+                        binary_masks[-1].append(np.zeros(metadata["orig_dims"]).astype(np.uint8))
+                objects_per_frame[-1] = sorted(objects_per_frame[-1])
 
-            instance_masks = np.stack([np.stack(masks) for masks in instance_masks])    # T,N,H,W
+            binary_masks = np.stack([np.stack(masks) for masks in binary_masks])    # T,N,H,W
             semantic_maps = np.stack(semantic_maps)                                     # T,H,W
 
             # resize
@@ -368,7 +367,7 @@ class KITTISTEPInferenceDataset(InferenceDataset):
                 )
                 if (new_height, new_width) != metadata["orig_dims"]:
                     images = resize_images(images, new_height, new_width)
-                    instance_masks = resize_masks(instance_masks, new_height, new_width, binary=True)
+                    binary_masks = resize_masks(binary_masks, new_height, new_width, binary=True)
                     semantic_maps = resize_masks(semantic_maps, new_height, new_width, binary=False)
             
             # arrange dimensions
@@ -377,13 +376,13 @@ class KITTISTEPInferenceDataset(InferenceDataset):
                 # BGR -> RGB (load_images uses cv2.imread which reads images in BGR mode by default)
                 images = np.flip(images, 1).copy()
 
-            metadata["instance_discovery"] = instance_discovery
+            metadata["object_discovery"] = object_discovery
             metadata["images"] = images
             metadata["padding_mask"] = np.zeros(metadata["orig_dims"]).astype('uint8')
-            metadata["instance_masks"] = instance_masks
+            metadata["binary_masks"] = binary_masks
             metadata["semantic_maps"] = semantic_maps
             # metadata["bg_masks"] = (semantic_maps==0).astype(np.uint8)
-            metadata["instances_per_frame"] = instances_per_frame
+            metadata["objects_per_frame"] = objects_per_frame
 
             metadata["clip_length"] = self.clip_length
             metadata["num_overlapping_frames"] = self.num_overlapping_frames
