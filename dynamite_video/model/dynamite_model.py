@@ -166,7 +166,7 @@ class DynamiteModel(nn.Module):
                 clip_mask_features = mask_features[clip_idx] if mask_features is not None else None
                 clip_multi_scale_features = multi_scale_features[clip_idx] if multi_scale_features is not None else None
                 
-                clip_outputs, _, clip_num_queries_per_object = self.sem_seg_head(inputs[clip_idx], 
+                clip_outputs, clip_num_queries_per_object = self.sem_seg_head(inputs[clip_idx], 
                                                                                 images[clip_idx],
                                                                                 features[clip_idx],
                                                                                 objects_per_frame[clip_idx],
@@ -279,7 +279,7 @@ class DynamiteModel(nn.Module):
                 clip_targets.append({
                     "labels": clip["objects_per_frame"][i],
                     "semantic_masks": clip["semantic_masks"][i].to(self.device),
-                    "ignore_masks": clip["ignore_masks"][i].to(self.device),
+                    "ignore_masks": clip["ignore_masks"][i].to(self.device) if clip["ignore_masks"] is not None else None, 
                     "binary_masks": clip["binary_masks"][i].to(self.device),
                     "bg_masks": clip["bg_masks"][i].to(self.device),
                     "padding_mask": clip["padding_mask"].to(self.device),

@@ -15,32 +15,48 @@ class SequenceManager:
     Sequence manager
     """
 
-    def __init__(self, video, dataset_meta, tfms):
+    def __init__(self, sequence, dataset_meta, tfms):
         """
         Initialize with information on the sequence data, including ground truth masks
 
         Args:
-            video: GenericVideoSequence
-            dataset_meta: g.t category labels
-            tfms: transformation info from configuration
+            sequence: GenericVideoSequence with following properties:
+                * id: sequence ID
+                * height: original height of sequence frames
+                * width: original width of sequence frames
+                * image_dims: (height, width)
+                * path_to_images: absolute path to the directory containing RGB images
+                * image_paths: relative path to individual frame RGBs
+                * max_class_id: maximum ID of the semantic classes in the sequence
+                * object_ids: IDs of objects present in the sequence
+                * object_categories: mapping between object ID and category ID
+                * orig_to_serial_id: mapping between original and serialized object IDs
+                * serial_to_orig_id: mapping between serialized and original object IDs
+                * segmentations: list of dicts, where each dict is an (object ID, RLE) pair
+
+            dataset_meta: dict with dataset level info on following properties:
+                * category_labels: mapping between category ID and label, e.g., 0: 'road'
+                * clip_length: int, length of each sub-sequence
+                * num_overlapping_frames: int, overlap between consecutive sub-sequences
+                * fps: sequence FPS
+            
+            tfms: transformation info from config, cfg.INPUT
         """
-        self.video = video
+        self.sequence = sequence
         
         self.clip_length = dataset_meta["clip_length"]
         self.num_overlapping_frames = dataset_meta["num_overlapping_frames"]
         self.category_labels = dataset_meta["category_labels"]
-        self.fps = dataset_meta["fps"]
-        
-        # arrays
-        self.images = video.load_images()       # T,H,W,3
-        (self.gt_binary_masks, self.gt_semantic_masks,
-         self.object_discovery, self.objects_per_frame,
-         self.object_ids, self.ignore_masks
-        ) = video.prepare_eval_masks()
+        self.fps = dataset_meta["fps"]    
 
-        self.apply_transformations(tfms)
+        self.object_discovery = self.sequence.get_object_discovery()
 
-        self.T, self.N, self.H, self.W = self.gt_binary_masks.shape
+        # resolutions
+        self.T = len(self.sequence)
+        self.N = len(self.sequence.object_ids)
+        self.orig_H = self.sequence.height
+        self.orig_W = self.sequence.width
+        self.H, self.W, self.resize, self.rgb = self.compute_tfm_sizes(tfms)
 
         # click radius - region around a existing click that is excluded when sampling a new click
         self.click_radius = 5
@@ -48,61 +64,172 @@ class SequenceManager:
         # 0: new click avoids all the previously sampled click locations
         # 1: new click avoids all locations upto radius=self.click_radius around all prev sampled clicks
         self.sampling_strategy = 1
-        self.not_clicked_map = np.ones_like(self.gt_semantic_masks, dtype=np.bool_)
-        
+        self.not_clicked_map = np.ones((self.T, self.H, self.W), dtype=np.bool_)
+        self.t = 1
+
         # initialize buffers
         # foreground clicks sampled on each object in each frame
-        self.fg_coords_list = [[[] for _ in range(self.num_objects)] for _ in range(len(self.video))]
+        self.fg_coords_list = [[[] for _ in range(self.N)] for _ in range(self.T)]
         # background clicks sampled on each frame
-        self.bg_coords_list = [[] for _ in range(len(self.video))]
+        self.bg_coords_list = [[] for _ in range(self.T)]
         # time stamp of the latest click on each frame
-        self.max_timestamps = np.zeros(len(self.video)).astype('int').tolist()
+        self.max_timestamps = np.zeros(self.T).astype(np.uint16)
         # num clicks on each object in each frame
-        self.num_clicks_per_object = np.zeros((len(self.video), self.num_objects)).astype('int').tolist()
+        self.num_clicks_per_object = np.zeros((self.T, self.N), dtype=np.uint16)
         # num clicks per frame
-        self.num_clicks_per_frame = np.zeros(len(self.video)).astype('int').tolist()
-
-        # get initial clicks on object center
-        self.get_gt_clicks()
+        self.num_clicks_per_frame = np.zeros(self.T).astype(np.uint16)
         
-        self.pred_masks = np.zeros_like(self.gt_binary_masks)
-        self.pred_semantic_maps = np.zeros_like(self.gt_semantic_masks)
-
     
-    @property
-    def num_objects(self):
-        return len(self.video.object_ids)
-
-    @property
-    def num_frames(self):
-        return len(self.video)
-    
-    
-    def apply_transformations(self, tfms):
+    def compute_tfm_sizes(self, tfms):
         """
-        Apply test-time transformations
+        Compute transformed resolution
+
+        tfms: transformation info from config, cfg.INPUT
         """
         if tfms.AUGMENTATION.RESIZE_TEST:
-            # compute target resolution
-            new_height, new_width = compute_resized_dims(*self.images.shape[1:3], 
+            new_height, new_width = compute_resized_dims(self.orig_H, self.orig_W,
                                                         min_dim=tfms.AUGMENTATION.MIN_DIM_TEST,
                                                         max_dim=tfms.AUGMENTATION.MAX_DIM_TEST,
                                                     )
-            if (new_height, new_width) != self.video.image_dims:
-                self.images = resize_images(self.images, new_height, new_width)
-                self.gt_binary_masks = resize_masks(self.gt_binary_masks, new_height, new_width, binary=True)
-                self.gt_semantic_masks = resize_masks(self.gt_semantic_masks, new_height, new_width, binary=False)
-                self.ignore_masks = resize_masks(self.ignore_masks, new_height, new_width, binary=False)
+            return new_height, new_width, True, tfms.RGB
+        return self.orig_H, self.orig_W, False, tfms.RGB
         
-        # arrange dimensions
-        self.images= np.transpose(self.images, (0, 3, 1, 2))   # [T,H,W,3] -> [T,3,H,W]
-        if tfms.RGB:
-            # BGR -> RGB (load_images uses cv2.imread which reads images in BGR mode by default)
-            self.images = np.flip(self.images, 1).copy()
+
+    def generate_clip_indices(self, start):
+        """
+        Given a start index, generate list of indices of clips from the sequence.
+        If the start index is in the middle of the sequence, it generates clips in
+        both forward and backward directions.
+
+        Args:
+            start: int, index of the first frame of the first clip
+        """
+        start_copy = start
+        indices = []
+        step = self.clip_length - self.num_overlapping_frames
+        if start < self.T - 1:
+            while start + self.clip_length <= self.T:
+                indices.append(list(range(start, start + self.clip_length)))
+                start += step
+            if len(indices) > 0 and indices[-1][-1] != self.T - 1:
+                indices.append(list(range(indices[-1][-1] - self.num_overlapping_frames+1, self.T)))
+            elif len(indices) == 0:
+                indices.append(list(range(start, self.T)))
+
+        # generate clips that go back in time
+        if start_copy>0:
+            bwd = []
+            start_copy = min(start_copy+self.num_overlapping_frames-1, self.T-1)
+            while start_copy - self.clip_length >= 0:
+                bwd.append(list(range(start_copy, start_copy-self.clip_length, -1)))
+                start_copy -= step
+            if len(bwd) > 0 and bwd[-1][-1] != 0:
+                bwd.append(list(range(bwd[-1][-1] + self.num_overlapping_frames-1, -1, -1)))
+            elif len(bwd) == 0:
+                bwd.append(list(range(start_copy, -1, -1)))
+            indices.extend(bwd)
+        return indices
+
+    
+    def extract_clip(self, _indices):
+        """
+        Given a list of frame indices, extract a clip consisting of these indices 
+        from the whole sequence.
+
+        Indices may be incremental or decremental. In case of the latter, the clip
+        is temporally reversed. The reversed indices are important in finding the
+        overlapping frames, but for the rest of the workflow the indices are reversed
+        once more (turning them incremental)
+
+        Args:
+            _indices: list(int)
+
+        Returns:
+            clip: dict. The format should be consistent with that of the batch input for 
+                training pass, i.e., inputs argument in `DynamiteModel.forward()`. See 
+                `TraininMapper` for more details.
+        """
+        indices = _indices
+        # indices - always incremental, _indices - true order
+        if len(indices) >= 2 and indices[1] < indices[0]:
+            indices = _indices[::-1]
+
+        clip = self.sequence.extract_subsequence(indices)
+
+        # load images [T,H,W,3]
+        clip_images = clip.load_images()
+
+        # load binary instance masks [T,N,H,W]
+        clip_binary_masks, clip_objects_per_frame, clip_object_ids, _ = clip.prepare_masks()
+
+        # transformations
+        if self.resize:
+            clip_images = resize_images(clip_images, self.H, self.W)
+            clip_binary_masks = resize_masks(clip_binary_masks, self.H, self.W, binary=True)
+
+        clip_images = np.transpose(clip_images, (0, 3, 1, 2))   # [T, H, W, 3] -> [T, 3, H, W]
+        if self.rgb:                                  # BGR -> RGB
+            clip_images = np.flip(clip_images, 1).copy()
         
-        self.gt_bg_masks = (self.gt_semantic_masks == 0).astype(np.uint8)    # [T,H,W]
+        # sample clicks
+        clip_fg_coords_list = [[[] for _ in range(len(clip.object_ids))] for _ in range(len(clip))]
+        clip_bg_coords_list = [[] for _ in range(len(clip))]
+        clip_num_clicks_per_object = np.zeros((len(clip), len(clip.object_ids)), dtype=np.uint16)
+        clip_max_timestamp_list = np.zeros(len(clip)).astype(np.uint16)
+        
+        for local_obj_id in clip_object_ids:
+            
+            # global frame index
+            global_obj_id = clip.serial_to_orig_id[local_obj_id]
+            global_fr_idx = self.object_discovery[global_obj_id]
+            # local frame index
+            local_fr_idx = indices.index(global_fr_idx)
+            
+            # mask of specified object in the frame
+            obj_mask = clip_binary_masks[local_fr_idx][local_obj_id]
+            
+            # center coordinates of the foreground mask
+            center_coords = get_center_coords(obj_mask)
+
+            # update not_clicked_map
+            if self.sampling_strategy == 0:
+                self.not_clicked_map[global_fr_idx][center_coords[0], center_coords[1]] = False
+            elif self.sampling_strategy == 1:
+                _pm = create_circular_mask(self.H, self.W, centers=[[center_coords[0], center_coords[1]]], radius=self.click_radius)
+                self.not_clicked_map[global_fr_idx][np.where(_pm)] = False
+            else:
+                raise NotImplementedError
+            
+            clip_fg_coords_list[local_fr_idx][local_obj_id].append([center_coords[0], center_coords[1], local_obj_id, local_fr_idx, self.t])
+            clip_num_clicks_per_object[local_fr_idx][local_obj_id-1] += 1
+            clip_max_timestamp_list[local_fr_idx] = self.t
+            
+            # record sampled click
+            self.fg_coords_list[global_fr_idx][global_obj_id-1].append([center_coords[0], center_coords[1], global_obj_id, global_fr_idx, self.t])
+            self.num_clicks_per_object[global_fr_idx][global_obj_id-1] += 1
+            self.num_clicks_per_frame[global_fr_idx] += 1
+            self.max_timestamps[global_fr_idx] = self.t
+            self.t+=1
 
 
+        return {
+            "images": clip_images,
+            "binary_masks": None,
+            "semantic_masks": None,
+            "padding_mask": None,
+            "bg_masks": None,
+            "ignore_masks": None,
+            # "object_ids": None,
+            "objects_per_frame": clip_objects_per_frame,
+            # "frame_object_occupancy": None,
+            "num_clicks_per_object": clip_num_clicks_per_object,
+            "fg_coords_list": clip_fg_coords_list,
+            "bg_coords_list": clip_bg_coords_list,
+            "max_timestamp_list": clip_max_timestamp_list,
+            # "meta": None,
+        }
+    
+    
     def get_gt_clicks(self):
         """
         For each object present in the sequence, go to the frame where the object 
@@ -203,46 +330,10 @@ class SequenceManager:
         return obj_index
 
 
-    def create_clip_indices(self, start):
-        """
-        Given a start index, generate list of indices of clips from the sequence.
-        If the start index is in the middle of the sequence, it generates clips in
-        both forward and backward directions.
-
-        Args:
-            start: int, index of the first frame of the first clip
-
-        Returns:
-            indices: list of indices of clips
-        """
-        start_copy = start
-        indices = []
-        step = self.clip_length - self.num_overlapping_frames
-        if start < self.sequence_length - 1:
-            while start + self.clip_length <= self.sequence_length:
-                indices.append(tuple(range(start, start + self.clip_length)))
-                start += step
-            if len(indices) > 0 and indices[-1][-1] != self.sequence_length - 1:
-                indices.append(tuple(range(indices[-1][-1] - self.num_overlapping_frames+1, self.sequence_length)))
-            elif len(indices) == 0:
-                indices.append(tuple(range(start, self.sequence_length)))
-
-        # generate clips that go back in time
-        if start_copy>0:
-            bwd = []
-            start_copy = min(start_copy+self.num_overlapping_frames-1, self.sequence_length-1)
-            while start_copy - self.clip_length >= 0:
-                bwd.append(tuple(range(start_copy, start_copy-self.clip_length, -1)))
-                start_copy -= step
-            if len(bwd) > 0 and bwd[-1][-1] != 0:
-                bwd.append(tuple(range(bwd[-1][-1] + self.num_overlapping_frames-1, -1, -1)))
-            elif len(bwd) == 0:
-                bwd.append(tuple(range(start_copy, -1, -1)))
-            indices.extend(bwd)
-        return indices
     
     
-    def extract_clip(self, _indices):
+    
+    def extract_clip_2(self, _indices):
         """
         Given a list of frame indices, extract a clip consisting of these indices 
         from the whole sequence.

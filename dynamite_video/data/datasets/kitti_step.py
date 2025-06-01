@@ -244,6 +244,8 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
         annotations_content = self.map_annotations(json_annotations)
 
         self.videos, self.meta = parse_generic_video_dataset(self.path_to_images, annotations_content, serialize=True)
+        del annotations_content
+        
         self.meta["clip_length"] = self.clip_length
         self.meta["num_overlapping_frames"] = self.num_overlapping_frames
         self.meta["fps"] = self.fps
@@ -269,33 +271,22 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
             
             updated_segmentations = []
             accepted_track_ids = {}
-            ignore_masks = []
-            objects_per_frame = []
             
             # read semantic maps - all of them, regardless of their size
             for fr_idx, sem_masks in enumerate(seq["semantic_segmentations"]):
                 updated_segmentations.append(dict())
-                ignore_masks.append([])
-                objects_per_frame.append([])
                 
-                for class_id, sem_seg_rle in sem_masks.items():    
-                    sem_seg_msk = self.decode_mask(sem_seg_rle, img_dims)
-                    
+                for class_id, sem_seg_rle in sem_masks.items():
+
                     # ignore 'void' class
                     if class_id == '255':
-                        ignore_masks[-1] = sem_seg_msk
                         continue
                     
                     # lowest class_id could be 0
-                    if sem_seg_msk.sum() >= MIN_MASK_AREA:
+                    if self.mask_area(sem_seg_rle, img_dims) >= MIN_MASK_AREA:
                         track_id = int(class_id) + 1
-                        updated_segmentations[-1][track_id] = sem_seg_msk
+                        updated_segmentations[-1][track_id] = sem_seg_rle
                         accepted_track_ids[track_id] = int(class_id)
-                        objects_per_frame[-1].append(track_id)
-                
-                if len(ignore_masks[-1]) == 0:
-                    # if no void mask found, add an empty one   (e.g., in sequence '0009')
-                    ignore_masks[-1] = np.zeros(img_dims).astype(np.uint8)
 
             # NOTE: the semantic classes in KITTI_STEP have IDs from 0-18 (and void/255).
             # The instance segmentations have their independent IDs that overlap with the
@@ -313,32 +304,32 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
 
                     # new track ID
                     new_track_id = max_class_id + 1 + int(track_id)
-                    updated_segmentations[fr_idx][new_track_id] = inst_msk
+                    updated_segmentations[fr_idx][new_track_id] = inst_rle
                     accepted_track_ids[new_track_id] = seq['categories'][track_id]
-                    objects_per_frame[fr_idx].append(new_track_id)
                 
                     # cut out holes from the semantic map of the salient classes where instance masks are available
                     class_id = int(seq['categories'][track_id]) + 1
-                    sem_mask = updated_segmentations[fr_idx][class_id]
+                    sem_mask = self.decode_mask(updated_segmentations[fr_idx][class_id], img_dims) # updated_segmentations[fr_idx][class_id]
                     sem_mask[np.where(inst_msk==1)] = 0
                     
-                    updated_segmentations[fr_idx][class_id] = sem_mask
+                    updated_segmentations[fr_idx][class_id] = mt.encode(np.asfortranarray(sem_mask))["counts"].decode('utf-8')
                     updated_class_ids.add(class_id)
                     
                 for class_id in updated_class_ids:
                     sem_mask = updated_segmentations[fr_idx][class_id]
-                    if sem_mask.sum() < MIN_MASK_AREA:
+                    if self.mask_area(sem_mask, img_dims) < MIN_MASK_AREA:
                         updated_segmentations[fr_idx].pop(class_id, None)
-                        ignore_masks[fr_idx][np.where(sem_mask==1)] = 1
-                        objects_per_frame[fr_idx].remove(class_id)
             
             seq["segmentations"] = updated_segmentations
-            seq["ignore_masks"] = ignore_masks
+            seq["ignore_masks"] = None
             seq["categories"] = accepted_track_ids
             seq["max_class_id"] = max_class_id
 
             seq.pop("semantic_segmentations")
             sequences.append(seq)
+
+            if len(sequences) == 2:
+                break
         
         # store category id to name mapping
         meta_info = content["meta"]["category_labels"]

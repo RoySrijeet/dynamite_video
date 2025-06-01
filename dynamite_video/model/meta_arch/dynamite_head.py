@@ -109,6 +109,6 @@ class DynamiteHead(nn.Module):
                                                                                                       bg_coords, 
                                                                                                       max_timestamp)
         if self.training:
-            return predictions, num_clicks_per_object, num_queries_per_object
+            return predictions, num_queries_per_object
         else:
             return predictions, mask_features, multi_scale_features, num_clicks_per_object, num_queries_per_object

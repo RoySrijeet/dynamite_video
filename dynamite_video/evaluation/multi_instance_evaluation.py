@@ -65,13 +65,28 @@ def evaluate(cfg,
         
         for video in dataset:
 
+            # a fresh model for each sequence
+            predictor = Predictor(model)
+            
             manager = SequenceManager(video, dataset_meta, cfg.INPUT)
-            print(manager.video.id)
+            
+            # round 1
+            round_num = 1
+            lowest_frame_index = 0
+
+            # generate indices of shorter sub-sequences or clips from the whole sequence
+            clip_indices = manager.generate_clip_indices(start=lowest_frame_index)
+
+            # make predictions for one clip at a time
+            for indices in clip_indices:
+
+                clip = manager.extract_clip(indices)
+
+            del manager
 
             continue
             
-            # a fresh model for each sequence
-            predictor = Predictor(model)
+            
 
             # ground truth semantic maps [T,H,W] of the sequence frames
             gt_semantic_maps = manager.gt_semantic_maps

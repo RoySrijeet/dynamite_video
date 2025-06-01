@@ -53,15 +53,15 @@ class TrainingMapper:
         if self.cfg.INPUT.AUGMENTATION.COLOR_AUG:
             images = apply_color_augmentation(images)
 
-        meta_info = {
-            "orig_dims": images.shape[1:3],
-            "seq_name": video.id,
-            "frame_indices": frame_indices,
-            "orig_to_serial_id": clip.orig_to_serial_id, 
-            "serial_to_orig_id": clip.serial_to_orig_id, 
-            "max_class_id": clip.max_class_id,
-            "object_categories": clip.object_categories
-        }
+        # meta_info = {
+        #     "orig_dims": images.shape[1:3],
+        #     "seq_name": video.id,
+        #     "frame_indices": frame_indices,
+        #     "orig_to_serial_id": clip.orig_to_serial_id, 
+        #     "serial_to_orig_id": clip.serial_to_orig_id, 
+        #     "max_class_id": clip.max_class_id,
+        #     "object_categories": clip.object_categories
+        # }
         
         # data augmentations
         images, binary_masks, ignore_masks = apply_random_flip(images, 
@@ -129,13 +129,13 @@ class TrainingMapper:
             "semantic_masks": torch.as_tensor(semantic_masks, dtype=torch.uint8),
             "padding_mask": torch.as_tensor(padding_mask, dtype=torch.uint8),
             "bg_masks": torch.as_tensor(bg_masks, dtype=torch.uint8),
-            "ignore_masks": torch.as_tensor(ignore_masks, dtype=torch.bool),
-            "object_ids": object_ids,
+            "ignore_masks": None, #torch.as_tensor(ignore_masks, dtype=torch.bool),
+            # "object_ids": object_ids,
             "objects_per_frame": objects_per_frame,
-            "frame_object_occupancy": dict(frame_object_occupancy),
+            # "frame_object_occupancy": dict(frame_object_occupancy),
             "num_clicks_per_object": num_clicks_per_object,
             "fg_coords_list": fg_coords_list,
             "bg_coords_list": bg_coords_list,
             "max_timestamp_list": max_timestamp_list,
-            "meta": meta_info,
+            # "meta": meta_info,
         }

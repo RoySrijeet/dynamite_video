@@ -274,6 +274,8 @@ class GenericVideoSequence(object):
         
         # IDs of objects present in each frame
         objects_per_frame = []
+
+        zero_mask = np.zeros(self.image_dims).astype('uint8')
         
         for fr_idx, fr_masks in enumerate(self.segmentations):
             objects_per_frame.append(sorted(fr_masks.keys()))
@@ -289,7 +291,7 @@ class GenericVideoSequence(object):
                     # record
                     binary_masks_fr.append(_m)
                 else:
-                    binary_masks_fr.append(np.zeros(self.image_dims).astype('uint8'))
+                    binary_masks_fr.append(zero_mask)
 
             binary_masks.append(binary_masks_fr)
         
@@ -302,44 +304,16 @@ class GenericVideoSequence(object):
             ignore_masks = np.stack(ignore_masks)
         
         return binary_masks, objects_per_frame, self.object_ids, ignore_masks
-            
 
-    def prepare_eval_masks(self):
-        """
-        self.segmentations contains np.ndarray masks as list. Simply aggregate them.
-
-        NOTE: used only during evaluation
-        """
-
-        # binary masks of each frame in the clip is made to have same no. 
-        # of channels as the total number of objects in the clip. So, if 
-        # an object is not present in a frame, add an empty mask
-        H, W = self.image_dims
-        T = len(self.segmentations)
-        N = len(self.object_ids)
-
-        binary_masks = np.zeros((T, N, H, W), dtype='uint8')
-        semantic_masks = np.zeros((T, H, W), dtype='uint8')
-        objects_per_frame = []
+    
+    def get_object_discovery(self):
         object_discovery = {}
-
-        for fr_idx, fr_masks in enumerate(self.segmentations):
-            objects_per_frame.append(sorted(fr_masks.keys()))
-            
-            for n, obj_id in enumerate(self.object_ids):
-                mask = fr_masks.get(obj_id)
-                if mask is not None:
-                    binary_masks[fr_idx, n] = mask
-                    semantic_masks[fr_idx][mask == 1] = obj_id
-                    if obj_id not in object_discovery.keys() and mask.sum()>=64:
-                        object_discovery[obj_id] = fr_idx
-
-        ignore_masks = (
-            np.stack(self.ignore_masks) if self.ignore_masks is not None else None
-        )
-        
-        return binary_masks, semantic_masks, object_discovery, objects_per_frame, self.object_ids, ignore_masks
-
+        for fr_idx, fr_rles in enumerate(self.segmentations):
+            for obj_id, _ in fr_rles.items():
+                if obj_id not in object_discovery:
+                    object_discovery[obj_id] = fr_idx
+        return object_discovery
+    
     
     def extract_subsequence(self, frame_idxes: List[int], object_ids_to_keep: List[int]=None, new_id: str=""):
         """
