@@ -149,10 +149,10 @@ class TrainingDataset(Dataset, ABC):
         return train_samples
 
 
-######################### INFERENCE DATASET BASE ###################################
+######################### EVALUATION DATASET BASE ###################################
 
 
-class InferenceDataset(Dataset):
+class EvaluationDataset(Dataset):
     def __init__(
         self, 
         cfg, 

@@ -7,7 +7,7 @@ from collections import defaultdict
 from PIL import Image
 from typing import Dict
 
-from dynamite_video.data.datasets.base import TrainingDataset, InferenceDataset
+from dynamite_video.data.datasets.base import TrainingDataset, EvaluationDataset
 from dynamite_video.data.generic_video_parser import GenericVideoSequence, parse_generic_video_dataset
 from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks
 from dynamite_video.data.utils.file_packer import FilePackReader
@@ -163,24 +163,24 @@ class CITYSCAPESVPSTrainingDataset(TrainingDataset):
         })
 
 
-########################### INFERENCE DATASET ###########################
+########################### EVALUATION DATASET ###########################
 
 
-class CITYSCAPESVPSInferenceDataset(InferenceDataset):
+class CITYSCAPESVPSEvaluationDataset(EvaluationDataset):
     """
-    Inference dataset for CITYSCAPES_VPS
+    Evaluation dataset for CITYSCAPES_VPS
     """
 
     def __init__(self, cfg):
         # number of frames in each training sample
-        clip_length = cfg.DATASETS.CITYSCAPES_VPS.INFERENCE.CLIP_LENGTH
+        clip_length = cfg.DATASETS.CITYSCAPES_VPS.EVALUATION.CLIP_LENGTH
         # video fps
-        fps = cfg.DATASETS.CITYSCAPES_VPS.INFERENCE.FPS
+        fps = cfg.DATASETS.CITYSCAPES_VPS.EVALUATION.FPS
         # number of overlapping frames between clips
-        num_overlapping_frames = cfg.DATASETS.CITYSCAPES_VPS.INFERENCE.FRAME_OVERLAP
+        num_overlapping_frames = cfg.DATASETS.CITYSCAPES_VPS.EVALUATION.FRAME_OVERLAP
 
         assert num_overlapping_frames <= clip_length, f"No. of overlapping frames cannot be more than the length of a clip"
         
-        split = cfg.DATASETS.CITYSCAPES_VPS.INFERENCE.SPLIT
+        split = cfg.DATASETS.CITYSCAPES_VPS.EVALUATION.SPLIT
         
         super().__init__(cfg, "CITYSCAPES_VPS", clip_length, fps, num_overlapping_frames, split)

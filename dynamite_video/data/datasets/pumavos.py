@@ -6,7 +6,7 @@ from collections import defaultdict
 from PIL import Image
 from typing import Dict
 
-from dynamite_video.data.datasets.base import TrainingDataset, InferenceDataset
+from dynamite_video.data.datasets.base import TrainingDataset, EvaluationDataset
 from dynamite_video.data.generic_video_parser import GenericVideoSequence, parse_generic_video_dataset
 from dynamite_video.data.utils.file_packer import FilePackReader
 from dynamite_video.utils.paths import Paths
@@ -147,7 +147,7 @@ class PUMAVOSTrainingDataset(TrainingDataset):
         return bin_mask.sum()
 
 
-class PUMAVOSInferenceDataset(InferenceDataset):
+class PUMAVOSEvaluationDataset(EvaluationDataset):
     
     def __init__(self):
         raise NotImplementedError

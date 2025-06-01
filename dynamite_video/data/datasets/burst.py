@@ -5,7 +5,7 @@ import pycocotools.mask as mt
 from collections import defaultdict
 from typing import Dict
 
-from dynamite_video.data.datasets.base import TrainingDataset, InferenceDataset
+from dynamite_video.data.datasets.base import TrainingDataset, EvaluationDataset
 from dynamite_video.data.generic_video_parser import GenericVideoSequence, parse_generic_video_dataset
 from dynamite_video.data.utils.file_packer import FilePackReader
 from dynamite_video.utils.paths import Paths
@@ -143,9 +143,9 @@ class BURSTTrainingDataset(TrainingDataset):
         })
 
 
-########################### INFERENCE DATASET ###########################
+########################### EVALUATION DATASET ###########################
 
 
-class BURSTInferenceDataset(InferenceDataset):
+class BURSTEvaluationDataset(EvaluationDataset):
     ...
 

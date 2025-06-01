@@ -19,7 +19,6 @@ class Evaluator(DefaultTrainer):
             model: trained model (with weights already loaded)
         """
         
-        
         logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="Evaluator")
 
         eval_datasets = args.eval_datasets
@@ -41,30 +40,27 @@ class Evaluator(DefaultTrainer):
         if save_vis:
             logger.info(f"Visualizations saved to: {cfg.OUTPUT_DIR}")
 
-
-        # assert iou_threshold >= 0.80
-
         # Evaluate one dataset at a time
         for dataset_name in eval_datasets:
             
-            logger.info(f"Loading dataset: {dataset_name} ...")
+            # load sequence info from disc into `GenericVideoSequence` format
+            dataset, dataset_meta = build_evaluation_dataset(cfg, dataset_name)
             
-            # build clips from input dataset
-            data = build_evaluation_dataset(cfg, dataset_name)
+            # if cfg.ITERATIVE.TEST.SINGLE_INSTANCE:
+            #     from dynamite_video.evaluation.single_instance_evaluation import evaluate
+            # else:
+            #     from dynamite_video.evaluation.multi_instance_evaluation import evaluate
+            from dynamite_video.evaluation.multi_instance_evaluation import evaluate
             
-            if cfg.ITERATIVE.TEST.SINGLE_INSTANCE:
-                from dynamite_video.evaluation.single_instance_evaluation import evaluate
-            else:
-                from dynamite_video.evaluation.multi_instance_evaluation import evaluate
-            
-            result = evaluate(model,
-                            data,
+            result = evaluate(cfg,
+                            model,
+                            dataset,
+                            dataset_meta,
                             iou_threshold=iou_threshold,
                             max_interactions=max_interactions,
                             max_rounds=max_rounds,
                             eval_strategy=eval_strategy,
                             seed_id=seed_id,
-                            output_path=cfg.OUTPUT_DIR,
                             save_vis=save_vis,
             )
         

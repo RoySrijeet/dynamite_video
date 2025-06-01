@@ -3,12 +3,10 @@ import json
 import numpy as np
 import pycocotools.mask as mt
 
-from collections import defaultdict
 from typing import Dict
 
-from dynamite_video.data.datasets.base import TrainingDataset, InferenceDataset
+from dynamite_video.data.datasets.base import TrainingDataset, EvaluationDataset
 from dynamite_video.data.generic_video_parser import GenericVideoSequence, parse_generic_video_dataset
-from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks
 from dynamite_video.data.utils.file_packer import FilePackReader
 from dynamite_video.utils.paths import Paths
 
@@ -181,12 +179,12 @@ class KITTISTEPTrainingDataset(TrainingDataset):
         return np.ascontiguousarray(mt.decode(encoded_mask)).astype(np.uint8)
 
 
-########################### INFERENCE DATASET ###########################
+########################### EVALUATION DATASET ###########################
 
 
-class KITTISTEPInferenceDataset(InferenceDataset):
+class KITTISTEPEvaluationDataset(EvaluationDataset):
     """
-    Inference dataset for KITTI_STEP
+    Evaluation dataset for KITTI_STEP
 
     NOTE: KITTI-STEP training dataset (21 sequences) is split into train (12) and val (9) datasets.
     Annotations for KITTI-STEP test dataset (29 different sequences) was not available
@@ -194,15 +192,15 @@ class KITTISTEPInferenceDataset(InferenceDataset):
 
     def __init__(self, cfg):
         # number of frames in each training sample
-        clip_length = cfg.DATASETS.KITTI_STEP.INFERENCE.CLIP_LENGTH
+        clip_length = cfg.DATASETS.KITTI_STEP.EVALUATION.CLIP_LENGTH
         # video fps
-        fps = cfg.DATASETS.KITTI_STEP.INFERENCE.FPS
+        fps = cfg.DATASETS.KITTI_STEP.EVALUATION.FPS
         # number of overlapping frames between clips
-        num_overlapping_frames = cfg.DATASETS.KITTI_STEP.INFERENCE.FRAME_OVERLAP
+        num_overlapping_frames = cfg.DATASETS.KITTI_STEP.EVALUATION.FRAME_OVERLAP
 
         assert num_overlapping_frames <= clip_length, f"No. of overlapping frames cannot be more than the length of a clip"
         
-        split = cfg.DATASETS.KITTI_STEP.INFERENCE.SPLIT
+        split = cfg.DATASETS.KITTI_STEP.EVALUATION.SPLIT
         
         super().__init__(cfg, "KITTI_STEP", clip_length, fps, num_overlapping_frames, split)
 
@@ -235,7 +233,7 @@ class KITTISTEPInferenceDataset(InferenceDataset):
                     continue
                 val_anno["sequences"].append(trainval_annotations["sequences"][i])
             val_anno["meta"] = trainval_annotations["meta"]
-            self.annotations = val_anno
+            json_annotations = val_anno
             
             del trainval_annotations
 
@@ -243,151 +241,114 @@ class KITTISTEPInferenceDataset(InferenceDataset):
             assert self.split == "test"
             raise RuntimeError(f"Annotations for KITTI-STEP test split is not available")
 
+        annotations_content = self.map_annotations(json_annotations)
 
-    def create_inference_dataset(self):
+        self.videos, self.meta = parse_generic_video_dataset(self.path_to_images, annotations_content, serialize=True)
+        self.meta["clip_length"] = self.clip_length
+        self.meta["num_overlapping_frames"] = self.num_overlapping_frames
+        self.meta["fps"] = self.fps
+        self.meta["split"] = self.split
+    
+
+    def map_annotations(self, content):
         """
         Read KITTI-STEP evaluation annotations from JSON
 
         Returns a dictionary with annotation content from the entire dataset
         """
         sequences = []
-        MIN_MASK_AREA = 400
+        
+        MIN_MASK_AREA = 1 #self.cfg.TRAINING.MIN_MASK_AREA
 
-        for seq in self.annotations["sequences"]:
+        for seq in content["sequences"]:
 
-            metadata = {"id": seq["id"]}
+            seq["id"] =  f"{self.name}/{seq['id']}"
+            seq["dataset"] = self.name
 
-            # load images
-            image_filepaths = sorted([os.path.join(self.path_to_images, seq["id"], file) for file in os.listdir(os.path.join(self.path_to_images, seq["id"])) if file.endswith('png')])
-            images = self.load_images(image_filepaths)      # [T, H, W, 3]
-            
-            metadata["length"] = len(image_filepaths)
-            metadata["orig_dims"] = (images.shape[1], images.shape[2])
+            img_dims = (seq["height"], seq["width"])
             
             updated_segmentations = []
             accepted_track_ids = {}
+            ignore_masks = []
             objects_per_frame = []
-            # read semantic maps
+            
+            # read semantic maps - all of them, regardless of their size
             for fr_idx, sem_masks in enumerate(seq["semantic_segmentations"]):
-                updated_segmentations.append({})
+                updated_segmentations.append(dict())
+                ignore_masks.append([])
                 objects_per_frame.append([])
-
+                
                 for class_id, sem_seg_rle in sem_masks.items():    
-                    if class_id == '255':
-                        continue    # ignore 'void' class
+                    sem_seg_msk = self.decode_mask(sem_seg_rle, img_dims)
                     
-                    np_msk = self.decode_mask(sem_seg_rle, metadata["orig_dims"])
-                    if np_msk.sum() >= MIN_MASK_AREA:
-                        # lowest class_id could be 0, start from 1
+                    # ignore 'void' class
+                    if class_id == '255':
+                        ignore_masks[-1] = sem_seg_msk
+                        continue
+                    
+                    # lowest class_id could be 0
+                    if sem_seg_msk.sum() >= MIN_MASK_AREA:
                         track_id = int(class_id) + 1
-                        updated_segmentations[-1][track_id] = np_msk
+                        updated_segmentations[-1][track_id] = sem_seg_msk
                         accepted_track_ids[track_id] = int(class_id)
                         objects_per_frame[-1].append(track_id)
+                
+                if len(ignore_masks[-1]) == 0:
+                    # if no void mask found, add an empty one   (e.g., in sequence '0009')
+                    ignore_masks[-1] = np.zeros(img_dims).astype(np.uint8)
 
             # NOTE: the semantic classes in KITTI_STEP have IDs from 0-18 (and void/255).
             # The instance segmentations have their independent IDs that overlap with the
-            # class IDs. To resolve this issue, the instances are assigned a new id as 
-            # follows: new_id = max_track_id + 1 + real_id where max_track_id is the ID
-            # of the highest class ID            
-            max_track_id = max(accepted_track_ids.keys())
+            # class IDs. To resolve this issue, the objects are assigned a new id as 
+            # follows: new_id = max_class_id + 1 + real_id where max_class_id is the ID
+            # of the highest class ID
+            
+            max_class_id = max(accepted_track_ids.keys())
             
             # read instance masks
             for fr_idx, fr_inst_masks in enumerate(seq["segmentations"]):
-
-                # store the class-wise object masks for each salient/'thing' class appearing in the frame. 
-                # This is used to create a hole in the semantic map where object-level masks are available
-                overlapping_masks = defaultdict(list)
-
+                updated_class_ids = set()
                 for track_id, inst_rle in fr_inst_masks.items():
+                    inst_msk = self.decode_mask(inst_rle, img_dims)
 
-                    np_msk = self.decode_mask(inst_rle, metadata["orig_dims"])
-                    if np_msk.sum() >= MIN_MASK_AREA:
-                        # new track ID
-                        new_track_id = max_track_id + 1 + int(track_id)
-                        updated_segmentations[fr_idx][new_track_id] = np_msk
-                        accepted_track_ids[new_track_id] = seq['categories'][track_id]
-                        overlapping_masks[int(seq['categories'][track_id]) + 1].append(np_msk)
-                        objects_per_frame[fr_idx].append(new_track_id)
-            
-                # objects of the salient/'thing' classes are potentially overlapping
-                if len(overlapping_masks) == 0:
-                    continue
+                    # new track ID
+                    new_track_id = max_class_id + 1 + int(track_id)
+                    updated_segmentations[fr_idx][new_track_id] = inst_msk
+                    accepted_track_ids[new_track_id] = seq['categories'][track_id]
+                    objects_per_frame[fr_idx].append(new_track_id)
                 
-                for thing_class_id in overlapping_masks.keys():
-                    # for each of the salient/'thing' classes, obtain its semantic map
-                    sem_mask = updated_segmentations[fr_idx][thing_class_id]
-
-                    # cut out holes from the semantic map of the salient/'thing' classes where object masks are available
-                    for inst_mask in overlapping_masks[thing_class_id]:
-                        sem_mask[np.where(inst_mask==1)] = 0
-                
-                    # if the remaining semantic map is not big enough, get rid of 
-                    # the correcponding entry. Otherwise, save the updated map.
-                    if sem_mask.sum() >= MIN_MASK_AREA:
-                        updated_segmentations[fr_idx][thing_class_id] = sem_mask
-                    else:
-                        updated_segmentations[fr_idx].pop(thing_class_id, None)
-                        objects_per_frame[fr_idx].remove(thing_class_id)
-
-            orig_object_ids = sorted(set(num for sublist in objects_per_frame for num in sublist))
-            orig_to_serial_ids, serial_to_orig_ids = self.serialize_instance_ids(orig_object_ids)
-            assert orig_object_ids == list(orig_to_serial_ids.keys())
-            metadata["orig_to_serial_ids"] = orig_to_serial_ids
-            metadata["serial_to_orig_ids"] = serial_to_orig_ids
+                    # cut out holes from the semantic map of the salient classes where instance masks are available
+                    class_id = int(seq['categories'][track_id]) + 1
+                    sem_mask = updated_segmentations[fr_idx][class_id]
+                    sem_mask[np.where(inst_msk==1)] = 0
+                    
+                    updated_segmentations[fr_idx][class_id] = sem_mask
+                    updated_class_ids.add(class_id)
+                    
+                for class_id in updated_class_ids:
+                    sem_mask = updated_segmentations[fr_idx][class_id]
+                    if sem_mask.sum() < MIN_MASK_AREA:
+                        updated_segmentations[fr_idx].pop(class_id, None)
+                        ignore_masks[fr_idx][np.where(sem_mask==1)] = 1
+                        objects_per_frame[fr_idx].remove(class_id)
             
-            object_discovery = {}
-            objects_per_frame = []
-            binary_masks = []
-            semantic_maps = []
-            for fr_idx, mask_dict in enumerate(updated_segmentations):
-                semantic_maps.append(np.zeros(metadata["orig_dims"]).astype(np.uint8))
-                binary_masks.append([])
-                objects_per_frame.append([])
-                for inst_id in orig_object_ids:
-                    if inst_id in mask_dict.keys():
-                        binary_masks[-1].append(mask_dict[inst_id])
-                        semantic_maps[-1][np.where(mask_dict[inst_id]==1)] = orig_to_serial_ids[inst_id]
-                        if orig_to_serial_ids[inst_id] not in object_discovery.keys():
-                            object_discovery[orig_to_serial_ids[inst_id]] = fr_idx
-                        objects_per_frame[-1].append(orig_to_serial_ids[inst_id])
-                    else:
-                        binary_masks[-1].append(np.zeros(metadata["orig_dims"]).astype(np.uint8))
-                objects_per_frame[-1] = sorted(objects_per_frame[-1])
+            seq["segmentations"] = updated_segmentations
+            seq["ignore_masks"] = ignore_masks
+            seq["categories"] = accepted_track_ids
+            seq["max_class_id"] = max_class_id
 
-            binary_masks = np.stack([np.stack(masks) for masks in binary_masks])    # T,N,H,W
-            semantic_maps = np.stack(semantic_maps)                                     # T,H,W
+            seq.pop("semantic_segmentations")
+            sequences.append(seq)
+        
+        # store category id to name mapping
+        meta_info = content["meta"]["category_labels"]
+        meta_info = {
+            "category_labels": {
+                int(id): name for id, name in content["meta"]["category_labels"].items()
+            }
+        }
 
-            # resize
-            if self.cfg.INPUT.AUGMENTATION.RESIZE_TEST:
-                # compute target resolution
-                new_height, new_width = compute_resized_dims(
-                    *images.shape[1:3], 
-                    min_dim=self.cfg.INPUT.AUGMENTATION.MIN_DIM_TEST,
-                    max_dim=self.cfg.INPUT.AUGMENTATION.MAX_DIM_TEST,
-                )
-                if (new_height, new_width) != metadata["orig_dims"]:
-                    images = resize_images(images, new_height, new_width)
-                    binary_masks = resize_masks(binary_masks, new_height, new_width, binary=True)
-                    semantic_maps = resize_masks(semantic_maps, new_height, new_width, binary=False)
-            
-            # arrange dimensions
-            images = np.transpose(images, (0, 3, 1, 2))   # [T, H, W, 3] -> [T, 3, H, W]
-            if self.cfg.INPUT.RGB:
-                # BGR -> RGB (load_images uses cv2.imread which reads images in BGR mode by default)
-                images = np.flip(images, 1).copy()
-
-            metadata["object_discovery"] = object_discovery
-            metadata["images"] = images
-            metadata["padding_mask"] = np.zeros(metadata["orig_dims"]).astype('uint8')
-            metadata["binary_masks"] = binary_masks
-            metadata["semantic_maps"] = semantic_maps
-            # metadata["bg_masks"] = (semantic_maps==0).astype(np.uint8)
-            metadata["objects_per_frame"] = objects_per_frame
-
-            metadata["clip_length"] = self.clip_length
-            metadata["num_overlapping_frames"] = self.num_overlapping_frames
-
-            sequences.append(metadata)
-            break
-
-        return sequences
+        return {
+            "sequences": sequences,
+            "meta": meta_info
+        }

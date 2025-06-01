@@ -15,14 +15,15 @@ from dynamite_video.evaluation.manager import SequenceManager
 from dynamite_video.evaluation.metrics import batched_f_measure, batched_jaccard
 
 
-def evaluate(model, 
+def evaluate(cfg, 
+             model, 
              dataset,
+             dataset_meta,
              iou_threshold=0.85,
              max_interactions=3,
              max_rounds=3,
              eval_strategy="random",
              seed_id=0,
-             output_path=None,
              save_vis=False,
              ):
     """
@@ -45,13 +46,12 @@ def evaluate(model,
         save_vis: whether to save visualization of masks with corrective clicks. Visualizations
                 are saved in `output_path` (bool, default False)
     """
-    assert output_path is not None, f"output_path not found!"
     vis_path = None
     if save_vis:
-        vis_path = os.path.join(output_path, "vis")
+        vis_path = os.path.join(cfg.OUTPUT_DIR, "vis")
         os.makedirs(vis_path, exist_ok=True)
     
-    logger = setup_logger(output=output_path, distributed_rank=comm.get_rank(), name="Multi Instance Evaluation")
+    logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="Multi Instance Evaluation")
     logger.info(f"Starting inference on {len(dataset)} sequences...")
     
     with ExitStack() as stack:
@@ -63,11 +63,15 @@ def evaluate(model,
 
         avg = []
         
-        for sequence in dataset:
+        for video in dataset:
 
+            manager = SequenceManager(video, dataset_meta, cfg.INPUT)
+            print(manager.video.id)
+
+            continue
+            
             # a fresh model for each sequence
             predictor = Predictor(model)
-            manager = SequenceManager(sequence)
 
             # ground truth semantic maps [T,H,W] of the sequence frames
             gt_semantic_maps = manager.gt_semantic_maps

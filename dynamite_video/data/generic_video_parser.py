@@ -1,21 +1,21 @@
 # Adapted from https://github.com/Ali2500/TarViS
 
-import os
 import cv2
 import json
 import numpy as np
+import os
 import pycocotools.mask as mt
 
 from collections import OrderedDict
-from typing import Any, List, Dict, Tuple, Optional, Union
-
+from typing import Any, List, Dict, Union
 
 from dynamite_video.data.utils.file_packer import FilePackReader
 
 
 def parse_generic_video_dataset(
         path_to_images: str, 
-        annotations_content: Union[str, Dict[str, Any]]
+        annotations_content: Union[str, Dict[str, Any]],
+        serialize: bool=False
 ):
     """
     Cast each sequence in the dataset to `GenericVideoSequence` class template
@@ -24,6 +24,7 @@ def parse_generic_video_dataset(
         path_to_images: path to dataset images
         annotations_content: dataset annotation, may be a path to a JSON file
             or a dict with mask information
+        serialize: boolean, whether to serialize object IDs or not
     """
 
     # load annotations from the JSON file
@@ -47,7 +48,7 @@ def parse_generic_video_dataset(
                 )
 
     # wrap each video sequence as a `GenericVideoSequence` object
-    seqs = [GenericVideoSequence(seq, path_to_images) for seq in dataset["sequences"]]
+    seqs = [GenericVideoSequence(seq, path_to_images, serialize) for seq in dataset["sequences"]]
 
     return seqs, meta_info
 
@@ -171,31 +172,16 @@ class GenericVideoSequence(object):
         """Height of each video frame"""
         return self.image_dims[0]
 
-
     @property
     def width(self):
         """Width of each video frame"""
         return self.image_dims[1]
 
-
     @property
     def object_ids(self):
         """IDs of objects present in the video"""
-        return list(self.object_categories.keys())
-
-
-    @property
-    def category_labels(self):
-        """Category labels of the objects in the video"""
-        return {obj_id: self.object_categories[obj_id] for obj_id in self.object_ids}
-
-
-    @property
-    def has_semantic_masks(self):
-        """Whether semantic maps are present or not"""
-        return self.semantic_segmentations is not None
+        return sorted(self.object_categories.keys())
     
-
     def __len__(self):
         """Number of frames in the video"""
         return len(self.image_paths)
@@ -280,7 +266,6 @@ class GenericVideoSequence(object):
                 may be objects with empty masks which do not count
             object_ids: IDs of objects in the clip, arranged in the same order as the binary masks
         """
-        clip_object_ids = sorted(self.object_ids)
 
         # binary masks of each frame in the clip is made to have same no. 
         # of channels as the total number of objects in the clip. So, 
@@ -295,7 +280,7 @@ class GenericVideoSequence(object):
             
             binary_masks_fr = []
             # add one channel for each object present in the clip
-            for obj_id in clip_object_ids:
+            for obj_id in self.object_ids:
                 if obj_id in objects_per_frame[-1]:
                     # decode RLE
                     rle = fr_masks[obj_id]
@@ -316,9 +301,46 @@ class GenericVideoSequence(object):
             ignore_masks = [self.decode_mask(ig_msk, img_dims) for ig_msk in self.ignore_masks]
             ignore_masks = np.stack(ignore_masks)
         
-        return binary_masks, objects_per_frame, clip_object_ids, ignore_masks
+        return binary_masks, objects_per_frame, self.object_ids, ignore_masks
             
 
+    def prepare_eval_masks(self):
+        """
+        self.segmentations contains np.ndarray masks as list. Simply aggregate them.
+
+        NOTE: used only during evaluation
+        """
+
+        # binary masks of each frame in the clip is made to have same no. 
+        # of channels as the total number of objects in the clip. So, if 
+        # an object is not present in a frame, add an empty mask
+        H, W = self.image_dims
+        T = len(self.segmentations)
+        N = len(self.object_ids)
+
+        binary_masks = np.zeros((T, N, H, W), dtype='uint8')
+        semantic_masks = np.zeros((T, H, W), dtype='uint8')
+        objects_per_frame = []
+        object_discovery = {}
+
+        for fr_idx, fr_masks in enumerate(self.segmentations):
+            objects_per_frame.append(sorted(fr_masks.keys()))
+            
+            for n, obj_id in enumerate(self.object_ids):
+                mask = fr_masks.get(obj_id)
+                if mask is not None:
+                    binary_masks[fr_idx, n] = mask
+                    semantic_masks[fr_idx][mask == 1] = obj_id
+                    if obj_id not in object_discovery.keys() and mask.sum()>=64:
+                        object_discovery[obj_id] = fr_idx
+
+        ignore_masks = (
+            np.stack(self.ignore_masks) if self.ignore_masks is not None else None
+        )
+        
+        return binary_masks, semantic_masks, object_discovery, objects_per_frame, self.object_ids, ignore_masks
+
+    
     def extract_subsequence(self, frame_idxes: List[int], object_ids_to_keep: List[int]=None, new_id: str=""):
         """
         Extract the specified frames from the video and return it as a clip

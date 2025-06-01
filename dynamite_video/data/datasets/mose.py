@@ -6,7 +6,7 @@ from collections import defaultdict
 from PIL import Image
 from typing import Dict
 
-from dynamite_video.data.datasets.base import TrainingDataset, InferenceDataset
+from dynamite_video.data.datasets.base import TrainingDataset, EvaluationDataset
 from dynamite_video.data.generic_video_parser import GenericVideoSequence, parse_generic_video_dataset
 from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks
 from dynamite_video.data.utils.file_packer import FilePackReader
@@ -152,25 +152,25 @@ class MOSETrainingDataset(TrainingDataset):
         return bin_mask.sum()
 
 
-class MOSEInferenceDataset(InferenceDataset):
+class MOSEEvaluationDataset(EvaluationDataset):
     """
-    Inference dataset for MOSE dataset ("val" split)
+    Evaluation dataset for MOSE dataset ("val" split)
 
     Loads image and mask files from the disc and generates indices
-    of clips that are to be used in inference forward pass.
+    of clips that are to be used in evaluation forward pass.
     """
 
     def __init__(self, cfg):
         # number of frames in each training sample
-        clip_length = cfg.DATASETS.MOSE.INFERENCE.CLIP_LENGTH
+        clip_length = cfg.DATASETS.MOSE.EVALUATION.CLIP_LENGTH
         # video fps
-        fps = cfg.DATASETS.MOSE.INFERENCE.FPS
+        fps = cfg.DATASETS.MOSE.EVALUATION.FPS
         # number of overlapping frames between clips
-        num_overlapping_frames = cfg.DATASETS.MOSE.INFERENCE.FRAME_OVERLAP
+        num_overlapping_frames = cfg.DATASETS.MOSE.EVALUATION.FRAME_OVERLAP
 
         assert num_overlapping_frames <= clip_length, f"No. of overlapping frames cannot be more than the length of a clip"
         
-        split = cfg.DATASETS.MOSE.INFERENCE.SPLIT
+        split = cfg.DATASETS.MOSE.EVALUATION.SPLIT
         # MOSE has only one "val" split
         assert split=="val"
         

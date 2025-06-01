@@ -7,7 +7,7 @@ from collections import defaultdict
 from PIL import Image
 from typing import Dict
 
-from dynamite_video.data.datasets.base import TrainingDataset, InferenceDataset
+from dynamite_video.data.datasets.base import TrainingDataset, EvaluationDataset
 from dynamite_video.data.generic_video_parser import GenericVideoSequence, parse_generic_video_dataset
 from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks
 from dynamite_video.data.utils.file_packer import FilePackReader
@@ -171,23 +171,25 @@ class VIPSEGTrainingDataset(TrainingDataset):
         return bin_mask.sum()
 
 
+########################### EVALUATION DATASET ###########################
 
-class VIPSEGInferenceDataset(InferenceDataset):
+
+class VIPSEGEvaluationDataset(EvaluationDataset):
     """
-    Inference dataset for VIPSEG ("val" or "test" split)
+    Evaluation dataset for VIPSEG ("val" or "test" split)
     """
 
     def __init__(self, cfg):
         # number of frames in each training sample
-        clip_length = cfg.DATASETS.VIPSEG.INFERENCE.CLIP_LENGTH
+        clip_length = cfg.DATASETS.VIPSEG.EVALUATION.CLIP_LENGTH
         # video fps
-        fps = cfg.DATASETS.VIPSEG.INFERENCE.FPS
+        fps = cfg.DATASETS.VIPSEG.EVALUATION.FPS
         # number of overlapping frames between clips
-        num_overlapping_frames = cfg.DATASETS.VIPSEG.INFERENCE.FRAME_OVERLAP
+        num_overlapping_frames = cfg.DATASETS.VIPSEG.EVALUATION.FRAME_OVERLAP
 
         assert num_overlapping_frames <= clip_length, f"No. of overlapping frames cannot be more than the length of a clip"
         
-        split = cfg.DATASETS.VIPSEG.INFERENCE.SPLIT
+        split = cfg.DATASETS.VIPSEG.EVALUATION.SPLIT
         assert split in ["val", "test"]
         
         super().__init__(cfg, "VIPSEG", clip_length, fps, num_overlapping_frames, split)
@@ -202,7 +204,7 @@ class VIPSEGInferenceDataset(InferenceDataset):
             self.path_to_val_imset = Paths.to_vipseg_test_imset()
         
         
-    def create_inference_dataset(self):
+    def create_evaluation_dataset(self):
         """
         Prepare dataset for evaluation.
         """

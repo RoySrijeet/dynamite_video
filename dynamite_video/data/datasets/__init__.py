@@ -5,35 +5,35 @@ from .base import (
 
 from .burst import (
     BURSTTrainingDataset,
-    BURSTInferenceDataset,
+    BURSTEvaluationDataset,
 )
 
 from .cityscapes_vps import (
     CITYSCAPESVPSTrainingDataset,
-    CITYSCAPESVPSInferenceDataset
+    CITYSCAPESVPSEvaluationDataset
 )
 
 from .davis import (
     DAVISTrainingDataset,
-    DAVISInferenceDataset,
+    DAVISEvaluationDataset,
 )
 
 from .kitti_step import (
     KITTISTEPTrainingDataset,
-    KITTISTEPInferenceDataset
+    KITTISTEPEvaluationDataset
 )
 
 from .mose import (
     MOSETrainingDataset,
-    MOSEInferenceDataset
+    MOSEEvaluationDataset
 )
 
 from .pumavos import (
     PUMAVOSTrainingDataset,
-    PUMAVOSInferenceDataset
+    PUMAVOSEvaluationDataset
 )
 
 from .vipseg import (
     VIPSEGTrainingDataset,
-    VIPSEGInferenceDataset
+    VIPSEGEvaluationDataset
 )

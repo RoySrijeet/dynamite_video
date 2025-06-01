@@ -7,6 +7,7 @@ import numpy as np
 from PIL import Image
 
 from dynamite_video.data.utils.clicker import get_center_coords
+from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks
 from dynamite_video.evaluation.eval_utils import davis_palette, create_circular_mask
 
 class SequenceManager:
@@ -14,119 +15,139 @@ class SequenceManager:
     Sequence manager
     """
 
-    def __init__(self, metadata):
+    def __init__(self, video, dataset_meta, tfms):
         """
         Initialize with information on the sequence data, including ground truth masks
-        """
 
-        self.sequence_id = metadata["id"]
-        self.sequence_length = metadata["length"]
-        self.orig_h, self.orig_w = metadata["orig_dims"]
+        Args:
+            video: GenericVideoSequence
+            dataset_meta: g.t category labels
+            tfms: transformation info from configuration
+        """
+        self.video = video
+        
+        self.clip_length = dataset_meta["clip_length"]
+        self.num_overlapping_frames = dataset_meta["num_overlapping_frames"]
+        self.category_labels = dataset_meta["category_labels"]
+        self.fps = dataset_meta["fps"]
         
         # arrays
-        self.images = metadata["images"]                       # [T,3,H,W]
-        self.gt_instance_masks = metadata["instance_masks"]    # [T,N,H,W]
-        self.gt_semantic_maps = metadata["semantic_maps"]      # [T,H,W]
-        self.gt_bg_masks = (self.gt_semantic_maps == 0).astype(np.uint8)    # [T,H,W]
-        self.padding_mask = metadata["padding_mask"]           # [H,W]
-        
-        # in which frame did each instance first appear
-        self.instance_discovery = metadata["instance_discovery"]
-        self.instances = sorted(self.instance_discovery.keys())
-        # IDs of instances present in each frame
-        self.instances_per_frame = metadata["instances_per_frame"]
-        
-        # mappings between original instance IDs and serial IDs
-        self.orig_to_serial_ids = metadata["orig_to_serial_ids"]
-        self.serial_to_orig_ids = metadata["serial_to_orig_ids"]
+        self.images = video.load_images()       # T,H,W,3
+        (self.gt_binary_masks, self.gt_semantic_masks,
+         self.object_discovery, self.objects_per_frame,
+         self.object_ids, self.ignore_masks
+        ) = video.prepare_eval_masks()
 
-        self.clip_length = metadata["clip_length"]
-        self.num_overlapping_frames = metadata["num_overlapping_frames"]
-        
+        self.apply_transformations(tfms)
+
+        self.T, self.N, self.H, self.W = self.gt_binary_masks.shape
+
         # click radius - region around a existing click that is excluded when sampling a new click
         self.click_radius = 5
         # Strategy to avoid regions while sampling next clicks
         # 0: new click avoids all the previously sampled click locations
         # 1: new click avoids all locations upto radius=self.click_radius around all prev sampled clicks
         self.sampling_strategy = 1
-        
+        self.not_clicked_map = np.ones_like(self.gt_semantic_masks, dtype=np.bool_)
         
         # initialize buffers
         # foreground clicks sampled on each object in each frame
-        self.fg_coords_list = [[[] for _ in range(self.num_instances)] for _ in range(self.sequence_length)]
+        self.fg_coords_list = [[[] for _ in range(self.num_objects)] for _ in range(len(self.video))]
         # background clicks sampled on each frame
-        self.bg_coords_list = [[] for _ in range(self.sequence_length)]
+        self.bg_coords_list = [[] for _ in range(len(self.video))]
         # time stamp of the latest click on each frame
-        self.max_timestamps = np.zeros(self.sequence_length).astype('int').tolist()
+        self.max_timestamps = np.zeros(len(self.video)).astype('int').tolist()
         # num clicks on each object in each frame
-        self.num_clicks_per_object = np.zeros((self.sequence_length, self.num_instances)).astype('int').tolist()
+        self.num_clicks_per_object = np.zeros((len(self.video), self.num_objects)).astype('int').tolist()
         # num clicks per frame
-        self.num_clicks_per_frame = np.zeros(self.sequence_length).astype('int').tolist()
+        self.num_clicks_per_frame = np.zeros(len(self.video)).astype('int').tolist()
 
         # get initial clicks on object center
         self.get_gt_clicks()
         
-        self.pred_masks = [[] for _ in range(self.sequence_length)]
-        self.pred_semantic_maps = [[] for _ in range(self.sequence_length)]
+        self.pred_masks = np.zeros_like(self.gt_binary_masks)
+        self.pred_semantic_maps = np.zeros_like(self.gt_semantic_masks)
 
     
     @property
-    def num_instances(self):
-        return len(self.instances)
+    def num_objects(self):
+        return len(self.video.object_ids)
+
+    @property
+    def num_frames(self):
+        return len(self.video)
     
+    
+    def apply_transformations(self, tfms):
+        """
+        Apply test-time transformations
+        """
+        if tfms.AUGMENTATION.RESIZE_TEST:
+            # compute target resolution
+            new_height, new_width = compute_resized_dims(*self.images.shape[1:3], 
+                                                        min_dim=tfms.AUGMENTATION.MIN_DIM_TEST,
+                                                        max_dim=tfms.AUGMENTATION.MAX_DIM_TEST,
+                                                    )
+            if (new_height, new_width) != self.video.image_dims:
+                self.images = resize_images(self.images, new_height, new_width)
+                self.gt_binary_masks = resize_masks(self.gt_binary_masks, new_height, new_width, binary=True)
+                self.gt_semantic_masks = resize_masks(self.gt_semantic_masks, new_height, new_width, binary=False)
+                self.ignore_masks = resize_masks(self.ignore_masks, new_height, new_width, binary=False)
+        
+        # arrange dimensions
+        self.images= np.transpose(self.images, (0, 3, 1, 2))   # [T,H,W,3] -> [T,3,H,W]
+        if tfms.RGB:
+            # BGR -> RGB (load_images uses cv2.imread which reads images in BGR mode by default)
+            self.images = np.flip(self.images, 1).copy()
+        
+        self.gt_bg_masks = (self.gt_semantic_masks == 0).astype(np.uint8)    # [T,H,W]
+
 
     def get_gt_clicks(self):
         """
-        For each instance present in the sequence, go to the frame where the 
-        instance first appeared (specified by `self.instance_discovery`) and 
-        sample a foreground click at the center of the instance
+        For each object present in the sequence, go to the frame where the object 
+        first appeared and sample a foreground click at its center.
 
         Populates click buffers with sampled click information
         """
         t = 1
         
-        # depending on the sampling strategy, maintain a map of previously sampled 
-        # clicks, to avoid sampling from the same location again
-        self.not_clicked_map = np.ones_like(self.gt_semantic_maps, dtype=np.bool_)
-        H,W = self.not_clicked_map.shape[-2:]
-        
-        for inst_id, fr_idx in self.instance_discovery.items():
-            # Instance with ID `inst_id` first appeared in frame at index `fr_idx``
-            
-            # binary segmentation mask (ground truth)
-            inst_mask = self.gt_instance_masks[fr_idx][inst_id-1]
+        for obj_id, fr_idx in self.object_discovery.items():
+            # object with ID `obj_id` first appeared in frame at index `fr_idx``
+
+            obj_mask = self.gt_binary_masks[fr_idx][obj_id-1]
 
             # center coordinates of the foreground mask
-            center_coords = get_center_coords(inst_mask)
+            center_coords = get_center_coords(obj_mask)
 
             # update not_clicked_map
             if self.sampling_strategy == 0:
                 self.not_clicked_map[fr_idx][center_coords[0], center_coords[1]] = False
             elif self.sampling_strategy == 1:
-                _pm = create_circular_mask(H,W, centers=[[center_coords[0], center_coords[1]]], radius=self.click_radius)
+                _pm = create_circular_mask(self.H, self.W, centers=[[center_coords[0], center_coords[1]]], radius=self.click_radius)
                 self.not_clicked_map[fr_idx][np.where(_pm)] = False
             else:
                 raise NotImplementedError
 
             # record sampled click
-            self.fg_coords_list[fr_idx][inst_id-1].append([center_coords[0], center_coords[1], inst_id, fr_idx, t])
-            self.num_clicks_per_object[fr_idx][inst_id-1] += 1
+            self.fg_coords_list[fr_idx][obj_id-1].append([center_coords[0], center_coords[1], obj_id, fr_idx, t])
+            self.num_clicks_per_object[fr_idx][obj_id-1] += 1
             self.num_clicks_per_frame[fr_idx] += 1
             self.max_timestamps[fr_idx] = t
             t+=1
 
 
-    def get_corrective_click(self, frame_idx, inst_id, padding=True):
+    def get_corrective_click(self, frame_idx, obj_id, padding=True):
         """
-        Obtain a corrective click on the specified instance in the specified frame
+        Obtain a corrective click on the specified object in the specified frame
 
         Args:
             frame_idx: int, frame to sample the click on
-            inst_id: int, ID of the instance to sample the click on
+            obj_id: int, ID of the object to sample the click on
             padding: bool (default: True), whether to apply padding before `cv2.distanceTransform`
         """
-        gt_instance_mask = np.asarray(self.gt_instance_masks[frame_idx][inst_id], dtype=np.bool_)
-        pred_instance_mask = np.asarray(self.pred_masks[frame_idx][inst_id], dtype=np.bool_)
+        gt_instance_mask = np.asarray(self.gt_binary_masks[frame_idx][obj_id], dtype=np.bool_)
+        pred_instance_mask = np.asarray(self.pred_masks[frame_idx][obj_id], dtype=np.bool_)
 
         H,W = gt_instance_mask.shape
         timestamp = max(self.max_timestamps)
@@ -161,7 +182,7 @@ class SequenceManager:
             coords_y, coords_x = np.where(fp_mask_dt == fp_max_dist)  # coords is [y, x]
 
         sample_locations = [[coords_y[0], coords_x[0]]]
-        obj_index = self.gt_semantic_maps[frame_idx][coords_y[0], coords_x[0]] - 1
+        obj_index = self.gt_semantic_masks[frame_idx][coords_y[0], coords_x[0]] - 1
 
         if self.sampling_strategy == 0:
             self.not_clicked_map[frame_idx][[coords_y[0], coords_x[0]]] = False
@@ -288,7 +309,7 @@ class SequenceManager:
                     if len(choice_range) == 0:
                         # for at least one instance, no prediction was found in the overlapping frames
                         # obtain a click from ground truth mask, if the latter is non-empty
-                        gt_mask = self.gt_instance_masks[overlapping_frame_indices[0]][inst_id]
+                        gt_mask = self.gt_binary_masks[overlapping_frame_indices[0]][inst_id]
                         if gt_mask.any():
                             center_coords = get_center_coords(gt_mask)
                             self.fg_coords_list[overlapping_frame_indices[0]][inst_id].append([center_coords[0], center_coords[1], inst_id, overlapping_frame_indices[0], t])
