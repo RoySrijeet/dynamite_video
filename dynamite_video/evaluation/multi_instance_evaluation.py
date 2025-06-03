@@ -1,7 +1,6 @@
 import os
 import time
 import random
-import pickle
 import torch
 import torch.nn as nn
 import numpy as np
@@ -85,7 +84,8 @@ def evaluate(cfg,
                 clip_preds = predictor.get_prediction([clip_inputs], indices)    # T,N,H,W
                 manager.store_prediction(clip_preds, clip, indices)
 
-                manager.save_visualization(vis_path=vis_path, round_num=1, indices=indices)
+                if save_vis:
+                    manager.save_visualization(vis_path=vis_path, round_num=1, indices=indices)
 
             del manager
 

@@ -299,7 +299,6 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
             # read instance masks
             for fr_idx, fr_inst_masks in enumerate(seq["segmentations"]):
                 for track_id, inst_rle in fr_inst_masks.items():
-
                     # new track ID
                     new_track_id = max_class_id + 1 + int(track_id)
                     updated_segmentations[fr_idx][new_track_id] = inst_rle
@@ -312,7 +311,6 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
 
             seq.pop("semantic_segmentations")
             sequences.append(seq)
-            break
         
         # store category id to name mapping
         meta_info = content["meta"]["category_labels"]
