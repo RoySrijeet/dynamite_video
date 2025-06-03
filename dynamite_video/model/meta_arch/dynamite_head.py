@@ -99,7 +99,7 @@ class DynamiteHead(nn.Module):
             mask_features, _, multi_scale_features = self.pixel_decoder.forward_features(features)
 
         if self.transformer_in_feature == "multi_scale_pixel_decoder":
-            predictions, num_clicks_per_object, num_queries_per_object = self.interactive_transformer(data, 
+            predictions, num_queries_per_object = self.interactive_transformer(data, 
                                                                                                       images, 
                                                                                                       objects_per_frame, 
                                                                                                       multi_scale_features,
@@ -111,4 +111,4 @@ class DynamiteHead(nn.Module):
         if self.training:
             return predictions, num_queries_per_object
         else:
-            return predictions, mask_features, multi_scale_features, num_clicks_per_object, num_queries_per_object
+            return predictions, num_queries_per_object, mask_features, multi_scale_features

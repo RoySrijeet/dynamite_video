@@ -64,9 +64,10 @@ def evaluate(cfg,
         avg = []
         
         for video in dataset:
+            print(f"Processing {video.id}")
 
             # a fresh model for each sequence
-            predictor = Predictor(model)
+            predictor = Predictor(model, len(video))
             
             manager = SequenceManager(video, dataset_meta, cfg.INPUT)
             
@@ -78,9 +79,13 @@ def evaluate(cfg,
             clip_indices = manager.generate_clip_indices(start=lowest_frame_index)
 
             # make predictions for one clip at a time
-            for indices in clip_indices:
+            for num, indices in enumerate(clip_indices):
 
-                clip = manager.extract_clip(indices)
+                clip, clip_inputs = manager.extract_clip(indices)
+                clip_preds = predictor.get_prediction([clip_inputs], indices)    # T,N,H,W
+                manager.store_prediction(clip_preds, clip, indices)
+
+                manager.save_visualization(vis_path=vis_path, round_num=1, indices=indices)
 
             del manager
 
@@ -203,35 +208,31 @@ class Predictor:
     """
 
 
-    def __init__(self, model):
+    def __init__(self, model, length):
         self.model = model
-        self.images = None
-        self.features = None
-        self.mask_features = None
-        self.multi_scale_features=None
+        self.images = [[] * length]
+        self.features = [[] * length]
+        self.mask_features = [[] * length]
+        self.multi_scale_features = [[] * length]
+        self.initialized = False
     
-    def get_prediction(self, inputs):
+    def get_prediction(self, inputs, indices):
         """
         Args:
             inputs: batched input. Batch size is restricted to 1
         """
         
-        (pred_masks, _, 
-        self.images, _, 
-        self.features, 
-        self.mask_features,
-        self.multi_scale_features, _, _,_) = self.model(inputs)
-        # if self.features is None:
-        #     # first iteration through the interactive evaluation pipeline 
-        #     # generates mask features which is saved to avoid re-computation
-        #     (pred_masks, _, 
-        #     self.images, _, 
-        #     self.features, 
-        #     self.mask_features,
-        #     self.multi_scale_features, _, _,_) = self.model(inputs)
+        if not self.initialized:
+            pred_masks, images, features, mask_features, multi_scale_features = self.model(inputs)
+            self.initialized = True
+        else:
+            pred_masks, images, features, mask_features, multi_scale_features = self.model(inputs)
 
-        # else:
-        #     out = self.model()
-        #     pred_masks = out[0]
+        
+        # for i, idx in enumerate(indices):
+        #     self.images[idx] = images[i]
+        #     self.features[idx] = features[i],
+        #     self.mask_features[idx] = mask_features[i]
+        #     self.multi_scale_features[idx] = multi_scale_features[i]
 
         return [x.to('cpu',dtype=torch.uint8) for x in pred_masks]

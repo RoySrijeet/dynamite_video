@@ -267,7 +267,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                            bg_coords, 
                                                                            max_timestamp)
         
-        return outputs, num_clicks_per_object, num_queries_per_object
+        return outputs, num_queries_per_object
 
     
     def forward_prediction_heads(

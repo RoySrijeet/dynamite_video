@@ -327,9 +327,6 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
 
             seq.pop("semantic_segmentations")
             sequences.append(seq)
-
-            if len(sequences) == 2:
-                break
         
         # store category id to name mapping
         meta_info = content["meta"]["category_labels"]

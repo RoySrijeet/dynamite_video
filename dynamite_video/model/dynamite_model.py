@@ -150,14 +150,15 @@ class DynamiteModel(nn.Module):
                 max_timestamp
             ) = self.preprocess_batch_data(inputs)
 
-        if features is None:
-            # extract backbone features from clip frames
-            features = []
-            for clip_ims in images:
-                clip_fs = self.backbone(clip_ims.tensor)
-                features.append(clip_fs)
-        
         if self.training:
+
+            if features is None:
+                # extract backbone features from clip frames
+                features = []
+                for clip_ims in images:
+                    clip_fs = self.backbone(clip_ims.tensor)
+                    features.append(clip_fs)
+        
             # prepare ground truth mask information
             targets = self.prepare_targets(inputs)
 
@@ -192,27 +193,29 @@ class DynamiteModel(nn.Module):
             # iterative evaluation - for each batch (a clip) we only compute image features and 
             # mask features once and pass them as arguments to use them again in the next round
 
-            (outputs, 
-            mask_features, 
-            multi_scale_features, 
-            num_clicks_per_object, 
-            num_queries_per_object) = self.sem_seg_head(
-                                        inputs[0],
-                                        images[0],
-                                        features[0],
-                                        objects_per_frame[0],
-                                        mask_features, 
-                                        multi_scale_features, 
-                                        num_clicks_per_object[0],
-                                        fg_coords[0], 
-                                        bg_coords[0], 
-                                        max_timestamp[0]
-                                    )
+            if features is None:
+                # extract backbone features from clip frames
+                features = []
+                for clip_ims in images:
+                    clip_fs = self.backbone(clip_ims.tensor)
+                    features.append(clip_fs)
+
+            (outputs, num_queries_per_object,
+            mask_features, multi_scale_features) = self.sem_seg_head(inputs[0],
+                                                                    images[0],
+                                                                    features[0],
+                                                                    objects_per_frame[0],
+                                                                    mask_features, 
+                                                                    multi_scale_features, 
+                                                                    num_clicks_per_object[0],
+                                                                    fg_coords[0], 
+                                                                    bg_coords[0], 
+                                                                    max_timestamp[0]
+                                                                )
 
             processed_results = self.process_results(images[0], outputs, objects_per_frame[0], num_queries_per_object)
             
-            return (processed_results, outputs, images, objects_per_frame, features, mask_features,
-                        multi_scale_features, num_clicks_per_object, fg_coords, bg_coords)
+            return processed_results, images, features, mask_features, multi_scale_features
 
 
     def preprocess_batch_data(self, inputs):

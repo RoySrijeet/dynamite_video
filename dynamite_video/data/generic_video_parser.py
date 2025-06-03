@@ -4,12 +4,12 @@ import cv2
 import json
 import numpy as np
 import os
-import pycocotools.mask as mt
 
 from collections import OrderedDict
 from typing import Any, List, Dict, Union
 
 from dynamite_video.data.utils.file_packer import FilePackReader
+from dynamite_video.data.utils.data_utils import serialize_object_ids, decode_mask
 
 
 def parse_generic_video_dataset(
@@ -93,7 +93,7 @@ class GenericVideoSequence(object):
         # serialize non-sequential object IDs
         else:
             # obtain mappings between original and sequential IDs
-            self.orig_to_serial_id, self.serial_to_orig_id = self.serialize_object_ids(sorted(seq_dict["categories"].keys()))
+            self.orig_to_serial_id, self.serial_to_orig_id = serialize_object_ids(sorted(seq_dict["categories"].keys()))
             if all(key == value for key, value in self.orig_to_serial_id.items()):
                 # already serial
                 self.segmentations = seq_dict["segmentations"]
@@ -112,26 +112,6 @@ class GenericVideoSequence(object):
         self.ignore_masks = seq_dict.get("ignore_masks", None)
         self.object_areas = None
         self.fpack_reader = None
-
-
-    def serialize_object_ids(self, orig_ids):
-        """
-        Serialize object IDs. IDs are 1-indexed to avoid conflict in semantic mask
-        with background pixels (0)
-
-        Args:
-            orig_ids: original object IDs, potentially non-sequential
-
-        Returns:
-            orig_to_serial_id: mapping from original IDs to sequential IDs
-            serial_to_orig_id: mapping from sequential IDs to original IDs
-        """
-        
-        orig_ids = sorted(orig_ids)
-        serial_ids = [i for i in range(1, len(orig_ids)+1)]
-        serial_to_orig_id = OrderedDict(zip(serial_ids, orig_ids))
-        orig_to_serial_id = OrderedDict(zip(orig_ids, serial_ids))
-        return orig_to_serial_id, serial_to_orig_id
     
     
     def serialize_masks(self, segmentations, semantic_segmentations, orig_to_serial_id):
@@ -219,40 +199,6 @@ class GenericVideoSequence(object):
 
         images = np.stack(images)       # [T, H, W, 3]
         return images
-
-    
-    def decode_mask(self, encoded_mask: Union[str, List[int]], size=None):
-        """
-        Decode RLE mask into `np.ndarray`
-
-        Args:
-            encoded_mask: RLE mask
-            size: mask dimensions
-        
-        Returns:
-            `np.ndarray` of dimensions `size`
-        """
-        if size is None:
-            assert isinstance(encoded_mask, dict)
-            assert 'counts' in encoded_mask.keys()
-            assert 'size' in encoded_mask.keys()
-            return np.ascontiguousarray(mt.decode(encoded_mask)).astype(np.uint8)
-
-        if isinstance(encoded_mask, list):  # polygons
-            encoded_mask = {
-                "counts": encoded_mask,
-                "size": size,
-            }
-            encoded_mask = mt.frPyObjects(encoded_mask, size[0], size[1])
-        
-        else:  # RLE mask
-            assert isinstance(encoded_mask, str), f"Unexpected encoded mask type: {type(encoded_mask)}"
-            encoded_mask = {
-                "counts": encoded_mask.encode("utf-8"),
-                "size": size
-            }
-        
-        return np.ascontiguousarray(mt.decode(encoded_mask)).astype(np.uint8)
     
 
     def prepare_masks(self):
@@ -287,7 +233,7 @@ class GenericVideoSequence(object):
                     # decode RLE
                     rle = fr_masks[obj_id]
                     img_dims = None if isinstance(rle, dict) else self.image_dims
-                    _m = self.decode_mask(rle, img_dims)
+                    _m = decode_mask(rle, img_dims)
                     # record
                     binary_masks_fr.append(_m)
                 else:
@@ -300,20 +246,25 @@ class GenericVideoSequence(object):
         # ignore masks
         ignore_masks = None
         if self.ignore_masks is not None:
-            ignore_masks = [self.decode_mask(ig_msk, img_dims) for ig_msk in self.ignore_masks]
+            ignore_masks = [decode_mask(ig_msk, img_dims) for ig_msk in self.ignore_masks]
             ignore_masks = np.stack(ignore_masks)
         
         return binary_masks, objects_per_frame, self.object_ids, ignore_masks
 
     
-    def get_object_discovery(self):
-        object_discovery = {}
+    def prepare_eval_masks(self):
+        """
+        Prepare ground truth semantic masks for evaluation
+        """
+        semantic_masks = np.zeros((len(self), self.height, self.width), dtype=np.uint8)
         for fr_idx, fr_rles in enumerate(self.segmentations):
-            for obj_id, _ in fr_rles.items():
-                if obj_id not in object_discovery:
-                    object_discovery[obj_id] = fr_idx
-        return object_discovery
-    
+            for obj_id in fr_rles:
+                # decode RLE
+                img_dims = None if isinstance(fr_rles[obj_id], dict) else self.image_dims
+                _m = decode_mask(fr_rles[obj_id], img_dims)
+                semantic_masks[fr_idx][np.where(_m==1)] = obj_id
+        return semantic_masks
+
     
     def extract_subsequence(self, frame_idxes: List[int], object_ids_to_keep: List[int]=None, new_id: str=""):
         """

@@ -1,13 +1,69 @@
 import cv2
 import imgaug.augmenters as iaa
 import numpy as np
+import pycocotools.mask as mt
 import random
 import torch
 import torch.nn.functional as F
 
+from collections import OrderedDict
 from einops import rearrange
 from torch import Tensor
 from typing import List, Tuple, Optional
+
+
+def decode_mask(encoded_mask, size=None):
+    """
+    Decode RLE mask into `np.ndarray`
+
+    Args:
+        encoded_mask: RLE mask
+        size: mask dimensions
+    
+    Returns:
+        `np.ndarray` of dimensions `size`
+    """
+    if size is None:
+        assert isinstance(encoded_mask, dict)
+        assert 'counts' in encoded_mask.keys()
+        assert 'size' in encoded_mask.keys()
+        return np.ascontiguousarray(mt.decode(encoded_mask)).astype(np.uint8)
+
+    if isinstance(encoded_mask, list):  # polygons
+        encoded_mask = {
+            "counts": encoded_mask,
+            "size": size,
+        }
+        encoded_mask = mt.frPyObjects(encoded_mask, size[0], size[1])
+    
+    else:  # RLE mask
+        assert isinstance(encoded_mask, str), f"Unexpected encoded mask type: {type(encoded_mask)}"
+        encoded_mask = {
+            "counts": encoded_mask.encode("utf-8"),
+            "size": size
+        }
+    
+    return np.ascontiguousarray(mt.decode(encoded_mask)).astype(np.uint8)
+
+
+def serialize_object_ids(orig_ids):
+    """
+    Serialize object IDs. IDs are 1-indexed to avoid conflict in semantic mask
+    with background pixels (0)
+
+    Args:
+        orig_ids: original object IDs, potentially non-sequential
+
+    Returns:
+        orig_to_serial_id: mapping from original IDs to sequential IDs
+        serial_to_orig_id: mapping from sequential IDs to original IDs
+    """
+    
+    orig_ids = sorted(orig_ids)
+    serial_ids = [i for i in range(1, len(orig_ids)+1)]
+    serial_to_orig_id = OrderedDict(zip(serial_ids, orig_ids))
+    orig_to_serial_id = OrderedDict(zip(orig_ids, serial_ids))
+    return orig_to_serial_id, serial_to_orig_id
 
 
 def compute_resized_dims(height: int, width: int, min_dim: int, max_dim: int):
