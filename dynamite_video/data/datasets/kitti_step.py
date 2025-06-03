@@ -298,27 +298,12 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
             
             # read instance masks
             for fr_idx, fr_inst_masks in enumerate(seq["segmentations"]):
-                updated_class_ids = set()
                 for track_id, inst_rle in fr_inst_masks.items():
-                    inst_msk = self.decode_mask(inst_rle, img_dims)
 
                     # new track ID
                     new_track_id = max_class_id + 1 + int(track_id)
                     updated_segmentations[fr_idx][new_track_id] = inst_rle
                     accepted_track_ids[new_track_id] = seq['categories'][track_id]
-                
-                    # cut out holes from the semantic map of the salient classes where instance masks are available
-                    class_id = int(seq['categories'][track_id]) + 1
-                    sem_mask = self.decode_mask(updated_segmentations[fr_idx][class_id], img_dims) # updated_segmentations[fr_idx][class_id]
-                    sem_mask[np.where(inst_msk==1)] = 0
-                    
-                    updated_segmentations[fr_idx][class_id] = mt.encode(np.asfortranarray(sem_mask))["counts"].decode('utf-8')
-                    updated_class_ids.add(class_id)
-                    
-                for class_id in updated_class_ids:
-                    sem_mask = updated_segmentations[fr_idx][class_id]
-                    if self.mask_area(sem_mask, img_dims) < MIN_MASK_AREA:
-                        updated_segmentations[fr_idx].pop(class_id, None)
             
             seq["segmentations"] = updated_segmentations
             seq["ignore_masks"] = None
@@ -327,6 +312,7 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
 
             seq.pop("semantic_segmentations")
             sequences.append(seq)
+            break
         
         # store category id to name mapping
         meta_info = content["meta"]["category_labels"]
