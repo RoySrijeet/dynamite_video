@@ -95,6 +95,7 @@ MODEL:
     ENFORCE_INPUT_PROJ: False
     SIZE_DIVISIBILITY: 32
     ENC_LAYERS: 10  # 9 encoder layers, add one for the loss on learnable query
+    QQCA: "masked"  # "none", "vanilla", "masked"
     TRAIN_NUM_POINTS: 12544
     OVERSAMPLE_RATIO: 3.0
     IMPORTANCE_SAMPLE_RATIO: 0.75
@@ -175,6 +176,8 @@ TRAINING:
   DISPLAY_INTERVAL: 5
   # specifies the iteration interval for saving metrics summary to tensorboard or Wandb
   SUMMARY_INTERVAL: 20
+  # resume or load
+  RESUME:
 
 TEST:
   EVAL_PERIOD: 400000
@@ -188,11 +191,11 @@ ITERATIVE:
     POSITIONAL_EMBED: "spatio_temporal" #[ "temporal", "spatial", "spatio_temporal", None]
     USE_STATIC_BG_QUERIES: True
     NUM_STATIC_BG_QUERIES: 9
-    MAX_NUM_INTERACTIONS: 3
+    MAX_NUM_REFINEMENT_ROUNDS: 3
   TEST:
     INTERACTIVE_EVALAUTION: True
     # EVAL_STRATEGY: "random"
-    MAX_NUM_INTERACTIONS: 20
+    MAX_NUM_REFINEMENT_ROUNDS: 20
     IOU_THRESHOLD: 0.85
 
 CLICKER:
@@ -217,10 +220,12 @@ LOGGING:
 
 WANDB:
   # to turn off WANDB logging, set `ENABLE` to false
-  ENABLE: true
+  ENABLE: false
+  RUN_NAME:
   ENTITY:
   PROJECT:
-  RUN_NAME:
+  WATCH_GRAD: false
+  SWEEP: false
 
 OUTPUT_DIR: # experiment dir, specify in cl args
 DEBUG: false

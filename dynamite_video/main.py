@@ -18,6 +18,7 @@ from detectron2.checkpoint import DetectionCheckpointer
 from dynamite_video.training.trainer import Trainer
 from dynamite_video.evaluation.evaluator import Evaluator
 from dynamite_video.utils.misc import get_cl_arguments, load_config
+from dynamite_video.utils.wandb import wandb_init, wandb_sweep
 
 
 def seed_rngs(seed: int):
@@ -25,32 +26,6 @@ def seed_rngs(seed: int):
     random.seed(seed)
     np.random.seed(seed)
     imgaug.seed(seed)
-
-
-def training_pipeline(cfg, args):
-    # set seeds manually
-    seed_rngs(args.seed_id)
-
-    logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name=__name__)
-    logger.info("Welcome to DynaMITe-Video Training Pipeline!")
-
-    # W&B
-    if cfg.WANDB.ENABLE:
-        if comm.get_rank()==0:
-            logger.info(f"Monitoring progress at W&B!!")
-            wandb.init(entity=cfg.WANDB.ENTITY, 
-                        project=cfg.WANDB.PROJECT, 
-                        name=cfg.WANDB.RUN_NAME, 
-                        config=cfg,
-                        sync_tensorboard=True
-                    )
-
-    trainer = Trainer(cfg)
-    if cfg.WANDB.ENABLE:
-        if comm.get_rank()==0:
-            wandb.watch(trainer.model, log="all", log_freq=5000)
-    trainer.resume_or_load(args.resume)
-    trainer.train()
 
 
 def evaluation_pipeline(cfg, args):
@@ -66,6 +41,23 @@ def evaluation_pipeline(cfg, args):
     Evaluator.interactive_evaluation(cfg, args, model)
 
 
+def training_pipeline(cfg):
+    # set seeds manually
+    seed_rngs(cfg.SEED)
+
+    logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name=__name__)
+    logger.info("Welcome to DynaMITe-Video Training Pipeline!")
+
+    trainer = Trainer(cfg)
+
+    # W&B
+    if cfg.WANDB.ENABLE and comm.get_rank()==0:
+        wandb_init(cfg, trainer.model)
+        
+    trainer.resume_or_load(cfg.TRAINING.RESUME)
+    trainer.train()
+
+
 def main(args):
 
     # setup experiment configuration
@@ -73,8 +65,16 @@ def main(args):
 
     if args.eval_only:
         evaluation_pipeline(cfg, args)
-    else:
-        training_pipeline(cfg, args)
+        return
+    
+    # W&B sweep
+    if cfg.WANDB.SWEEP and comm.get_rank() == 0:
+        wandb_sweep(sweep_config=os.path.join(args.expt_dir, "sweep.json"), 
+                    cfg=cfg, launch_fn=training_pipeline
+                )
+    
+    # just a regular run
+    training_pipeline(cfg)
 
 
 if __name__=="__main__":

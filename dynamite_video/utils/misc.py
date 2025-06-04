@@ -111,6 +111,8 @@ def load_config(args):
 
     # command line overwrites
     cfg.merge_from_list(args.opts)
+    cfg.SEED = args.seed_id
+    cfg.TRAINING.RESUME = args.resume
     cfg.freeze()
     default_setup(cfg, args)
     setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="dynamite-video")
