@@ -68,17 +68,18 @@ def load_config(args):
         expt_config: path to the directory containing experiment .yaml file
 
     """
-    # detectron2 base config
+    # d2 base config
     cfg = get_cfg()
     # for poly lr schedule
     add_deeplab_config(cfg)
     add_maskformer2_config(cfg)
     
-    # load base configuration
+    # load base DynaMITe-Video configuration
     base_cfg = get_base_config()
+    # make d2 cfg mutable
     cfg.set_new_allowed(True)
+    # overwrite d2 cfg with base configuration
     cfg.merge_from_file(base_cfg)
-    # print(cfg)
 
     if args.resume or args.eval_only:
         # check if checkpoint directory contains config file
@@ -94,9 +95,8 @@ def load_config(args):
             cfg.merge_from_file(args.eval_config)
 
     else:
-        # experiment config
+        # current experiment config - overwrites on base configuration
         cfg.merge_from_file(get_expt_config(args.expt_dir))
-    
     
     # outputs are saved in experiment directory
     cfg.OUTPUT_DIR = args.expt_dir
@@ -113,9 +113,9 @@ def load_config(args):
     cfg.merge_from_list(args.opts)
     cfg.SEED = args.seed_id
     cfg.TRAINING.RESUME = args.resume
+    
+    # make d2 cfg immutable
     cfg.freeze()
-    default_setup(cfg, args)
-    setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="dynamite-video")
     return cfg
 
 

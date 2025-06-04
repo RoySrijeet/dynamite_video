@@ -1,45 +1,58 @@
 import json
+import os
 import wandb
 
 
+PARAM_NAME_ALIAS = {
+    "CLICKER.TRAINING.MAX_NUM_INSTANCES_REFINED_PER_ROUND": "inst",
+    "MODEL.MASK_FORMER.QQCA": "qqca",
+    "SOLVER.BASE_LR": "lr",
+    "SOLVER.MAX_ITERS": "iters"
+}
+
 def listify(dct):
     lst = []
-    return [lst.extend([k,v]) for k,v in dct.items()]
+    suffix = ""
+    for k,v in dct.items():
+        suffix += "_" + PARAM_NAME_ALIAS[k] + "_" + str(v)
+        lst.extend([k,v])
+    return lst, suffix
 
 
-def wandb_init(cfg, model):
+def wandb_init(cfg):
+    
+    wandb.tensorboard.unpatch()
     
     # initialize
     wandb.init(entity=cfg.WANDB.ENTITY, 
-                project=cfg.WANDB.PROJECT, 
-                sync_tensorboard=True
+                project=cfg.WANDB.PROJECT
             )
 
-    suffix = "2" 
+    suffix = "" 
     if cfg.WANDB.SWEEP:
+        curr_sweep_params, suffix = listify(wandb.config)
         # inject sweep parameters into cfg
-        cfg.merge_from_list(listify(wandb.config))
+        cfg.defrost()
+        cfg.merge_from_list(curr_sweep_params)
+        cfg.WANDB.RUN_NAME = cfg.WANDB.RUN_NAME + suffix
         cfg.freeze()
-        # set a dynamic run name using sweep values
+    
+    wandb.tensorboard.patch(root_logdir=os.path.join(cfg.OUTPUT_DIR, cfg.WANDB.RUN_NAME))
     
     wandb.config.update(cfg, allow_val_change=True)
-    run_name = cfg.WANDB.RUN_NAME + suffix
-    wandb.run.name = run_name
+    wandb.run.name = cfg.WANDB.RUN_NAME
+
+
+def wandb_sweep(args, cfg, launch_fn):
+    # read sweep parameters
+    path_to_sweep = os.path.join(args.expt_dir, "sweep.json")
+    assert os.path.exists(path_to_sweep), \
+        f"args.expt_dir ({args.expt_dir}) must contain `sweep.json`"
     
-    if cfg.WANDB.WATCH_GRAD:
-        # watch parameter gradients
-        wandb.watch(model, log="all", log_freq=10)
-
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"Total parameters: {total_params}")
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Trainable parameters: {trainable_params}")
-
-
-
-def wandb_sweep(sweep_config, cfg, launch_fn):
-    with open(sweep_config, "r") as f:
+    with open(path_to_sweep, "r") as f:
         sweep_config = json.load(f)
+    
+    # create a sweep
     sweep_id = wandb.sweep(sweep_config, project=cfg.WANDB.PROJECT)
-    wandb.agent(sweep_id, function=lambda: launch_fn(cfg))
+    wandb.agent(sweep_id, function=lambda: launch_fn(args))
     return

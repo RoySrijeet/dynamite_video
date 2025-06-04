@@ -7,29 +7,13 @@ from omegaconf import OmegaConf
 
 from detectron2.config import CfgNode, LazyConfig
 from detectron2.utils import comm
-from detectron2.utils.env import seed_all_rng
 from detectron2.utils.logger import setup_logger
-from detectron2.utils.file_io import PathManager
 from detectron2.utils.collect_env import collect_env_info
 
 
 __all__ = [
     "default_setup",
 ]
-
-def _highlight(code, filename):
-    try:
-        import pygments
-    except ImportError:
-        return code
-
-    from pygments.lexers import Python3Lexer, YamlLexer
-    from pygments.formatters import Terminal256Formatter
-
-    lexer = Python3Lexer() if filename.endswith(".py") else YamlLexer()
-    code = pygments.highlight(code, lexer, Terminal256Formatter(style="monokai"))
-    return code
-
 
 def _set_float32_precision(precision: str = "high") -> None:
     """Sets the precision of float32 matrix multiplications and convolution operations.
@@ -79,45 +63,36 @@ def default_setup(cfg, args):
         cfg (CfgNode or omegaconf.DictConfig): the full config to be used
         args (argparse.NameSpace): the command line arguments to be logged
     """
-    output_dir = _try_get_key(cfg, "OUTPUT_DIR", "output_dir", "train.output_dir")
+    if cfg.WANDB.SWEEP:
+        # if the run is part of a sweep, create a subdirectory
+        cfg.defrost()
+        cfg.OUTPUT_DIR = os.path.join(cfg.OUTPUT_DIR, cfg.WANDB.RUN_NAME)
+        cfg.freeze()
+    
+    output_dir = cfg.OUTPUT_DIR
+
     if comm.is_main_process() and output_dir:
-        PathManager.mkdirs(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
 
     rank = comm.get_rank()
-    setup_logger(output_dir, distributed_rank=rank, name="fvcore")
     logger = setup_logger(output_dir, distributed_rank=rank)
 
     logger.info("Rank of current process: {}. World size: {}".format(rank, comm.get_world_size()))
     logger.info("Environment info:\n" + collect_env_info())
 
     logger.info("Command line arguments: " + str(args))
-    if hasattr(args, "config_file") and args.config_file != "":
-        logger.info(
-            "Contents of args.config_file={}:\n{}".format(
-                args.config_file,
-                _highlight(PathManager.open(args.config_file, "r").read(), args.config_file),
-            )
-        )
 
     if comm.is_main_process() and output_dir:
         # Note: some of our scripts may expect the existence of
         # config.yaml in output directory
         path = os.path.join(output_dir, "config.yaml")
         if isinstance(cfg, CfgNode):
-            # roy - edit start
-            # messy logging in file
-            #logger.info("Running with full config:\n{}".format(_highlight(cfg.dump(), ".yaml")))
-            logger.info("Running with full config:\n{}".format(cfg.dump()))
-            # roy - edit end
-            with PathManager.open(path, "w") as f:
+            # logger.info("Running with full config:\n{}".format(cfg.dump()))
+            with open(path, "w") as f:
                 f.write(cfg.dump())
         else:
             LazyConfig.save(cfg, path)
         logger.info("Full config saved to {}".format(path))
-
-    # make sure each worker has a different, yet deterministic seed if specified
-    seed = _try_get_key(cfg, "SEED", "train.seed", default=-1)
-    seed_all_rng(None if seed < 0 else seed + rank)
 
     # cudnn benchmark has large overhead. It shouldn't be used considering the small size of
     # typical validation set.

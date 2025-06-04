@@ -393,26 +393,23 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                             query_pos=query_embed           # QxTxD pos emb for query
                                                         )
 
-            if self.use_qqca != "none":
-                if self.use_qqca == "vanilla":
-                    Q,T,D = output.shape
-                    output = self.encoder.query_query_cross_attention_layers[i](output.view(Q*T, D),
+            if self.use_qqca == "vanilla_before_msa":
+                Q,T,D = output.shape
+                output = self.encoder.query_query_cross_attention_layers[i](output.view(Q*T, D),
+                                                                            tgt_mask=None,
+                                                                            tgt_key_padding_mask=None,
+                                                                            query_pos=query_embed.view(Q*T, D),
+                                                                        )
+                output = output.view(Q,T,D)
+            if self.use_qqca == "masked_before_msa":
+                # cross-attention between object-specific queries of different frames
+                inst_batched_query, inst_batched_query_embed, inst_batched_pad_mask = self.get_object_batched_query(output, query_embed, object_to_indices, num_queries_per_object)
+                padded_output = self.encoder.query_query_cross_attention_layers[i](inst_batched_query,
                                                                                 tgt_mask=None,
-                                                                                tgt_key_padding_mask=None,
-                                                                                query_pos=query_embed.view(Q*T, D),
+                                                                                tgt_key_padding_mask=inst_batched_pad_mask,
+                                                                                query_pos=inst_batched_query_embed,
                                                                             )
-                    output = output.view(Q,T,D)
-                elif self.use_qqca == "masked":
-                    # cross-attention between object-specific queries of different frames
-                    inst_batched_query, inst_batched_query_embed, inst_batched_pad_mask = self.get_object_batched_query(output, query_embed, object_to_indices, num_queries_per_object)
-                    padded_output = self.encoder.query_query_cross_attention_layers[i](inst_batched_query,
-                                                                                    tgt_mask=None,
-                                                                                    tgt_key_padding_mask=inst_batched_pad_mask,
-                                                                                    query_pos=inst_batched_query_embed,
-                                                                                )
-                    output = self.get_frame_batched_query(output, padded_output, object_to_indices)
-                else:
-                    raise RuntimeError(f"Query-query cross-attention applicable only in following modes: ['none', 'vanilla', 'masked']; {self.qqca} found!")
+                output = self.get_frame_batched_query(output, padded_output, object_to_indices)
             
             # self-attention between queries within frame
             output = self.encoder.self_attention_layers[i](output, 
@@ -420,6 +417,24 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                            tgt_key_padding_mask=None,
                                                            query_pos=query_embed
                                                         )
+            
+            if self.use_qqca == "vanilla_after_msa":
+                Q,T,D = output.shape
+                output = self.encoder.query_query_cross_attention_layers[i](output.view(Q*T, D),
+                                                                            tgt_mask=None,
+                                                                            tgt_key_padding_mask=None,
+                                                                            query_pos=query_embed.view(Q*T, D),
+                                                                        )
+                output = output.view(Q,T,D)
+            if self.use_qqca == "masked_after_msa":
+                # cross-attention between object-specific queries of different frames
+                inst_batched_query, inst_batched_query_embed, inst_batched_pad_mask = self.get_object_batched_query(output, query_embed, object_to_indices, num_queries_per_object)
+                padded_output = self.encoder.query_query_cross_attention_layers[i](inst_batched_query,
+                                                                                tgt_mask=None,
+                                                                                tgt_key_padding_mask=inst_batched_pad_mask,
+                                                                                query_pos=inst_batched_query_embed,
+                                                                            )
+                output = self.get_frame_batched_query(output, padded_output, object_to_indices)
             
             # FFN
             output = self.encoder.ffn_layers[i](output)
