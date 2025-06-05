@@ -42,7 +42,7 @@ class AvgClicksPoolingInitializer(nn.Module):
         super().__init__()
         self.hidden_dim = hidden_dim
         # learnable query for each object
-        self.register_parameter("no_click_query", nn.Parameter(torch.zeros(hidden_dim), requires_grad=True))
+        self.register_parameter("no_click_query", nn.Parameter(torch.zeros(1, hidden_dim), requires_grad=True))
         
         nn.init.xavier_uniform_(self.no_click_query)
         
@@ -97,7 +97,7 @@ class AvgClicksPoolingInitializer(nn.Module):
             for inst_id, inst_fg_coords in enumerate(fr_fg_coords):
                 
                 # always add a learnable query
-                fr_fg_queries.append(repeat(self.no_click_query, "C -> 1 1 C"))
+                fr_fg_queries.append(repeat(self.no_click_query, "1 C -> 1 1 C"))
                 fr_fg_normalized_clicks.append(torch.tensor([-1.0, -1.0, -1.0]))
                 num_queries_per_object[fr_idx][inst_id] += 1
 
@@ -185,7 +185,7 @@ class AvgClicksPoolingInitializer(nn.Module):
         #     for inst_id, inst_fg_coords in enumerate(fr_fg_coords):
                 
         #         # always add a learnable query for each object
-        #         fr_descriptors.append(repeat(self.no_click_query, "C -> 1 1 C"))
+        #         fr_descriptors.append(repeat(self.no_click_query, "1 C -> 1 1 C"))
         #         normalized_clicks[-1].append(torch.tensor([-1.0, -1.0, -1.0]))
         #         num_queries_per_object[fr_idx][inst_id] += 1
 
