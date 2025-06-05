@@ -395,10 +395,10 @@ class DynamiteInteractiveTransformer(nn.Module):
 
             if self.use_qqca == "vanilla_before_msa":
                 Q,T,D = output.shape
-                output = self.encoder.query_query_cross_attention_layers[i](output.view(Q*T, D),
+                output = self.encoder.query_query_cross_attention_layers[i](output.view(Q*T, 1, D),
                                                                             tgt_mask=None,
                                                                             tgt_key_padding_mask=None,
-                                                                            query_pos=query_embed.view(Q*T, D),
+                                                                            query_pos=query_embed.view(Q*T, 1, D),
                                                                         )
                 output = output.view(Q,T,D)
             if self.use_qqca == "masked_before_msa":
@@ -420,10 +420,10 @@ class DynamiteInteractiveTransformer(nn.Module):
             
             if self.use_qqca == "vanilla_after_msa":
                 Q,T,D = output.shape
-                output = self.encoder.query_query_cross_attention_layers[i](output.view(Q*T, D),
+                output = self.encoder.query_query_cross_attention_layers[i](output.view(Q*T, 1, D),
                                                                             tgt_mask=None,
                                                                             tgt_key_padding_mask=None,
-                                                                            query_pos=query_embed.view(Q*T, D),
+                                                                            query_pos=query_embed.view(Q*T, 1, D),
                                                                         )
                 output = output.view(Q,T,D)
             if self.use_qqca == "masked_after_msa":

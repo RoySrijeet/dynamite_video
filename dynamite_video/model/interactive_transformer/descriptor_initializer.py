@@ -44,6 +44,8 @@ class AvgClicksPoolingInitializer(nn.Module):
         # learnable query for each object
         self.register_parameter("no_click_query", nn.Parameter(torch.zeros(hidden_dim), requires_grad=True))
         
+        nn.init.xavier_uniform_(self.no_click_query)
+        
     
     def forward(
             self,
