@@ -77,11 +77,14 @@ def evaluate(cfg,
             # generate indices of shorter sub-sequences or clips from the whole sequence
             clip_indices = manager.generate_clip_indices(start=lowest_frame_index)
 
+            root_dir = "/home/roy/REPOS/dynamite_video/experiments_set_3/losses/optimizations/batched_qqca/visualize"
             # make predictions for one clip at a time
             for num, indices in enumerate(clip_indices):
 
-                clip, clip_inputs = manager.extract_clip(indices)
+                clip, clip_inputs, name_suffix = manager.extract_clip(indices)
+                torch.save(clip_inputs, f"{name_suffix}_clip_inputs.pth")
                 clip_preds = predictor.get_prediction([clip_inputs], indices)    # T,N,H,W
+                torch.save(clip_preds, f"{name_suffix}_clip_preds.pth")
                 manager.store_prediction(clip_preds, clip, indices)
 
                 if save_vis:
