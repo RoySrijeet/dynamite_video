@@ -31,8 +31,8 @@ class SequenceManager:
         
         self.clip_length = dataset_meta["clip_length"]
         self.num_overlapping_frames = dataset_meta["num_overlapping_frames"]
-        # self.category_labels = dataset_meta["category_labels"]
-        # self.fps = dataset_meta["fps"]
+        self.category_labels = dataset_meta["category_labels"]
+        self.fps = dataset_meta["fps"]
 
         # resolutions
         self.T = len(self.sequence)
@@ -41,7 +41,7 @@ class SequenceManager:
         
         # initialize storage for semantic masks
         self.images = self.sequence.load_images()
-        self.gt_masks = self.sequence.prepare_eval_masks()
+        self.gt_masks, self.ignore_masks = self.sequence.prepare_eval_masks()
 
         # transformations
         self.H, self.W = self.compute_tfm_sizes(tfms)
@@ -70,6 +70,8 @@ class SequenceManager:
         self.pred_masks = np.zeros((self.T, self.H, self.W), dtype=np.uint8)
         # store frame-level IoU
         self.ious = np.zeros(self.T)
+
+        self.MIN_MASK_AREA = 400
         
     
     def compute_tfm_sizes(self, tfms):
@@ -142,7 +144,7 @@ class SequenceManager:
         Returns:
             clip: dict, compatible with `inputs` argument in `DynamiteModel.forward()`
         """
-        root_dir = "/home/roy/REPOS/dynamite_video/experiments_set_3/losses/optimizations/batched_qqca/visualize"
+        # root_dir = "/home/roy/REPOS/dynamite_video/experiments/sweep_1/sweep_1_inst_1_qqca_masked_before_msa/visualize"
         print(f"\nExtracting indices: {_indices}")
         indices = _indices
         if len(indices) >= 2 and indices[1] < indices[0]:
@@ -153,7 +155,7 @@ class SequenceManager:
         clip_gt_masks = self.gt_masks[indices[0]:indices[-1]+1]     # T,H,W
         print(f"Found gt masks of the clip: {clip_gt_masks.shape}")
         name_suffix = "_".join([str(i) for i in indices])
-        np.save(os.path.join(root_dir, f"{name_suffix}_clip_gt_masks.npy"), clip_gt_masks)
+        # np.save(os.path.join(root_dir, f"{name_suffix}_clip_gt_masks.npy"), clip_gt_masks)
 
         # serialize object IDs in the clip
         clip_orig_ids = list(np.unique(clip_gt_masks))[1:]
@@ -185,14 +187,20 @@ class SequenceManager:
             for global_obj_id in fr_obj_ids:
                 if global_obj_id in self.object_discovery:  # object has already been discovered
                     continue
+
+                # ground truth binary mask of the object in the frame
+                obj_mask = (fr_mask == global_obj_id).astype(np.uint8)
+                
+                # if the object mask is too small don't sample a click from here
+                if obj_mask.sum() < self.MIN_MASK_AREA:
+                    continue
                 
                 print(f"Obj with original ID {global_obj_id} was found for the first time in this frame w.r.t the whole sequence")
                 self.object_discovery.add(global_obj_id)
                 print(f"Objects discovered so far: {self.object_discovery}")
                 
                 # center coordinates in the mask of the object
-                obj_mask = (fr_mask == global_obj_id).astype(np.uint8)
-                np.save(os.path.join(root_dir, f"{name_suffix}_obj_{global_obj_id}_first_appear_fr_{global_fr_idx}.npy"), obj_mask)
+                # np.save(os.path.join(root_dir, f"{name_suffix}_obj_{global_obj_id}_first_appear_fr_{global_fr_idx}.npy"), obj_mask)
                 center_coords = get_center_coords(obj_mask)
 
                 # serialized object ID in the clip
@@ -210,7 +218,7 @@ class SequenceManager:
         if overlapping_frame_preds.any():
             print(f"There are overlapping frame predictions to deal with...")
             print(f"overlapping frame (global) indices: {overlapping_frame_indices}")
-            np.save(os.path.join(root_dir, f"{name_suffix}_overlapping_fr_preds.npy"), overlapping_frame_preds)
+            # np.save(os.path.join(root_dir, f"{name_suffix}_overlapping_fr_preds.npy"), overlapping_frame_preds)
             
             # objects predicted in the overlapping frames - original IDs
             overlapping_objects_predicted = list(np.unique(overlapping_frame_preds))[1:]
@@ -222,18 +230,17 @@ class SequenceManager:
 
                 fr_idx = (overlapping_frame_preds==global_obj_id).astype(np.uint8).sum(axis=(1,2)) > 0
                 fr_idx = np.random.choice(np.where(fr_idx)[0])
-                print(f"This object appears in the following frames: {global_obj_id}")
                 global_fr_idx = overlapping_frame_indices[fr_idx]
-                print(f"Sampling the click from {global_fr_idx}")
+                local_fr_idx = indices.index(global_fr_idx)
+                print(f"Sampling the click from the following frame: {global_fr_idx}, which, in this clip is the {local_fr_idx}-th frame")
 
                 obj_mask = (overlapping_frame_preds[fr_idx]==global_obj_id).astype('uint8')
-                np.save(os.path.join(root_dir, f"{name_suffix}_obj_{global_obj_id}_overlapping_click_fr_{global_fr_idx}.npy"), obj_mask)
+                # np.save(os.path.join(root_dir, f"{name_suffix}_obj_{global_obj_id}_overlapping_click_fr_{global_fr_idx}.npy"), obj_mask)
                 center_coords = get_center_coords(obj_mask)
 
                 # serialized object ID in the clip
-                local_fr_idx = indices.index(global_fr_idx)
+                local_obj_id = clip_orig_to_serial_id[global_obj_id]
                 print(f"Sampled a click at location {center_coords} on object with global ID {global_obj_id} and local ID {local_obj_id}")
-                local_obj_id = clip_orig_to_serial_id[global_obj_id]                
                 clip_fg_coords_list[local_fr_idx][local_obj_id-1].append([center_coords[0], center_coords[1], local_obj_id, local_fr_idx, self.t])
                 clip_num_clicks_per_object[local_fr_idx][local_obj_id-1] += 1
 
@@ -290,11 +297,13 @@ class SequenceManager:
         # convert binary masks to panoptic
         pred_sem_masks = np.zeros((len(indices), self.H, self.W), dtype=np.uint8) # T,H,W
 
-        for f, fr_pred in enumerate(clip_pred):
+        for local_fr_idx, global_fr_idx, fr_pred in zip(range(len(indices)), indices, clip_pred):
             for i, msk in enumerate(fr_pred):
-                pred_sem_masks[f][np.where(msk == 1)] = clip["serial_to_orig_id"][i+1]
+                msk = np.logical_and(msk.numpy(), np.logical_not(self.ignore_masks[global_fr_idx]))
+                pred_sem_masks[local_fr_idx][np.where(msk == 1)] = clip["serial_to_orig_id"][i+1]
 
         self.pred_masks[indices] = pred_sem_masks
+        return pred_sem_masks
 
 
     def save_visualization(self, vis_path, round_num=0, indices=None, alpha = 0.5):

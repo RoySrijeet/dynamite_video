@@ -46,10 +46,6 @@ class Evaluator(DefaultTrainer):
             # load sequence info from disc into `GenericVideoSequence` format
             dataset, dataset_meta = build_evaluation_dataset(cfg, dataset_name)
             
-            # if cfg.ITERATIVE.TEST.SINGLE_INSTANCE:
-            #     from dynamite_video.evaluation.single_instance_evaluation import evaluate
-            # else:
-            #     from dynamite_video.evaluation.multi_instance_evaluation import evaluate
             from dynamite_video.evaluation.multi_instance_evaluation import evaluate
             
             result = evaluate(cfg,
