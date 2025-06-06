@@ -243,7 +243,7 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
 
         annotations_content = self.map_annotations(json_annotations)
 
-        self.videos, self.meta = parse_generic_video_dataset(self.path_to_images, annotations_content, serialize=True)
+        self.videos, self.meta = parse_generic_video_dataset(self.path_to_images, annotations_content) #, serialize=True)
         del annotations_content
         
         self.meta["clip_length"] = self.clip_length
@@ -260,7 +260,7 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
         """
         sequences = []
         
-        MIN_MASK_AREA = 1 #self.cfg.TRAINING.MIN_MASK_AREA
+        MIN_MASK_AREA = 1
 
         for seq in content["sequences"]:
 
@@ -271,18 +271,20 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
             
             updated_segmentations = []
             accepted_track_ids = {}
+            ignore_masks = []
             
             # read semantic maps - all of them, regardless of their size
             for fr_idx, sem_masks in enumerate(seq["semantic_segmentations"]):
                 updated_segmentations.append(dict())
+                ignore_masks.append([])
                 
                 for class_id, sem_seg_rle in sem_masks.items():
 
                     # ignore 'void' class
                     if class_id == '255':
+                        ignore_masks[-1] = sem_seg_rle
                         continue
                     
-                    # lowest class_id could be 0
                     if self.mask_area(sem_seg_rle, img_dims) >= MIN_MASK_AREA:
                         track_id = int(class_id) + 1
                         updated_segmentations[-1][track_id] = sem_seg_rle
@@ -305,7 +307,7 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
                     accepted_track_ids[new_track_id] = seq['categories'][track_id]
             
             seq["segmentations"] = updated_segmentations
-            seq["ignore_masks"] = None
+            seq["ignore_masks"] = ignore_masks
             seq["categories"] = accepted_track_ids
             seq["max_class_id"] = max_class_id
 

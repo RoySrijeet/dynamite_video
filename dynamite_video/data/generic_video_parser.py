@@ -263,7 +263,14 @@ class GenericVideoSequence(object):
                 img_dims = None if isinstance(fr_rles[obj_id], dict) else self.image_dims
                 _m = decode_mask(fr_rles[obj_id], img_dims)
                 semantic_masks[fr_idx][np.where(_m==1)] = obj_id
-        return semantic_masks
+
+        # ignore masks
+        ignore_masks = None
+        if self.ignore_masks is not None:
+            ignore_masks = [decode_mask(ig_msk, img_dims) for ig_msk in self.ignore_masks]
+            ignore_masks = np.stack(ignore_masks)
+        
+        return semantic_masks, ignore_masks
 
     
     def extract_subsequence(self, frame_idxes: List[int], object_ids_to_keep: List[int]=None, new_id: str=""):
