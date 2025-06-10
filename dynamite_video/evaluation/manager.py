@@ -27,30 +27,55 @@ class SequenceManager:
                 * fps: sequence FPS
             tfms: transformation info from config, cfg.INPUT
         """
-        self.sequence = sequence
-        
-        self.clip_length = dataset_meta["clip_length"]
-        self.num_overlapping_frames = dataset_meta["num_overlapping_frames"]
-        self.category_labels = dataset_meta["category_labels"]
-        self.fps = dataset_meta["fps"]
 
-        # resolutions
+        # dataset level information
+        
+        # fps of dataset sequences
+        self.fps = dataset_meta["fps"]
+        # dataset split
+        self.split = dataset_meta["split"]
+        # num of semantic classes - minus 'void'
+        self.num_classes = dataset_meta["num_classes"]
+        # original class label to category name mapping
+        self.category_labels = dataset_meta["category_labels"]
+        # 'things' class labels
+        self.things_list = dataset_meta["things_list"]
+        # ignore class label
+        self.ignore_class = dataset_meta["ignore_class"]
+        # max num of instances per category
+        self.max_instances_per_category = dataset_meta["max_instances_per_category"]
+        # length of clips to be extracted from the sequence
+        self.clip_length = dataset_meta["clip_length"]
+        # overlap between successive clips
+        self.num_overlapping_frames = dataset_meta["num_overlapping_frames"]
+        # sequence level information
+        self.sequence = sequence
+        # dimensions T,N,H,W
         self.T = len(self.sequence)
-        self.N = len(self.sequence.object_ids)
+        self.N = len(self.sequence.object_ids) - 1 # ignoring ignore mask
         self.orig_H, self.orig_W = self.sequence.image_dims
         
-        # initialize storage for semantic masks
+        # load images and ground truth masks
         self.images = self.sequence.load_images()
-        self.gt_masks, self.ignore_masks = self.sequence.prepare_eval_masks()
-
+        # gt semantic masks follow the labelling format: semantic_map * max_instances_per_category + instance_map
+        self.gt_masks = self.sequence.prepare_eval_masks()
         # transformations
         self.H, self.W = self.compute_tfm_sizes(tfms)
+        self.ignore_masks = (self.gt_masks==self.ignore_class * self.max_instances_per_category).astype(np.uint8)
+
+        # maintain serialized object IDs
+        self.orig_to_serial_ids, self.serial_to_orig_ids = serialize_object_ids(self.sequence.object_ids)
+        # ensure there's no intersection between original IDs and the serialized IDs
+        assert set(self.orig_to_serial_ids.keys()).intersection(set(self.orig_to_serial_ids.values())) == set()
+        # whether an object was already discovered or not
+        self.object_discovery = set()
 
         # click radius - region around a existing click that is excluded when sampling a new click
         self.click_radius = 5
         # Strategy to avoid regions while sampling next clicks
         self.sampling_strategy = 1
-        self.not_clicked_map = np.ones((self.T, self.H, self.W), dtype=np.bool_)
+        # maintain a map of regions to avoid during click sampling, initialized with ignore mask regions
+        self.not_clicked_map = (self.gt_masks!=self.ignore_class * self.max_instances_per_category).astype(np.bool_)
 
         # initialize buffers
         # foreground clicks sampled on each object in each frame
@@ -64,10 +89,8 @@ class SequenceManager:
         # first click at timestamp 1
         self.t = 1
         
-        # whether an object was already discovered or not
-        self.object_discovery = set()
         # to store predicted masks
-        self.pred_masks = np.zeros((self.T, self.H, self.W), dtype=np.uint8)
+        self.pred_masks = np.zeros((self.T, self.H, self.W), dtype=np.uint32)
         # store frame-level IoU
         self.ious = np.zeros(self.T)
 
@@ -144,68 +167,48 @@ class SequenceManager:
         Returns:
             clip: dict, compatible with `inputs` argument in `DynamiteModel.forward()`
         """
-        # root_dir = "/home/roy/REPOS/dynamite_video/experiments/sweep_1/sweep_1_inst_1_qqca_masked_before_msa/visualize"
-        print(f"\nExtracting indices: {_indices}")
         indices = _indices
         if len(indices) >= 2 and indices[1] < indices[0]:
             indices = _indices[::-1]
-            print(f"Going back in time.. sorted indices: {indices}")
 
-        # semantic maps of the clip frames
-        clip_gt_masks = self.gt_masks[indices[0]:indices[-1]+1]     # T,H,W
-        print(f"Found gt masks of the clip: {clip_gt_masks.shape}")
-        name_suffix = "_".join([str(i) for i in indices])
-        # np.save(os.path.join(root_dir, f"{name_suffix}_clip_gt_masks.npy"), clip_gt_masks)
+        # semantic maps of the clip frames - T,H,W
+        clip_gt_masks = self.gt_masks[indices[0]:indices[-1]+1]
 
         # serialize object IDs in the clip
-        clip_orig_ids = list(np.unique(clip_gt_masks))[1:]
-        print(f"Unique values in gt masks == orig object IDs: {clip_orig_ids}")
+        clip_orig_ids = list(np.unique(clip_gt_masks))
         clip_orig_to_serial_id, clip_serial_to_orig_id = serialize_object_ids(clip_orig_ids)
-        print(f"Serializing object IDs: ")
-        print(f"Orig_to_serial_id: {clip_orig_to_serial_id}")
-        print(f"Serial_to_orig_id: {clip_serial_to_orig_id}")
+        assert set(clip_orig_to_serial_id.keys()).intersection(set(clip_orig_to_serial_id.values())) == set()
         
-        # sample gt clicks
-        # only if there is any object appearing in the clip for the first time
+        # sample gt clicks - only if there is any object appearing in the clip for the first time
         clip_fg_coords_list = [[[] for _ in range(len(clip_orig_ids))] for _ in range(len(indices))]
         clip_num_clicks_per_object = np.zeros((len(indices), len(clip_orig_ids)), dtype=np.uint16)
         clip_objects_per_frame = []
         
         for local_fr_idx, global_fr_idx in enumerate(indices):
-
-            print(f"Looking for a click to sample in frame {global_fr_idx}, which is frame {local_fr_idx} in the clip")
             
-            # gt mask of current frame
-            fr_mask = clip_gt_masks[local_fr_idx]       # H,W
-            fr_obj_ids = list(np.unique(fr_mask))[1:]
-            print(f"Original object IDs in the frame: {fr_obj_ids}")
+            # gt mask of current frame - H,W
+            fr_mask = clip_gt_masks[local_fr_idx].copy()
+            fr_obj_ids = list(np.unique(fr_mask))
             
             # serialize the object IDs in this frame
             clip_objects_per_frame.append([clip_orig_to_serial_id[obj_id] for obj_id in fr_obj_ids])
-            print(f"Local object IDs in the frame: {clip_objects_per_frame[-1]}")
 
             for global_obj_id in fr_obj_ids:
-                if global_obj_id in self.object_discovery:  # object has already been discovered
+                if global_obj_id in self.object_discovery:
+                    continue
+                
+                if global_obj_id == self.ignore_class * self.max_instances_per_category:
+                    # do not sample click for ignore class
                     continue
 
                 # ground truth binary mask of the object in the frame
                 obj_mask = (fr_mask == global_obj_id).astype(np.uint8)
-                
-                # if the object mask is too small don't sample a click from here
-                if obj_mask.sum() < self.MIN_MASK_AREA:
-                    continue
-                
-                print(f"Obj with original ID {global_obj_id} was found for the first time in this frame w.r.t the whole sequence")
-                self.object_discovery.add(global_obj_id)
-                print(f"Objects discovered so far: {self.object_discovery}")
-                
-                # center coordinates in the mask of the object
-                # np.save(os.path.join(root_dir, f"{name_suffix}_obj_{global_obj_id}_first_appear_fr_{global_fr_idx}.npy"), obj_mask)
-                center_coords = get_center_coords(obj_mask)
 
+                self.object_discovery.add(global_obj_id)
+                
+                center_coords = get_center_coords(obj_mask)
                 # serialized object ID in the clip
                 local_obj_id = clip_orig_to_serial_id[global_obj_id]
-                print(f"Sampled a click at location {center_coords} on object with global ID {global_obj_id} and local ID {local_obj_id}")
                 clip_fg_coords_list[local_fr_idx][local_obj_id-1].append([center_coords[0], center_coords[1], local_obj_id, local_fr_idx, self.t])
                 clip_num_clicks_per_object[local_fr_idx][local_obj_id-1] += 1
 
@@ -213,34 +216,27 @@ class SequenceManager:
 
         # sample from overlapping frames in the clip
         overlapping_frame_indices = sorted(_indices[:self.num_overlapping_frames])
-        overlapping_frame_preds = np.stack(self.pred_masks[overlapping_frame_indices[0]:overlapping_frame_indices[-1]+1])
+        overlapping_frame_preds = np.stack(self.pred_masks[overlapping_frame_indices])
         
         if overlapping_frame_preds.any():
-            print(f"There are overlapping frame predictions to deal with...")
-            print(f"overlapping frame (global) indices: {overlapping_frame_indices}")
-            # np.save(os.path.join(root_dir, f"{name_suffix}_overlapping_fr_preds.npy"), overlapping_frame_preds)
-            
-            # objects predicted in the overlapping frames - original IDs
-            overlapping_objects_predicted = list(np.unique(overlapping_frame_preds))[1:]
-            print(f"Objects predicted in overlapping frames: {overlapping_objects_predicted}")
+            overlapping_objects_predicted = list(np.unique(overlapping_frame_preds))
 
             # for each object, randomly pick one frame to sample a click from
             for global_obj_id in overlapping_objects_predicted:
-                print(f"Sampling a click on overlapping object with global ID {global_obj_id}")
+                if global_obj_id == self.ignore_class * self.max_instances_per_category:
+                    continue
 
                 fr_idx = (overlapping_frame_preds==global_obj_id).astype(np.uint8).sum(axis=(1,2)) > 0
                 fr_idx = np.random.choice(np.where(fr_idx)[0])
                 global_fr_idx = overlapping_frame_indices[fr_idx]
                 local_fr_idx = indices.index(global_fr_idx)
-                print(f"Sampling the click from the following frame: {global_fr_idx}, which, in this clip is the {local_fr_idx}-th frame")
 
                 obj_mask = (overlapping_frame_preds[fr_idx]==global_obj_id).astype('uint8')
-                # np.save(os.path.join(root_dir, f"{name_suffix}_obj_{global_obj_id}_overlapping_click_fr_{global_fr_idx}.npy"), obj_mask)
+                # obj_mask = (clip_gt_masks[fr_idx]==global_obj_id).astype('uint8')
                 center_coords = get_center_coords(obj_mask)
 
                 # serialized object ID in the clip
                 local_obj_id = clip_orig_to_serial_id[global_obj_id]
-                print(f"Sampled a click at location {center_coords} on object with global ID {global_obj_id} and local ID {local_obj_id}")
                 clip_fg_coords_list[local_fr_idx][local_obj_id-1].append([center_coords[0], center_coords[1], local_obj_id, local_fr_idx, self.t])
                 clip_num_clicks_per_object[local_fr_idx][local_obj_id-1] += 1
 
@@ -261,16 +257,18 @@ class SequenceManager:
             "max_timestamp_list": self.max_timestamps[indices[0]:indices[-1]+1],
         }
         
-        return clip, input, name_suffix
+        return clip, input
     
 
     def record_click(self, frame_idx, obj_id, coords):
         """
-        Update `not_clicked_map` of specified frame at the specified location.
+        Record a click in global buffers and update `not_clicked_map` at the clicked location
         Strategy is specified by `self.sampling_strategy`
             0: new click avoids all the previously sampled click locations
             1: new click avoids all locations upto radius=self.click_radius around all prev sampled clicks
         """
+        # obj_id still has the format: semantic_map * max_instances_per_category + instance_map
+        obj_id = self.orig_to_serial_ids[obj_id]
         if self.sampling_strategy == 0:
             self.not_clicked_map[frame_idx][coords[0], coords[1]] = False
         elif self.sampling_strategy == 1:
@@ -285,22 +283,25 @@ class SequenceManager:
         self.t+=1
         
 
-    def store_prediction(self, clip_pred, clip, indices):
+    def store_prediction(self, clip_preds, clip, indices):
         """
         Store predicted masks of a clip in the whole sequence
 
         Args:
-            clip_pred: list of N,H,W predicted binary masks
+            clip_preds: list of N,H,W predicted binary masks
             clip: GenericVideoSequence
             indices: indices w.r.t whole sequence
         """
         # convert binary masks to panoptic
-        pred_sem_masks = np.zeros((len(indices), self.H, self.W), dtype=np.uint8) # T,H,W
+        pred_sem_masks = np.zeros((len(indices), self.H, self.W), dtype=np.uint32) # T,H,W
 
-        for local_fr_idx, global_fr_idx, fr_pred in zip(range(len(indices)), indices, clip_pred):
+        for local_fr_idx, fr_pred in enumerate(clip_preds):
             for i, msk in enumerate(fr_pred):
-                msk = np.logical_and(msk.numpy(), np.logical_not(self.ignore_masks[global_fr_idx]))
                 pred_sem_masks[local_fr_idx][np.where(msk == 1)] = clip["serial_to_orig_id"][i+1]
+
+        # ignore masks
+        clip_ignore_masks = self.ignore_masks[indices]
+        pred_sem_masks[np.where(clip_ignore_masks==1)] = self.ignore_class * self.max_instances_per_category
 
         self.pred_masks[indices] = pred_sem_masks
         return pred_sem_masks
@@ -322,7 +323,14 @@ class SequenceManager:
         if not os.path.isdir(vis_path):
             os.makedirs(vis_path)
 
-        save_masks = self.pred_masks[indices]
+        save_masks = self.pred_masks[indices].copy()
+        
+        # pred_mask has labels in the format: semantic_map * max_instances_per_category + instance_map
+        # for easier visualization, the object IDs are serialized
+        obj_ids = np.unique(save_masks)
+        for i in obj_ids:
+            save_masks[np.where(save_masks==i)] = self.orig_to_serial_ids[i]
+        
         for fr_idx, fr_msk in zip(indices, save_masks):
             iou = self.compute_iou(fr_idx)
             
@@ -331,7 +339,7 @@ class SequenceManager:
                 im = cv2.resize(im, (self.orig_W, self.orig_H))
                 fr_msk = np.resize(fr_msk, (self.orig_H, self.orig_W))
 
-            fr_msk = Image.fromarray(fr_msk)
+            fr_msk = Image.fromarray(fr_msk.astype(np.uint8))
             fr_msk.putpalette(color_map)
             fr_msk.save(os.path.join(vis_path, f"mask_{fr_idx}_iou_{iou}.png"))
             
@@ -354,20 +362,25 @@ class SequenceManager:
             cv2.imwrite(os.path.join(vis_path, f"overlayed_{fr_idx}_iou_{iou}.png"), overlayed)
 
 
-    def compute_iou(self, frame_idx):
+    def compute_iou(self, frame_idx, ignore_small=True):
         """
         Compute IoU score of specified frame
         """
         pred = self.pred_masks[frame_idx]
         gt = self.gt_masks[frame_idx]
 
-        objects = np.unique(gt)[1:]   # - BG
+        objects = np.unique(gt)
         ious = []
 
         for obj_id in objects:
-            p = (pred == obj_id).astype('uint8')
+            if obj_id == self.ignore_class * self.max_instances_per_category:
+                continue
+            
             g = (gt == obj_id).astype('uint8')
-        
+            if ignore_small and g.sum() < 200:
+                continue
+            
+            p = (pred == obj_id).astype('uint8')
             intersection = np.logical_and(p, g).sum()
             union = np.logical_or(p,g).sum()
 
@@ -376,7 +389,6 @@ class SequenceManager:
                 continue
             
             ious.append(intersection/union)
-        assert len(ious) == len(objects)
         
         self.ious[frame_idx] = round(sum(ious)/len(ious),5)
         return self.ious[frame_idx]

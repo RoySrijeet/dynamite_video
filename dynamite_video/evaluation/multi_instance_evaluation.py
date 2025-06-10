@@ -1,17 +1,17 @@
+import numpy as np
 import os
-import time
 import random
 import torch
 import torch.nn as nn
-import numpy as np
 
 from contextlib import ExitStack, contextmanager
+from tqdm import tqdm
 
 from detectron2.utils import comm
 from detectron2.utils.logger import setup_logger
 
 from dynamite_video.evaluation.manager import SequenceManager
-from dynamite_video.evaluation.metrics import batched_f_measure, batched_jaccard
+from dynamite_video.evaluation.metrics.metrics import compute_stq
 
 
 def evaluate(cfg, 
@@ -61,9 +61,11 @@ def evaluate(cfg,
         random.seed(123456+seed_id)
 
         avg = []
+
+        pbar = tqdm(dataset, leave=False)
         
-        for video in dataset:
-            print(f"Processing {video.id}")
+        for i, video in enumerate(pbar):
+            pbar.set_description(f"{video.id}")
 
             # a fresh model for each sequence
             predictor = Predictor(model, len(video))
@@ -77,19 +79,17 @@ def evaluate(cfg,
             # generate indices of shorter sub-sequences or clips from the whole sequence
             clip_indices = manager.generate_clip_indices(start=lowest_frame_index)
 
-            # root_dir = "/home/roy/REPOS/dynamite_video/experiments/sweep_1/sweep_1_inst_1_qqca_masked_before_msa/visualize"
             # make predictions for one clip at a time
-            for num, indices in enumerate(clip_indices):
+            for num, indices in enumerate(tqdm(clip_indices, leave=False, desc="Clip")):
 
-                clip, clip_inputs, name_suffix = manager.extract_clip(indices)
-                # torch.save(clip_inputs, os.path.join(root_dir, f"{name_suffix}_clip_inputs.pth"))
+                clip, clip_inputs = manager.extract_clip(indices)
                 clip_preds = predictor.get_prediction([clip_inputs], indices)    # T,N,H,W
-                # torch.save(clip_preds, os.path.join(root_dir, f"{name_suffix}_clip_preds.pth"))
-                clip_sem_pred = manager.store_prediction(clip_preds, clip, indices)
-                # torch.save(clip_sem_pred, os.path.join(root_dir, f"{name_suffix}_clip_sem_preds.pth"))
+                manager.store_prediction(clip_preds, clip, indices)
 
                 if save_vis:
                     manager.save_visualization(vis_path=vis_path, round_num=1, indices=indices)
+
+            stq = compute_stq(manager.gt_masks, manager.pred_masks, dataset_meta)
 
             del manager
 

@@ -256,7 +256,7 @@ class GenericVideoSequence(object):
         """
         Prepare ground truth semantic masks for evaluation
         """
-        semantic_masks = np.zeros((len(self), self.height, self.width), dtype=np.uint8)
+        semantic_masks = np.zeros((len(self), self.height, self.width), dtype=np.uint32)
         for fr_idx, fr_rles in enumerate(self.segmentations):
             for obj_id in fr_rles:
                 # decode RLE
@@ -265,12 +265,12 @@ class GenericVideoSequence(object):
                 semantic_masks[fr_idx][np.where(_m==1)] = obj_id
 
         # ignore masks
-        ignore_masks = None
-        if self.ignore_masks is not None:
-            ignore_masks = [decode_mask(ig_msk, img_dims) for ig_msk in self.ignore_masks]
-            ignore_masks = np.stack(ignore_masks)
+        # ignore_masks = None
+        # if self.ignore_masks is not None:
+        #     ignore_masks = [decode_mask(ig_msk, img_dims) for ig_msk in self.ignore_masks]
+        #     ignore_masks = np.stack(ignore_masks)
         
-        return semantic_masks, ignore_masks
+        return semantic_masks
 
     
     def extract_subsequence(self, frame_idxes: List[int], object_ids_to_keep: List[int]=None, new_id: str=""):

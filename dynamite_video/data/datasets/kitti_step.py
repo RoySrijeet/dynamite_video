@@ -197,6 +197,7 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
         fps = cfg.DATASETS.KITTI_STEP.EVALUATION.FPS
         # number of overlapping frames between clips
         num_overlapping_frames = cfg.DATASETS.KITTI_STEP.EVALUATION.FRAME_OVERLAP
+        self.max_instances_per_category = 1000 #cfg.DATASETS.KITTI_STEP.EVALUATION.MAX_INSTANCES_PER_CATEGORY # TODO - add to config
 
         assert num_overlapping_frames <= clip_length, f"No. of overlapping frames cannot be more than the length of a clip"
         
@@ -250,6 +251,10 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
         self.meta["num_overlapping_frames"] = self.num_overlapping_frames
         self.meta["fps"] = self.fps
         self.meta["split"] = self.split
+        self.meta["num_classes"] = 19
+        self.meta["things_list"] = [11, 13]
+        self.meta["ignore_class"] = 255
+        self.meta["max_instances_per_category"] = self.max_instances_per_category
     
 
     def map_annotations(self, content):
@@ -264,50 +269,43 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
 
         for seq in content["sequences"]:
 
-            seq["id"] =  f"{self.name}/{seq['id']}"
             seq["dataset"] = self.name
 
             img_dims = (seq["height"], seq["width"])
             
             updated_segmentations = []
             accepted_track_ids = {}
-            ignore_masks = []
+
+            # NOTE: the semantic classes in KITTI_STEP have IDs from 0-18 and 255 (void).
+            # The instance segmentations have independent IDs that overlap with the
+            # semantic class IDs. To resolve this issue,
+            # semantic classes are assigned new ID: class ID * max_instances_per_category
+            # instances are assigned new ID: class ID * max_instances_per_category + instance ID
             
             # read semantic maps - all of them, regardless of their size
             for fr_idx, sem_masks in enumerate(seq["semantic_segmentations"]):
                 updated_segmentations.append(dict())
-                ignore_masks.append([])
                 
                 for class_id, sem_seg_rle in sem_masks.items():
-
-                    # ignore 'void' class
-                    if class_id == '255':
-                        ignore_masks[-1] = sem_seg_rle
-                        continue
-                    
                     if self.mask_area(sem_seg_rle, img_dims) >= MIN_MASK_AREA:
-                        track_id = int(class_id) + 1
+                        track_id = int(class_id) * self.max_instances_per_category
                         updated_segmentations[-1][track_id] = sem_seg_rle
                         accepted_track_ids[track_id] = int(class_id)
-
-            # NOTE: the semantic classes in KITTI_STEP have IDs from 0-18 (and void/255).
-            # The instance segmentations have their independent IDs that overlap with the
-            # class IDs. To resolve this issue, the objects are assigned a new id as 
-            # follows: new_id = max_class_id + 1 + real_id where max_class_id is the ID
-            # of the highest class ID
             
-            max_class_id = max(accepted_track_ids.keys())
+            max_class_id = int(max(sorted(accepted_track_ids.keys())[:-1]) // self.max_instances_per_category)
             
             # read instance masks
             for fr_idx, fr_inst_masks in enumerate(seq["segmentations"]):
                 for track_id, inst_rle in fr_inst_masks.items():
+                    # id of the class the instance belongs to
+                    class_id = seq['categories'][track_id]
                     # new track ID
-                    new_track_id = max_class_id + 1 + int(track_id)
+                    new_track_id = class_id * self.max_instances_per_category + int(track_id)
                     updated_segmentations[fr_idx][new_track_id] = inst_rle
                     accepted_track_ids[new_track_id] = seq['categories'][track_id]
             
             seq["segmentations"] = updated_segmentations
-            seq["ignore_masks"] = ignore_masks
+            seq["ignore_masks"] = None
             seq["categories"] = accepted_track_ids
             seq["max_class_id"] = max_class_id
 
