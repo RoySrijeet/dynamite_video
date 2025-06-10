@@ -336,7 +336,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             if self.use_static_bg_queries:
                 bg_queries = repeat(self.bg_query, "C -> 1 L C", L=max_queries-desc.shape[1])
             else:
-                bg_queries = repeat(self.bg_query, "C -> 1 L C", L=max_queries+1-desc.shape[1])
+                bg_queries = repeat(self.bg_query, "C -> 1 L C", L=max_queries-desc.shape[1]) #L=max_queries+1-desc.shape[1])
             descriptors[i] = torch.cat((descriptors[i], bg_queries), dim=1)
 
             clks = normalized_click_coords[i]
