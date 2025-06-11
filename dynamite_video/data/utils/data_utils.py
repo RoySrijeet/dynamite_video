@@ -251,13 +251,83 @@ def apply_resize_scale(
     output_scale = np.minimum(target_scale_size[0] / input_size[0], target_scale_size[1] / input_size[1])
     output_size = np.round(np.multiply(input_size, output_scale)).astype(int)
 
+    pad_h = 0
+    pad_w = 0
+    if output_size[0] > target_dims[0]:
+        output_size[0] = target_dims[0]
+    
+    if output_size[1] > target_dims[1]:
+        output_size[1] = target_dims[1]
+    
+    if output_size[0] < target_dims[0]:
+        pad_h = target_dims[0] - output_size[0]
+    
+    if output_size[1] < target_dims[1]:
+        pad_w = target_dims[1] - output_size[1]
+
     # resize
     images = resize_images(images, output_size[0], output_size[1])
     binary_masks = resize_masks(binary_masks, output_size[0], output_size[1], binary=True)
     if ignore_masks is not None:
         ignore_masks = resize_masks(ignore_masks, output_size[0], output_size[1], binary=False)
 
-    return images, binary_masks, ignore_masks
+    h,w = binary_masks.shape[2:]
+    padding_mask = np.zeros((h,w), dtype=np.uint8)
+    # pad
+    if pad_h>0 or pad_w>0:
+        im_pad = ((0,0), (0, pad_h), (0, pad_w), (0,0))
+        images = np.pad(images, im_pad, mode='constant', constant_values=128.0)
+        mask_pad = ((0,0), (0,0), (0, pad_h), (0, pad_w))
+        binary_masks = np.pad(binary_masks, mask_pad, mode='constant', constant_values=0)
+        padding_mask = np.pad(padding_mask, ((0, pad_h), (0, pad_w)), mode='constant', constant_values=1)
+        if ignore_masks is not None:
+            mask_pad = ((0,0), (0, pad_h), (0, pad_w))
+            ignore_masks = np.pad(ignore_masks, mask_pad, mode='constant', constant_values=0)
+
+    return images, binary_masks, ignore_masks, padding_mask
+
+
+def mask_to_bbox(masks: Tensor, raise_error_if_null_mask: Optional[bool] = True) -> torch.Tensor:
+    """
+    Extracts bounding boxes from masks
+    
+    Args:
+        masks: tensor of shape [N_1, ..., N_d, H, W]
+        raise_error_if_null_mask: Flag for whether or not to raise an error if a mask is all-zeros.
+    
+    Returns: torch.Tensor of shape [N, 4] containing bounding boxes coordinates in [x, y, w, h] format.
+            If `raise_error_if_null_mask` is False, coordinates [-1, -1, -1, -1] will be returned for all-zeros masks.
+    """
+    assert masks.ndim > 2
+
+    # flatten additional leading dims
+    leading_dim_sizes = masks.shape[:-2]
+    masks = masks.reshape(-1, *masks.shape[-2:])  # [N, H, W]
+    assert masks.ndim == 3  # sanity check
+
+    null_masks = torch.logical_not(torch.any(masks.flatten(1), 1))[:, None]  # [N, 1]
+    if torch.any(null_masks) and raise_error_if_null_mask:
+        raise ValueError("One or more all-zero masks found")
+
+    h, w = masks.shape[-2:]
+
+    reduced_rows = torch.any(masks, 2).long()  # [N, H]
+    reduced_cols = torch.any(masks, 1).long()  # [N, W]
+
+    x_min = (reduced_cols * torch.arange(-w-1, -1, dtype=torch.long, device=masks.device)[None]).argmin(1)  # [N]
+    y_min = (reduced_rows * torch.arange(-h-1, -1, dtype=torch.long, device=masks.device)[None]).argmin(1)  # [N]
+
+    x_max = (reduced_cols * torch.arange(w, dtype=torch.long, device=masks.device)[None]).argmax(1)  # [N]
+    y_max = (reduced_rows * torch.arange(h, dtype=torch.long, device=masks.device)[None]).argmax(1)  # [N]
+
+    width = x_max - x_min + 1
+    height = y_max - y_min + 1
+
+    bbox_coords = torch.stack((x_min, y_min, width, height), 1)
+    invalid_box = torch.full_like(bbox_coords, -1)
+
+    bbox_coords = torch.where(null_masks, invalid_box, bbox_coords)  # [N, 4]
+    return bbox_coords.reshape(*leading_dim_sizes, 4)  # [..., 4]
 
 
 def mask_to_bbox(masks: Tensor, raise_error_if_null_mask: Optional[bool] = True) -> torch.Tensor:

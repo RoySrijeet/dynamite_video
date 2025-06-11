@@ -48,7 +48,7 @@ def parse_generic_video_dataset(
                 )
 
     # wrap each video sequence as a `GenericVideoSequence` object
-    seqs = [GenericVideoSequence(seq, path_to_images, serialize) for seq in dataset["sequences"]]
+    seqs = [GenericVideoSequence(seq, path_to_images, meta_info, serialize) for seq in dataset["sequences"]]
 
     return seqs, meta_info
 
@@ -65,6 +65,7 @@ class GenericVideoSequence(object):
             self, 
             seq_dict,
             path_to_images,
+            meta_info,
             serialize=False
     ):
         """
@@ -80,6 +81,7 @@ class GenericVideoSequence(object):
         self.image_paths = seq_dict["image_paths"]
         self.image_dims = (seq_dict["height"], seq_dict["width"])
         self.id = seq_dict["id"]
+        self.meta_info = meta_info
 
         if not serialize:
             self.segmentations = seq_dict["segmentations"]
@@ -88,7 +90,6 @@ class GenericVideoSequence(object):
             obj_ids = sorted(seq_dict["categories"].keys())
             self.orig_to_serial_id = OrderedDict(zip(obj_ids, obj_ids))
             self.serial_to_orig_id = OrderedDict(zip(obj_ids, obj_ids))
-            self.max_class_id = seq_dict["max_class_id"]
 
         # serialize non-sequential object IDs
         else:
@@ -106,10 +107,9 @@ class GenericVideoSequence(object):
                 self.segmentations, self.semantic_segmentations = self.serialize_masks(segmentations, semantic_segmentations, self.orig_to_serial_id)
                 # update IDs in category map
                 self.object_categories = {self.orig_to_serial_id.get(obj_id): value for obj_id, value in seq_dict["categories"].items()}
-
-            self.max_class_id = self.orig_to_serial_id[seq_dict["max_class_id"]]
         
         self.ignore_masks = seq_dict.get("ignore_masks", None)
+        self.ignore_class = self.meta_info.get("ignore_class", None)
         self.object_areas = None
         self.fpack_reader = None
     
@@ -269,7 +269,7 @@ class GenericVideoSequence(object):
         # if self.ignore_masks is not None:
         #     ignore_masks = [decode_mask(ig_msk, img_dims) for ig_msk in self.ignore_masks]
         #     ignore_masks = np.stack(ignore_masks)
-        
+
         return semantic_masks
 
     
@@ -298,14 +298,14 @@ class GenericVideoSequence(object):
         }
         
         if object_ids_to_keep is None:
-            
+
             subseq_dict["segmentations"] = []
             subseq_objects = []
             for fr_idx in frame_idxes:
                 subseq_dict["segmentations"].append(self.segmentations[fr_idx])
                 subseq_objects.extend(self.segmentations[fr_idx].keys())
 
-            subseq_objects = set(subseq_objects)
+            subseq_objects = sorted(set(subseq_objects))
             subseq_dict["categories"] = {iid: self.object_categories[iid] for iid in subseq_objects}
         
         else:
@@ -319,10 +319,7 @@ class GenericVideoSequence(object):
 
             subseq_dict["categories"] = {iid: self.object_categories[iid] for iid in object_ids_to_keep}
         
-        sub_seq_object_ids = sorted(subseq_dict["categories"].keys())
-        subseq_dict["max_class_id"] =  max([x for x in sub_seq_object_ids if x <= self.max_class_id])
-        
         if self.ignore_masks is not None:
             subseq_dict["ignore_masks"] =  [self.ignore_masks[t] for t in frame_idxes]
         
-        return self.__class__(subseq_dict, self.path_to_images, serialize=True)
+        return self.__class__(subseq_dict, self.path_to_images, self.meta_info, serialize=True)

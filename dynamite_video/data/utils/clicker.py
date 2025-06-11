@@ -58,7 +58,8 @@ def get_center_coords(mask, k=1.7):
 def get_foreground_clicks(
         frame_idx,
         object_ids,
-        max_class_id,
+        serial_to_orig_id,
+        max_instances_per_category,
         binary_masks,
         key_objects,
         optional_frames_fg_prob=0.5,
@@ -70,18 +71,17 @@ def get_foreground_clicks(
     Sample foreground clicks from a frame.
 
     Key objects specify the object IDs for which clicks must be sampled from this frame.
-    If an object has ID > max_class_id, it is an object and one click is sampled at 
-    its center. If object ID <= max_class_id, the object is a semantic class, and clicks
-    are sampled randomly from the foreground area.
+    If the target is an instance, one click is sampled at its center. 
+    If the target is a semantic class, clicks are sampled randomly from the foreground area.
 
-    For objects that appear in the frame, but are not key objects - clicks are sampled
+    For targets that appear in the frame, but are not key objects - clicks are sampled
     with a probability specified by `optional_frames_fg_prob`. All clicks sampled in this
     way are chosen randomly from foreground area.
 
     Args:
         frame_idx: frame index
         object_ids: IDs of the object present in the clip
-        max_class_id: maximum ID of stuff classes
+        serial_to_orig_id: dict, mapping between serialized and original targetIDs
         binary_masks: [N, H, W] binary masks of the objects in this frame
         key_objects: sample at least one click on each of the key objects
         optional_frames_fg_prob: optional sampling probability of non-key objects
@@ -103,6 +103,7 @@ def get_foreground_clicks(
     count = 0
     
     for inst_id, _mask in zip(object_ids, binary_masks):
+        per_frame_max_num_points = max_num_points
         coords = []
         
         if not _mask.any():
@@ -116,14 +117,19 @@ def get_foreground_clicks(
                 fg_coords_list.append(coords)
                 continue
         
-        if inst_id > max_class_id and inst_id in key_objects:
-            # object is a key object, fetch center coordinates
-            center_coords = get_center_coords(_mask)
-            coords.append([center_coords[0], center_coords[1], inst_id, frame_idx, t])
-            num_clicks_per_object_fr[inst_id-1] += 1
-            count+=1
-            t+=1
-            
+        if inst_id in key_objects:
+            orig_id = serial_to_orig_id[inst_id]
+            if orig_id % max_instances_per_category:
+                # object is a key object, fetch center coordinates
+                center_coords = get_center_coords(_mask)
+                coords.append([center_coords[0], center_coords[1], inst_id, frame_idx, t])
+                num_clicks_per_object_fr[inst_id-1] += 1
+                count+=1
+                t+=1
+                per_frame_max_num_points -= 1
+
+        if per_frame_max_num_points == 0:
+            continue
         
         # erode mask area to avoid sampling clicks too close to object boundary
         kernel = np.ones((3,3),np.uint8)
@@ -201,13 +207,14 @@ def get_background_clicks(
 
 def get_clicks_coords(
         object_ids,
-        object_masks,     # [N, T, H, W]
+        object_masks,     # [T, N, H, W]
         bg_masks,           # [T, H, W]
         frame_object_occupancy,
-        max_class_id,
+        serial_to_orig_id,
+        max_instances_per_category,
         max_num_points=6, 
         optional_frames_fg_prob=0.5,
-        bg_prob=0.2,
+        bg_prob=0.,
         gamma=0.7,
         start_t=1,
 ):
@@ -224,7 +231,8 @@ def get_clicks_coords(
         object_masks: [T, N, H, W] np.ndarray
         bg_masks: [T, H, W] np.ndarray
         frame_object_occupancy: mapping {object_id: [frames it appears in]}
-        max_class_id: maximum ID of stuff classes
+        serial_to_orig_id: dict, mapping between serialized and original object IDs
+        max_instances_per_category: int
         max_num_points: maximum number of points to sample from each object in any frame
         optional_frames_fg_prob: probability of sampling fg clicks on more frames
         bg_prob: probability of sampling bg clicks on any given frame
@@ -233,7 +241,7 @@ def get_clicks_coords(
     """ 
     assert object_ids == sorted(frame_object_occupancy.keys())  # sanity check
     # no. of frames in the clip
-    num_frames = bg_masks.shape[0]
+    num_frames = object_masks.shape[0]
     
     # how many clicks each object receives in each frame
     num_clicks_per_object = np.zeros((num_frames, len(object_ids))).astype('int')
@@ -261,7 +269,8 @@ def get_clicks_coords(
 
         num_clicks_per_object_fr, fg_coords_list_fr, t, count = get_foreground_clicks(fr_idx,
                                                                                     object_ids,
-                                                                                    max_class_id,
+                                                                                    serial_to_orig_id,
+                                                                                    max_instances_per_category,
                                                                                     object_masks[fr_idx],
                                                                                     key_objects,
                                                                                     optional_frames_fg_prob,
@@ -277,23 +286,24 @@ def get_clicks_coords(
 
     # BG clicks
     bg_coords_list = []
-    for fr_idx in range(num_frames):
+    if bg_masks is not None:
+        for fr_idx in range(num_frames):
 
-        # with some probability, sample -ve clicks from this frame
-        if np.random.rand() > bg_prob:
-            bg_coords_list.append([])
-            continue
+            # with some probability, sample -ve clicks from this frame
+            if np.random.rand() > bg_prob:
+                bg_coords_list.append([])
+                continue
 
-        bg_coords_list_fr, t = get_background_clicks(
-                                            fr_idx,
-                                            bg_masks[fr_idx],
-                                            max_num_points,
-                                            gamma,
-                                            t
-                                        )
-        bg_coords_list.append(bg_coords_list_fr)
-        if len(bg_coords_list_fr) > 0:
-            max_timestamp_clip[fr_idx]=t-1
+            bg_coords_list_fr, t = get_background_clicks(
+                                                fr_idx,
+                                                bg_masks[fr_idx],
+                                                max_num_points,
+                                                gamma,
+                                                t
+                                            )
+            bg_coords_list.append(bg_coords_list_fr)
+            if len(bg_coords_list_fr) > 0:
+                max_timestamp_clip[fr_idx]=t-1
 
 
     return num_clicks_per_object.tolist(), fg_coords_list, bg_coords_list, max_timestamp_clip
