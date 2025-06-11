@@ -8,7 +8,6 @@ from dynamite_video.data.utils.data_utils import (
     apply_color_augmentation, 
     apply_random_flip,
     apply_resize_scale,
-    apply_random_crop,
 )
 
 class TrainingMapper:
@@ -47,7 +46,7 @@ class TrainingMapper:
         images = clip.load_images()
         
         # load binary instance masks [T,N,H,W]
-        binary_masks, objects_per_frame, object_ids, ignore_masks = clip.prepare_masks()
+        binary_masks, targets_per_frame, target_ids, ignore_masks = clip.prepare_masks()
         
         # color augmentations
         if self.cfg.INPUT.AUGMENTATION.COLOR_AUG:
@@ -76,27 +75,28 @@ class TrainingMapper:
         
         # semantic maps
         T, _, H, W = binary_masks.shape
-        # for each object, keep a record of all the frames it appears in
-        frame_object_occupancy = defaultdict(list)
+        # for each target, keep a record of all the frames it appears in
+        frame_target_occupancy = defaultdict(list)
         semantic_masks = []
         for fr_idx in range(T):
             map = np.zeros((H,W))
             for inst_id, inst_mask in enumerate(binary_masks[fr_idx]):
                 map[inst_mask==1] = inst_id+1
                 if np.any(inst_mask):
-                    # object is present in the frame
-                    frame_object_occupancy[inst_id+1].append(fr_idx)
+                    # target is present in the frame
+                    frame_target_occupancy[inst_id+1].append(fr_idx)
             semantic_masks.append(map)
         semantic_masks = np.stack(semantic_masks).astype('uint8')
         # NOTE: 0-labelled region in semantic masks at this point 
         # corresponds to the ignore mask area and the padding area
+        bg_masks = np.logical_not(np.logical_or(padding_mask, semantic_masks)).astype('uint8')
         
         # sample clicks
-        num_clicks_per_object, fg_coords_list, bg_coords_list, max_timestamp_list = get_clicks_coords(
-                                                                                    object_ids=object_ids,
-                                                                                    object_masks=binary_masks, 
+        num_clicks_per_target, fg_coords_list, bg_coords_list, max_timestamp_list = get_clicks_coords(
+                                                                                    target_ids=target_ids,
+                                                                                    target_masks=binary_masks, 
                                                                                     bg_masks=None,
-                                                                                    frame_object_occupancy=frame_object_occupancy,
+                                                                                    frame_target_occupancy=frame_target_occupancy,
                                                                                     serial_to_orig_id=clip.serial_to_orig_id,
                                                                                     max_instances_per_category=clip.meta_info["max_instances_per_category"],
                                                                                     max_num_points=self.cfg.CLICKER.TRAINING.MAX_NUM_CLICKS_PER_INSTANCE,
@@ -105,8 +105,8 @@ class TrainingMapper:
                                                                                     gamma=self.cfg.CLICKER.TRAINING.GAMMA,
                                                                                     start_t=1,
                                                                                 )
-        if not all(np.sum(num_clicks_per_object, axis=0)):
-            raise "One or more objects did not receive a click!"
+        if not all(np.sum(num_clicks_per_target, axis=0)):
+            raise "One or more targets did not receive a click!"
 
         meta_info = {
             "orig_dims": images.shape[1:3],
@@ -114,7 +114,7 @@ class TrainingMapper:
             "orig_to_serial_id": clip.orig_to_serial_id, 
             "serial_to_orig_id": clip.serial_to_orig_id, 
             "ignore_class": clip.ignore_class,
-            "object_categories": clip.object_categories,
+            "target_categories": clip.object_categories,
             "max_instances_per_category": clip.meta_info['max_instances_per_category'],
         }
         
@@ -123,9 +123,10 @@ class TrainingMapper:
             "binary_masks": torch.as_tensor(binary_masks, dtype=torch.uint8),
             "semantic_masks": torch.as_tensor(semantic_masks, dtype=torch.uint8),
             "padding_mask": torch.as_tensor(padding_mask, dtype=torch.uint8),
+            "bg_masks": torch.as_tensor(bg_masks, dtype=torch.uint8),
             "ignore_masks": torch.as_tensor(ignore_masks, dtype=torch.bool),
-            "objects_per_frame": objects_per_frame,
-            "num_clicks_per_object": num_clicks_per_object,
+            "objects_per_frame": targets_per_frame,
+            "num_clicks_per_object": num_clicks_per_target,
             "fg_coords_list": fg_coords_list,
             "bg_coords_list": bg_coords_list,
             "max_timestamp_list": max_timestamp_list,

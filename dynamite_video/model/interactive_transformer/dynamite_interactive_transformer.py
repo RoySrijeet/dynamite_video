@@ -236,7 +236,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                                    max_timestamp)
                 
                 # segmentation mask from prediction logits
-                processed_results = self.process_results(images, prev_output, data["padding_mask"], objects_per_frame, num_queries_per_object)
+                processed_results = self.process_results(data, images, prev_output, objects_per_frame, num_queries_per_object)
 
                 # sample corrective clicks
                 num_clicks_per_object, fg_coords, bg_coords, max_timestamp = get_next_clicks(data, 
@@ -563,17 +563,17 @@ class DynamiteInteractiveTransformer(nn.Module):
     
     def process_results(
             self, 
+            data,
             images, 
             outputs, 
-            padding_mask,
             objects_per_frame,
             num_queries_per_object
     ):
         """
         Args:
+            data: dataloader input
             images: [T, 3, H, W] tensors of the images in the clip (d2 ImageList)
             outputs: prediction 
-            padding_mask: padding, [H,W]
             objects_per_frame: List of object IDs in the i-th frame
             num_queries_per_object: count of queries on each object in each frame
         """
@@ -589,21 +589,27 @@ class DynamiteInteractiveTransformer(nn.Module):
         del outputs
 
         # padding mask
-        padding_mask = torch.logical_not(padding_mask).to(mask_pred_results.device)
+        padding_mask = torch.logical_not(data["padding_mask"]).to(mask_pred_results.device)
+        ignore_masks = torch.logical_not(torch.asarray(data["ignore_masks"])).to(torch.uint8).to(mask_pred_results.device)
+
+        torch.save(mask_pred_results, f"/home/roy/REPOS/dynamite_video/debug/visualization/training/process_results/mask_pred_results.pth")
+        torch.save(padding_mask, f"/home/roy/REPOS/dynamite_video/debug/visualization/training/process_results/padding_mask.pth")
+        torch.save(ignore_masks, f"/home/roy/REPOS/dynamite_video/debug/visualization/training/process_results/ignore_masks.pth")
 
         # objects in the whole clip
         seq_objects = sorted(list(set(x for ids in objects_per_frame for x in ids)))
 
         processed_results = []
-        for mask_pred_per_image, objects_per_image, queries_per_object in zip(mask_pred_results, objects_per_frame, num_queries_per_object):
+        for mask_pred_per_image, objects_per_image, queries_per_object, fr_ignore_mask in zip(mask_pred_results, objects_per_frame, num_queries_per_object, ignore_masks):
             
-            processed_r = retry_if_cuda_oom(self.interactive_object_inference)(mask_pred_per_image * padding_mask, 
+            processed_r = retry_if_cuda_oom(self.interactive_object_inference)(mask_pred_per_image * padding_mask * fr_ignore_mask,
                                                                                objects_per_image, 
                                                                                queries_per_object, 
                                                                                seq_objects)
             
-            processed_results.append(processed_r * padding_mask)
+            processed_results.append(processed_r * padding_mask * fr_ignore_mask)
 
+        torch.save(processed_results, "/home/roy/REPOS/dynamite_video/debug/visualization/training/process_results/process_results.pth")
         return processed_results
 
     
