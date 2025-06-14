@@ -77,19 +77,21 @@ class TrainingMapper:
         T, _, H, W = binary_masks.shape
         # for each target, keep a record of all the frames it appears in
         frame_target_occupancy = defaultdict(list)
-        semantic_masks = []
+        semantic_masks = np.zeros((T,H,W), dtype=np.uint8)
         for fr_idx in range(T):
-            map = np.zeros((H,W))
             for inst_id, inst_mask in enumerate(binary_masks[fr_idx]):
-                map[inst_mask==1] = inst_id+1
+                semantic_masks[fr_idx][inst_mask==1] = inst_id+1
                 if np.any(inst_mask):
                     # target is present in the frame
                     frame_target_occupancy[inst_id+1].append(fr_idx)
-            semantic_masks.append(map)
-        semantic_masks = np.stack(semantic_masks).astype('uint8')
+        
         # NOTE: 0-labelled region in semantic masks at this point 
         # corresponds to the ignore mask area and the padding area
+        
+        # background mask contains ignore mask and all small objects and gaps that were omitted
         bg_masks = np.logical_not(np.logical_or(padding_mask, semantic_masks)).astype('uint8')
+        # set all of background as ignore mask
+        ignore_masks = bg_masks
         
         # sample clicks
         num_clicks_per_target, fg_coords_list, bg_coords_list, max_timestamp_list = get_clicks_coords(
@@ -109,7 +111,7 @@ class TrainingMapper:
             raise "One or more targets did not receive a click!"
 
         meta_info = {
-            "orig_dims": images.shape[1:3],
+            "orig_dims": images.shape[2:],
             "seq_name": video.id,
             "orig_to_serial_id": clip.orig_to_serial_id, 
             "serial_to_orig_id": clip.serial_to_orig_id, 
