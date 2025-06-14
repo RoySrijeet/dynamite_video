@@ -121,6 +121,8 @@ class DynamiteModel(nn.Module):
             fg_coords = None, 
             bg_coords = None, 
             max_timestamp=None,
+            visualize=None,
+            train_iter=None
     ):
         """
         Forward pass through the DynaMITe model
@@ -162,6 +164,13 @@ class DynamiteModel(nn.Module):
             # prepare ground truth mask information
             targets = self.prepare_targets(inputs)
 
+            if visualize:
+                import os
+                visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/dynamite_model_forward"
+                torch.save(inputs, os.path.join(visualize_dir, "input", f"inputs_iter_{train_iter}.pth"))
+                torch.save(features, os.path.join(visualize_dir, "features", f"features_iter_{train_iter}.pth"))
+                torch.save(targets, os.path.join(visualize_dir, "targets", f"targets_iter_{train_iter}.pth"))
+
             for clip_idx in range(len(inputs)):
             
                 clip_mask_features = mask_features[clip_idx] if mask_features is not None else None
@@ -176,7 +185,9 @@ class DynamiteModel(nn.Module):
                                                                                 num_clicks_per_object[clip_idx],
                                                                                 fg_coords[clip_idx],
                                                                                 bg_coords[clip_idx],
-                                                                                max_timestamp[clip_idx]
+                                                                                max_timestamp[clip_idx],
+                                                                                visualize=visualize,
+                                                                                train_iter=train_iter,
                                                                             )
                 
                 losses = self.criterion(clip_outputs, targets[clip_idx], clip_num_queries_per_object)

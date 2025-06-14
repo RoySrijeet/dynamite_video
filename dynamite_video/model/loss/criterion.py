@@ -65,7 +65,7 @@ class SetFinalCriterion(nn.Module):
             for fr_idx, mask_pred in enumerate(outputs['pred_masks']):
                 H,W = mask_pred.shape[1:]
                 temp_out = []
-                splited_masks = torch.split(mask_pred, num_queries_per_object[fr_idx], dim=0)
+                splited_masks = torch.split(mask_pred, num_queries_per_object[fr_idx].tolist(), dim=0)
                 for m in splited_masks:
                     if len(m) == 0:
                         temp_out.append(torch.zeros(H,W).to(mask_pred.device))

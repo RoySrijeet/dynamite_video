@@ -50,11 +50,11 @@ class Decoder(nn.Module):
 
         #output is QxC
         for i in range(self.num_layers):
-            mask_features = self.cross_attention_layers[i](
+            mask_features, weights = self.cross_attention_layers[i](
                 mask_features, output,
                 memory_mask=None,
                 memory_key_padding_mask=None, 
                 pos=query_embed, query_pos=pos_encodings
             )
             mask_features = self.ffn_layers[i](mask_features)
-        return mask_features
+        return mask_features, weights

@@ -59,10 +59,10 @@ def get_next_clicks(
     bg_coords,
     max_timestamp,
     num_objects_to_refine,
-    max_num_points=2,
+    max_num_points=1,
     visualize=False,
-    visualize_dir=None,
-    train_iter=None
+    train_iter=None,
+    round_num=None
 ):
     """
     Given the predicted masks of current round, sample corrective clicks
@@ -81,10 +81,20 @@ def get_next_clicks(
     """
 
     # directly take data as input as they are already on the device
-    gt_masks_clip = [x.cpu().numpy() for x in data["binary_masks"]]      # [T,N,H,W]
+    gt_masks_clip = [x.cpu().numpy() for x in data["binary_masks"]]        # [T,N,H,W]
     pred_masks_clip = [x.cpu().numpy() for x in pred_output]               # [T,N,H,W]
     semantic_maps_clip = [x.cpu().numpy() for x in data['semantic_masks']] # [T,H,W]
-    padding_mask = data["padding_mask"].cpu().numpy()                      # [H,W]
+    # ignore_masks_clip = [x.cpu().numpy().astype(np.uint8) for x in data['ignore_masks']]  # [T,H,W]
+    # padding_mask = data["padding_mask"].cpu().numpy()                      # [H,W]
+
+    # if visualize:
+    #     import os
+    #     visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/training_clicker"
+    #     torch.save(gt_masks_clip,       os.path.join(visualize_dir, f"gt_masks_round_{round_num}_iter_{train_iter}.pth"))
+    #     torch.save(pred_masks_clip,     os.path.join(visualize_dir, f"pred_masks_round_{round_num}_iter_{train_iter}.pth"))
+    #     torch.save(semantic_maps_clip,  os.path.join(visualize_dir, f"semantic_maps_round_{round_num}_iter_{train_iter}.pth"))
+    #     torch.save(ignore_masks_clip,   os.path.join(visualize_dir, f"ignore_masks_round_{round_num}_iter_{train_iter}.pth"))
+    #     torch.save(padding_mask,        os.path.join(visualize_dir, f"padding_mask_round_{round_num}_iter_{train_iter}.pth"))
     
     candidates_for_refinement = defaultdict(list)
     for fr_idx, (gt_masks, pred_masks) in enumerate(zip(gt_masks_clip, pred_masks_clip)):
@@ -95,18 +105,22 @@ def get_next_clicks(
             candidates_for_refinement[obj_id.item()].append(fr_idx)
 
     num_objects_to_refine = np.random.randint(1, min(len(candidates_for_refinement), num_objects_to_refine)+1)
+    # randomly select objects to be refined
     objects_to_refine = np.random.choice(list(candidates_for_refinement.keys()), num_objects_to_refine)
 
     for obj_id in objects_to_refine:
+        # randomly select a frame to sample clicks from
         fr_idx = np.random.choice(candidates_for_refinement[obj_id])
         gt_masks = gt_masks_clip[fr_idx]
         pred_masks = pred_masks_clip[fr_idx]
         semantic_map = semantic_maps_clip[fr_idx]
+        # ignore_mask = ignore_masks_clip[fr_idx]
 
         # timestamp of the latest click so far
         timestamp = max(max_timestamp)
-        sampled_clicks = _get_corrective_clicks(pred_masks[obj_id], gt_masks[obj_id], semantic_map, padding_mask,
-                                                    timestamp+1, 1, visualize, visualize_dir, f"{train_iter}_fr_{fr_idx}_obj_{obj_id}")
+        sampled_clicks = _get_corrective_clicks(pred_masks[obj_id], gt_masks[obj_id], semantic_map, 
+                                                    # ignore_mask, padding_mask,
+                                                    timestamp+1, max_num_points)
         
         if sampled_clicks is not None:
             for click in sampled_clicks:
@@ -152,12 +166,10 @@ def _get_corrective_clicks(
     pred_mask,
     gt_mask,
     semantic_map,
-    padding_mask,
+    # ignore_mask,
+    # padding_mask,
     timestamp,
     max_num_points=2,
-    visualize=False,
-    visualize_dir=None,
-    train_iter=None,
 ):
     """
     Sample corrective click on an object, in a frame
@@ -170,26 +182,20 @@ def _get_corrective_clicks(
         timestamp: timestamp of current click (int)
         max_num_points: maximum #clicks to sample (int, default: 2)
     """
-    import os
     gt_mask = np.asarray(gt_mask, dtype = np.bool_)
     pred_mask = np.asarray(pred_mask, dtype = np.bool_)
-    padding_mask = np.asarray(padding_mask, dtype = np.bool_)
-
-    if visualize:
-        torch.save(gt_mask, os.path.join(visualize_dir, f"ckpt_{train_iter}_gt_mask.pth"))
-        torch.save(pred_mask, os.path.join(visualize_dir, f"ckpt_{train_iter}_pred_mask.pth"))
+    # padding_mask = np.asarray(padding_mask, dtype = np.bool_)
+    # ignore_mask = np.asarray(ignore_mask, dtype = np.bool_)
     
     # negative error map - g.t. foreground missed by the prediction
     fn_mask =  np.logical_and(gt_mask, np.logical_not(pred_mask))
-    fn_mask = np.logical_and(fn_mask, np.logical_not(padding_mask))
+    # fn_mask = np.logical_and(fn_mask, np.logical_not(padding_mask))
+    # fn_mask = np.logical_and(fn_mask, np.logical_not(ignore_mask))
     
     # positive error map - g.t. background covered by the prediction
     fp_mask =  np.logical_and(np.logical_not(gt_mask), pred_mask)
-    fp_mask = np.logical_and(fp_mask, np.logical_not(padding_mask))
-
-    if visualize:
-        torch.save(fn_mask, os.path.join(visualize_dir, f"ckpt_{train_iter}_fn_mask.pth"))
-        torch.save(fp_mask, os.path.join(visualize_dir, f"ckpt_{train_iter}_fp_mask.pth"))
+    # fp_mask = np.logical_and(fp_mask, np.logical_not(padding_mask))
+    # fp_mask = np.logical_and(fp_mask, np.logical_not(ignore_mask))
     
     # distance transform to find the center of the error region
     fn_mask = np.pad(fn_mask, ((1, 1), (1, 1)), 'constant')
@@ -231,6 +237,4 @@ def _get_corrective_clicks(
             points_coords.append([coords[0], coords[1], obj_indx, timestamp])   # [y,x,i,t]
             timestamp+=1
 
-    if visualize:
-        torch.save(points_coords, os.path.join(visualize_dir, f"ckpt_{train_iter}_points_coords.pth"))
     return points_coords
