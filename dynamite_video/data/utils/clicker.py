@@ -118,15 +118,15 @@ def get_foreground_clicks(
                 continue
         
         if inst_id in key_targets:
-            orig_id = serial_to_orig_id[inst_id]
-            if orig_id % max_instances_per_category !=0:
+            # orig_id = serial_to_orig_id[inst_id]
+            # if orig_id % max_instances_per_category !=0:
                 # target is a key target, fetch center coordinates
-                center_coords = get_center_coords(_mask)
-                coords.append([center_coords[0], center_coords[1], inst_id, frame_idx, t])
-                num_clicks_per_target_fr[inst_id-1] += 1
-                count+=1
-                t+=1
-                per_frame_max_num_points -= 1
+            center_coords = get_center_coords(_mask)
+            coords.append([center_coords[0], center_coords[1], inst_id, frame_idx, t])
+            num_clicks_per_target_fr[inst_id-1] += 1
+            count+=1
+            t+=1
+            per_frame_max_num_points -= 1
 
         if per_frame_max_num_points == 0:
             fg_coords_list.append(coords)
@@ -144,8 +144,8 @@ def get_foreground_clicks(
             sample_locations = np.argwhere(_mask)
 
         # how many points to sample is determined by the probabilities
-        pos_click_probs = _generate_probs(max_num_points, gamma=gamma)
-        num_points = np.random.choice(np.arange(1,max_num_points+1), p=pos_click_probs)
+        pos_click_probs = _generate_probs(per_frame_max_num_points, gamma=gamma)
+        num_points = np.random.choice(np.arange(1,per_frame_max_num_points+1), p=pos_click_probs)
         
         # in case there's not as many positive mask locations as the number of clicks to be sampled
         num_points = min(num_points,sample_locations.shape[0]//2)
