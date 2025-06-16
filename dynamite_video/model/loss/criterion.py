@@ -61,24 +61,24 @@ class SetFinalCriterion(nn.Module):
 
         # Accumulate mask for each object (as there might be multiple clicks per object) and background
         new_outputs = []
-        if num_queries_per_object is not None:
-            for fr_idx, mask_pred in enumerate(outputs['pred_masks']):
-                H,W = mask_pred.shape[1:]
-                temp_out = []
-                splited_masks = torch.split(mask_pred, num_queries_per_object[fr_idx].tolist(), dim=0)
-                for m in splited_masks:
-                    if len(m) == 0:
-                        temp_out.append(torch.zeros(H,W).to(mask_pred.device))
-                    else:
-                        temp_out.append(torch.max(m, dim=0).values)
-                new_outputs.append(torch.stack(temp_out))
+        min_value = -1000.0
+        for fr_idx, mask_pred in enumerate(outputs['pred_masks']):
+            H,W = mask_pred.shape[1:]
+            temp_out = []
+            splited_masks = torch.split(mask_pred, num_queries_per_object, dim=0)
+            for m in splited_masks:
+                if len(m)>0:
+                    temp_out.append(torch.max(m, dim=0).values)
+                else:
+                    temp_out.append(torch.full((H,W), fill_value=min_value, dtype=mask_pred.dtype, device=mask_pred.device))
+            new_outputs.append(torch.stack(temp_out))
         
         # T*N,1,H,W
         src_masks = torch.cat(new_outputs,dim=0)
         src_masks = src_masks[:, None]
         
         target_masks = [t["binary_masks"] for t in targets]
-        target_masks = torch.cat(target_masks,dim=0).to(dtype=torch.float32)
+        target_masks = torch.cat(target_masks,dim=0).to(dtype=torch.float16)
         target_masks = target_masks[:, None]
 
         with torch.no_grad():
@@ -143,8 +143,8 @@ class SetFinalCriterion(nn.Module):
         # Compute number of target boxes accross all nodes, for normalization purposes
         num_masks = 0
         for i,t in enumerate(targets):
-            target_bg_mask = t['bg_masks']
-            targets[i]["binary_masks"] = torch.cat((t["binary_masks"], target_bg_mask.unsqueeze(0)), dim=0)
+            # target_bg_mask = t['bg_masks']
+            # targets[i]["binary_masks"] = torch.cat((t["binary_masks"], target_bg_mask.unsqueeze(0)), dim=0)
             num_masks += len(targets[i]["binary_masks"])
         
         num_masks = torch.as_tensor([num_masks], dtype=torch.float, device=outputs['pred_masks'].device)

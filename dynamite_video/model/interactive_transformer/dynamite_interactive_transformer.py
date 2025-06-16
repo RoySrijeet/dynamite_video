@@ -368,8 +368,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             descriptors = torch.cat((descriptors, static_bg_queries), dim=1)   # TxQxD
             static_bg_pe = repeat(self.static_bg_pe, "Bg C -> Bg T C", T=T)
             query_embed = torch.cat((query_embed, static_bg_pe), dim=0)        # QxTxD
-            for i in range(len(num_queries_per_object)):
-                num_queries_per_object[i][-1] += static_bg_queries.shape[1]
+            num_queries_per_object.append(static_bg_queries.shape[1])
 
             if visualize:
                 visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/queries"
@@ -379,17 +378,13 @@ class DynamiteInteractiveTransformer(nn.Module):
         
 
         # total num queries per object across T frames
-        total_num_queries_per_object = num_queries_per_object.sum(0) // T
-        total_num_queries_per_object = total_num_queries_per_object.tolist()
-        if total_num_queries_per_object[-1] == 0: # no bg
-            total_num_queries_per_object = total_num_queries_per_object[:-1]
         if self.use_qqca == "masked":
             # if queries are batched instance-wise, consider the frame positions of the queries in the temporal domain
             inst_batched_query_embed = repeat(self.query_embed, "C -> Q N C", 
-                                              Q=max(total_num_queries_per_object) * T, 
-                                              N=len(total_num_queries_per_object))  # Q'xNxD
+                                              Q=max(num_queries_per_object) * T, 
+                                              N=len(num_queries_per_object))  # Q'xNxD
             # convert QxTx5 clicks to Q'xNx5
-            inst_batched_clicks = self.get_object_batched_clicks(normalized_clicks.permute(1,0,2), total_num_queries_per_object)
+            inst_batched_clicks = self.get_object_batched_clicks(normalized_clicks.permute(1,0,2), num_queries_per_object)
             pos_coord_embed = get_spatiotemporal_embeddings(inst_batched_clicks[:,:,[0,1,3]],
                                                             self.positional_embeddings,
                                                             descriptors.shape[2])                        # Q'xNxD
@@ -474,7 +469,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             
             if self.use_qqca == "masked":
                 # cross-attention between object-specific queries of different frames
-                inst_batched_query, qqca_mask = self.get_object_batched_query(output, total_num_queries_per_object)
+                inst_batched_query, qqca_mask = self.get_object_batched_query(output, num_queries_per_object)
                 if visualize:
                     visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/masked_qqca"
                     torch.save(inst_batched_query,               os.path.join(visualize_dir, f"inst_batched_query_enc_layer_{i}_iter_{train_iter}.pth"))
@@ -486,7 +481,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                                         tgt_key_padding_mask=qqca_mask.to(output.device),
                                                                                         query_pos=inst_batched_query_embed,
                                                                                     )
-                output = self.get_frame_batched_query(output, padded_output, total_num_queries_per_object)
+                output = self.get_frame_batched_query(output, padded_output, num_queries_per_object)
                 if visualize:
                     visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/masked_qqca"
                     torch.save(padded_output,        os.path.join(visualize_dir, f"inst_batched_query_output_enc_layer_{i}_iter_{train_iter}.pth"))
@@ -576,7 +571,7 @@ class DynamiteInteractiveTransformer(nn.Module):
     def get_object_batched_clicks(
             self, 
             clicks, 
-            total_num_queries_per_object
+            num_queries_per_object
     ):
         """
         Convert Q,5 clicks into Q',N,5
@@ -586,10 +581,10 @@ class DynamiteInteractiveTransformer(nn.Module):
         """
         Q,T,D = clicks.shape
         # max num queries per object (across all frames)
-        max_num_queries = max(total_num_queries_per_object) * T
+        max_num_queries = max(num_queries_per_object) * T
 
         # split frame-wise clicks into object-wise queries
-        object_wise_splits = torch.split(clicks, total_num_queries_per_object, dim=0)   # list of T,q_i,5
+        object_wise_splits = torch.split(clicks, num_queries_per_object, dim=0)   # list of T,q_i,5
         object_wise_splits = [part.reshape(-1, D) for part in object_wise_splits]       # list of T*q_i,5
 
         # apply padding for batching
@@ -612,7 +607,7 @@ class DynamiteInteractiveTransformer(nn.Module):
     def get_object_batched_query(
             self, 
             output, 
-            total_num_queries_per_object
+            num_queries_per_object
     ):
         """
         Convert Q,T,D query into Q',N,D query where:
@@ -624,10 +619,10 @@ class DynamiteInteractiveTransformer(nn.Module):
         Q,T,D = output.shape
         
         # max num queries per object (across all frames)
-        max_num_queries = max(total_num_queries_per_object) * T
+        max_num_queries = max(num_queries_per_object) * T
         
         # split frame-wise queries into object-wise queries
-        object_wise_splits = torch.split(output, total_num_queries_per_object, dim=0)   # list of T,q_i,D
+        object_wise_splits = torch.split(output, num_queries_per_object, dim=0)   # list of T,q_i,D
         object_wise_splits = [part.reshape(-1, D) for part in object_wise_splits]       # list of T*q_i,D
         
         # keep a record of how many queries there were for each object
@@ -657,7 +652,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             self, 
             output, 
             padded_output, 
-            total_num_queries_per_object
+            num_queries_per_object
     ):
         """
         Convert Q',N,D query into Q,T,D
@@ -666,7 +661,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         padded_output = padded_output.permute(1, 0, 2)  # N,Q',D
         
         unpadded_chunks = []
-        for i, q_size in enumerate(total_num_queries_per_object):
+        for i, q_size in enumerate(num_queries_per_object):
             q_len = T * q_size
 
             # i-th object, upto q_len tensors (rest were padding)
@@ -718,11 +713,11 @@ class DynamiteInteractiveTransformer(nn.Module):
         seq_objects = sorted(list(set(x for ids in objects_per_frame for x in ids)))
 
         processed_results = []
-        for mask_pred_per_image, objects_per_image, queries_per_object, fr_ignore_mask in zip(mask_pred_results, objects_per_frame, num_queries_per_object, ignore_masks):
+        for mask_pred_per_image, objects_per_image, fr_ignore_mask in zip(mask_pred_results, objects_per_frame, ignore_masks):
             
             processed_r = retry_if_cuda_oom(self.interactive_object_inference)(mask_pred_per_image * padding_mask * fr_ignore_mask,
                                                                                objects_per_image, 
-                                                                               queries_per_object.tolist(), 
+                                                                               num_queries_per_object,
                                                                                seq_objects)
             
             processed_results.append(processed_r * padding_mask * fr_ignore_mask)
@@ -760,21 +755,34 @@ class DynamiteInteractiveTransformer(nn.Module):
         temp_out = []
         splited_masks = torch.split(mask_pred, queries_per_object, dim=0)
         for m in splited_masks:
-            if len(m) == 0:
-                temp_out.append(torch.zeros(H,W).to(mask_pred.device))
-            else:
+            if len(m)>0:
                 temp_out.append(torch.max(m, dim=0).values)
         
         mask_pred = torch.stack(temp_out)       # (N+1)xHxW
-        mask_pred = torch.argmax(mask_pred,0)
         
-        m = []
-        for inst_id in seq_objects:
-            if inst_id in objects_per_image:
-                m.append((mask_pred == inst_id-1).float())
-            else:
-                m.append(torch.zeros(H,W).to(mask_pred.device))
+        prob = torch.cat([torch.prod(1-mask_pred, dim=0, keepdim=True), mask_pred], 0).clamp(1e-7, 1-1e-7)
+        logits = torch.log((prob /(1-prob)))
+        logits = F.softmax(logits, dim=0)[1:]
+        binary = (logits > 0.5).to(torch.uint8)
         
-        mask_pred = torch.stack(m)
+        binary_masks = torch.zeros((len(queries_per_object),H,W), dtype=torch.uint8)
+        c = 0
+        for i, q in enumerate(queries_per_object):
+            if q>0:
+                binary_masks[i][torch.where(binary[c]==1)] = 1
+                c += 1
+            
+        return binary_masks.to(mask_pred.device)
+        
+        # mask_pred = torch.argmax(mask_pred,0)
+        
+        # m = []
+        # for inst_id in seq_objects:
+        #     if inst_id in objects_per_image:
+        #         m.append((mask_pred == inst_id-1).float())
+        #     else:
+        #         m.append(torch.zeros(H,W).to(mask_pred.device))
+        
+        # mask_pred = torch.stack(m)
      
-        return mask_pred
+        # return mask_pred

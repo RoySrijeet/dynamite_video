@@ -251,6 +251,7 @@ class SequenceManager:
             "indices": _indices,
             "orig_to_serial_id": clip_orig_to_serial_id,
             "serial_to_orig_id": clip_serial_to_orig_id,
+            "gt_masks": clip_gt_masks
         }
         # input to model forward pass
         input = {
