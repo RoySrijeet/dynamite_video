@@ -76,6 +76,7 @@ def evaluate(cfg,
             round_num = 1
             lowest_frame_index = 0
 
+            visualize_dir = "/home/roy/REPOS/dynamite_video/experiments/expt_2/visualize"
             # generate indices of shorter sub-sequences or clips from the whole sequence
             clip_indices = manager.generate_clip_indices(start=lowest_frame_index)
 
@@ -83,7 +84,9 @@ def evaluate(cfg,
             for num, indices in enumerate(tqdm(clip_indices, leave=False, desc="Clip")):
 
                 clip, clip_inputs = manager.extract_clip(indices)
+                # torch.save(clip_inputs, os.path.join(visualize_dir, f"clip_inputs_{indices}.pth"))
                 clip_preds = predictor.get_prediction([clip_inputs], indices)    # T,N,H,W
+                # torch.save(clip_preds, os.path.join(visualize_dir, f"clip_preds_{indices}.pth"))
                 manager.store_prediction(clip_preds, clip, indices)
 
                 if save_vis:

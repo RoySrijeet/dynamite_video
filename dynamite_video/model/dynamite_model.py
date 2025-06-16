@@ -334,7 +334,10 @@ class DynamiteModel(nn.Module):
         processed_results = []
         for mask_pred_per_image, image_size, objects_per_image, queries_per_object in zip(mask_pred_results, images.image_sizes, objects_per_frame, num_queries_per_object):
             mask_pred_per_image = retry_if_cuda_oom(sem_seg_postprocess)(mask_pred_per_image, image_size, image_size[0], image_size[1])
-            processed_r = retry_if_cuda_oom(self.interactive_object_inference)(mask_pred_per_image, objects_per_image, queries_per_object, seq_objects)
+            processed_r = retry_if_cuda_oom(self.interactive_object_inference)(mask_pred_per_image, 
+                                                                               objects_per_image, 
+                                                                               queries_per_object.tolist(), 
+                                                                               seq_objects)
             processed_results.append(processed_r)
 
         return processed_results

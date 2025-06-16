@@ -252,23 +252,17 @@ class GenericVideoSequence(object):
         return binary_masks, objects_per_frame, self.object_ids, ignore_masks
 
     
-    def prepare_eval_masks(self):
+    def prepare_eval_masks(self, fill_value):
         """
         Prepare ground truth semantic masks for evaluation
         """
-        semantic_masks = np.zeros((len(self), self.height, self.width), dtype=np.uint32)
+        semantic_masks = np.full((len(self), self.height, self.width), fill_value=fill_value, dtype=np.uint32)
         for fr_idx, fr_rles in enumerate(self.segmentations):
             for obj_id in fr_rles:
                 # decode RLE
                 img_dims = None if isinstance(fr_rles[obj_id], dict) else self.image_dims
                 _m = decode_mask(fr_rles[obj_id], img_dims)
                 semantic_masks[fr_idx][np.where(_m==1)] = obj_id
-
-        # ignore masks
-        # ignore_masks = None
-        # if self.ignore_masks is not None:
-        #     ignore_masks = [decode_mask(ig_msk, img_dims) for ig_msk in self.ignore_masks]
-        #     ignore_masks = np.stack(ignore_masks)
 
         return semantic_masks
 

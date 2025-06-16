@@ -5,9 +5,8 @@ import torch
 
 from PIL import Image
 
-from dynamite_video.data.utils.clicker import get_center_coords
 from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks, serialize_object_ids
-from dynamite_video.evaluation.eval_utils import create_circular_mask, color_map, show_points
+from dynamite_video.evaluation.eval_utils import create_circular_mask, color_map, show_points, get_center_coords
 
 class SequenceManager:
     """
@@ -58,7 +57,7 @@ class SequenceManager:
         # load images and ground truth masks
         self.images = self.sequence.load_images()
         # gt semantic masks follow the labelling format: semantic_map * max_instances_per_category + instance_map
-        self.gt_masks = self.sequence.prepare_eval_masks()
+        self.gt_masks = self.sequence.prepare_eval_masks(fill_value=self.ignore_class * self.max_instances_per_category)
         # transformations
         self.H, self.W = self.compute_tfm_sizes(tfms)
         self.ignore_masks = (self.gt_masks==self.ignore_class * self.max_instances_per_category).astype(np.uint8)
@@ -171,15 +170,17 @@ class SequenceManager:
         if len(indices) >= 2 and indices[1] < indices[0]:
             indices = _indices[::-1]
 
+        visualize_dir = "/home/roy/REPOS/dynamite_video/experiments/expt_2/visualize"
         # semantic maps of the clip frames - T,H,W
         clip_gt_masks = self.gt_masks[indices[0]:indices[-1]+1]
+        # np.save(os.path.join(visualize_dir, f"clip_gt_masks_{indices}.npy"), clip_gt_masks)
 
         # serialize object IDs in the clip
         clip_orig_ids = list(np.unique(clip_gt_masks))
         clip_orig_to_serial_id, clip_serial_to_orig_id = serialize_object_ids(clip_orig_ids)
         assert set(clip_orig_to_serial_id.keys()).intersection(set(clip_orig_to_serial_id.values())) == set()
         
-        # sample gt clicks - only if there is any object appearing in the clip for the first time
+        # sample gt clicks
         clip_fg_coords_list = [[[] for _ in range(len(clip_orig_ids))] for _ in range(len(indices))]
         clip_num_clicks_per_object = np.zeros((len(indices), len(clip_orig_ids)), dtype=np.uint16)
         clip_objects_per_frame = []
@@ -190,11 +191,12 @@ class SequenceManager:
             fr_mask = clip_gt_masks[local_fr_idx].copy()
             fr_obj_ids = list(np.unique(fr_mask))
             
-            # serialize the object IDs in this frame
             clip_objects_per_frame.append([clip_orig_to_serial_id[obj_id] for obj_id in fr_obj_ids])
 
             for global_obj_id in fr_obj_ids:
+                
                 if global_obj_id in self.object_discovery:
+                    # sample only if this object has appeared in the sequence for the first time
                     continue
                 
                 if global_obj_id == self.ignore_class * self.max_instances_per_category:
@@ -204,7 +206,9 @@ class SequenceManager:
                 # ground truth binary mask of the object in the frame
                 obj_mask = (fr_mask == global_obj_id).astype(np.uint8)
 
-                self.object_discovery.add(global_obj_id)
+                if obj_mask.sum() < self.MIN_MASK_AREA:
+                    # sample a click only if the object is large enough
+                    continue
                 
                 center_coords = get_center_coords(obj_mask)
                 # serialized object ID in the clip
@@ -213,6 +217,7 @@ class SequenceManager:
                 clip_num_clicks_per_object[local_fr_idx][local_obj_id-1] += 1
 
                 self.record_click(global_fr_idx, global_obj_id, center_coords)
+                self.object_discovery.add(global_obj_id)
 
         # sample from overlapping frames in the clip
         overlapping_frame_indices = sorted(_indices[:self.num_overlapping_frames])

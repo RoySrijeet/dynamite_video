@@ -46,7 +46,9 @@ class DynamiteInteractiveTransformer(nn.Module):
         mask_dim: int,
         enforce_input_project: bool,
         positional_embeddings: str,
-        num_objects_to_refine: int,
+        max_objects_to_refine: int,
+        iou_threshold: float,
+        refine_strategy:str
     ):
         """
         Args:
@@ -65,7 +67,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             enforce_input_project: add input project 1x1 conv even if input
                 channels and hidden dim is identical
             positional_embeddings: type of positonal embeddings for clicks coordinates 
-            num_objects_to_refine: num of objects to refine in each corrective round
+            max_objects_to_refine: num of objects to refine in each corrective round
         """
         super().__init__()
 
@@ -76,9 +78,11 @@ class DynamiteInteractiveTransformer(nn.Module):
         self.positional_embeddings = positional_embeddings
          # iterative
         self.max_num_rounds = max_num_rounds
+        self.max_objects_to_refine = max_objects_to_refine
+        self.iou_threshold = iou_threshold
+        self.refine_strategy = refine_strategy
 
         self.num_static_bg_queries = num_static_bg_queries
-        self.num_objects_to_refine = num_objects_to_refine
         
         # Reverse Cross Attn
         self.use_decoder = use_decoder
@@ -172,7 +176,9 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         ret["mask_dim"] = cfg.MODEL.SEM_SEG_HEAD.MASK_DIM
 
-        ret["num_objects_to_refine"] = cfg.CLICKER.TRAINING.MAX_NUM_INSTANCES_REFINED_PER_ROUND
+        ret["max_objects_to_refine"] = cfg.CLICKER.TRAINING.MAX_NUM_INSTANCES_REFINED_PER_ROUND
+        ret["iou_threshold"] = cfg.CLICKER.TRAINING.IOU_THRESHOLD
+        ret["refine_strategy"] = cfg.CLICKER.TRAINING.REFINEMENT_STRATEGY
         return ret
 
 
@@ -253,7 +259,9 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                                              num_clicks_per_object,
                                                                                              fg_coords, bg_coords, 
                                                                                              max_timestamp, 
-                                                                                             num_objects_to_refine=self.num_objects_to_refine,
+                                                                                             max_objects_to_refine=self.max_objects_to_refine,
+                                                                                             iou_threshold=self.iou_threshold,
+                                                                                             refine_strategy=self.refine_strategy,
                                                                                              visualize=visualize, train_iter=train_iter, round_num=i)
             
             # generate current queries, transformer forward pass

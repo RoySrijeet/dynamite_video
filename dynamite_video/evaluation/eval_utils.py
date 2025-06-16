@@ -1,6 +1,6 @@
 import numpy as np
 import cv2
-
+import torch
 
 def create_circular_mask(h, w, centers, radius):
     """
@@ -19,6 +19,31 @@ def create_circular_mask(h, w, centers, radius):
 
         mask = mask | (dist_from_center <= radius)
     return mask.astype(np.uint8)
+
+
+def get_center_coords(mask, k=1.7):
+    """
+    Find target center from binary mask
+
+    Args:
+        mask: binary mask [H, W], np.ndarray
+        k: distance threshold around the center
+    """
+    assert mask.ndim==2
+
+    if torch.is_tensor(mask):
+        mask = mask.numpy()
+    mask = mask.astype(np.uint8)
+
+    # find distance transform - distance of each pixel from nearest target boundary
+    padded_mask = np.pad(mask, ((1, 1), (1, 1)), 'constant')
+    dt = cv2.distanceTransform(padded_mask.astype(np.uint8), cv2.DIST_L2, 0)[1:-1, 1:-1]
+    
+    # object center
+    max_dist = np.max(dt)
+    coords_y, coords_x = np.where(dt == max_dist)
+
+    return [coords_y[0],coords_x[0]]
 
 
 def get_palette(num_cls):
