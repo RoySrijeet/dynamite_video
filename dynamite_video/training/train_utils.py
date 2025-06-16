@@ -34,7 +34,8 @@ def compute_iou(
                         intersections.float() / unions.float()
                 )
     avg_iou = torch.mean(iou, 0)
-
+    max_objects_to_refine = min(len(avg_iou, max_objects_to_refine))
+    
     if strategy == "worst":
         values, indices = torch.topk(avg_iou, k=max_objects_to_refine, largest=False)
         values = values[values < iou_thres]
