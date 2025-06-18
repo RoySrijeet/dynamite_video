@@ -91,7 +91,7 @@ class SequenceManager:
         # to store predicted masks
         self.pred_masks = np.zeros((self.T, self.H, self.W), dtype=np.uint32)
         # store frame-level IoU
-        self.ious = np.zeros(self.T)
+        self.ious = np.zeros((self.T,self.N))
 
         self.MIN_MASK_AREA = 400
         
@@ -428,40 +428,42 @@ class SequenceManager:
             cv2.imwrite(os.path.join(vis_path, f"overlayed_{fr_idx}_iou_{iou}.png"), overlayed)
 
 
-    def compute_iou(self, frame_idx, ignore_small=True):
+    def compute_iou(self, frame_idx):
         """
         Compute IoU score of specified frame
         """
         pred = self.pred_masks[frame_idx]
         gt = self.gt_masks[frame_idx]
 
-        visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/eval/storage"
-        np.save(os.path.join(visualize_dir, "pred_mask.npy", pred))
-        np.save(os.path.join(visualize_dir, "gt_mask.npy", gt))
-
-        objects = np.unique(gt)
-        ious = []
-
+        # objects in the sequence
+        objects = list(self.orig_to_serial_ids.keys())
+        # objects present in the frame
+        objects_in_frame = np.unique(gt)
+        # VOID class
+        ign_label = self.ignore_class * self.max_instances_per_category
+        
+        ious_for_frame = []
+        ious_for_sequence = []
         for obj_id in objects:
-            if obj_id == self.ignore_class * self.max_instances_per_category:
+            if obj_id == ign_label:
                 continue
             
             g = (gt == obj_id).astype('uint8')
-            if ignore_small and g.sum() < 200:
-                continue
-            
             p = (pred == obj_id).astype('uint8')
             intersection = np.logical_and(p, g).sum()
             union = np.logical_or(p,g).sum()
-
             if union == 0:
-                ious.append(1.)
-                continue
-            
-            ious.append(intersection/union)
+                iou = 1.
+            else:
+                iou = intersection/union
+
+            ious_for_sequence.append(iou)
+            if obj_id in objects_in_frame:
+                ious_for_frame.append(iou)
         
-        self.ious[frame_idx] = round(sum(ious)/len(ious),5)
-        return self.ious[frame_idx]
+        self.ious[frame_idx] = ious_for_sequence
+        
+        return sum(ious_for_frame)/len(ious_for_frame)
 
 
     def get_corrective_click(self, frame_idx, obj_id, padding=True):
