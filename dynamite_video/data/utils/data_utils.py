@@ -12,6 +12,42 @@ from torch import Tensor
 from typing import List, Tuple, Optional
 
 
+def convert_binary_to_panoptic(binary_masks, mapping):
+    T,N,H,W = binary_masks.shape
+    panoptic_masks = np.zeros((T,H,W)).astype(np.uint32)
+
+    for fr_idx in range(T):
+        fr_binary_masks = binary_masks[fr_idx]
+        for obj_id in range(N):
+            msk = fr_binary_masks[obj_id]
+            panoptic_masks[fr_idx][np.where(msk==1)] = mapping[obj_id + 1]
+    
+    return panoptic_masks
+
+
+def convert_panoptic_to_binary(panoptic_masks, mapping, ignore=None):
+    T,H,W = panoptic_masks.shape
+    N = len(mapping)
+
+    if ignore is not None and ignore in mapping.keys():
+        N -= 1
+    
+    binary_masks = np.zeros((T,N,H,W)).astype(np.uint8)
+    objects_per_frame = []
+    
+    for fr_idx in range(T):
+        objects_per_frame.append([])
+        pano = panoptic_masks[fr_idx]
+        for src_id, tgt_id in mapping.items():
+            if ignore is not None and src_id==ignore:
+                continue
+            binary_masks[fr_idx][tgt_id-1][np.where(pano==src_id)] = 1
+            if binary_masks[fr_idx][tgt_id-1].any():
+                objects_per_frame[-1].append(tgt_id)
+
+    return binary_masks, objects_per_frame
+
+
 def decode_mask(encoded_mask, size=None):
     """
     Decode RLE mask into `np.ndarray`

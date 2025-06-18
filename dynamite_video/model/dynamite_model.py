@@ -332,11 +332,11 @@ class DynamiteModel(nn.Module):
         seq_objects = sorted(list(set(x for ids in objects_per_frame for x in ids)))
 
         processed_results = []
-        for mask_pred_per_image, image_size, objects_per_image, queries_per_object in zip(mask_pred_results, images.image_sizes, objects_per_frame, num_queries_per_object):
+        for mask_pred_per_image, image_size, objects_per_image in zip(mask_pred_results, images.image_sizes, objects_per_frame):
             mask_pred_per_image = retry_if_cuda_oom(sem_seg_postprocess)(mask_pred_per_image, image_size, image_size[0], image_size[1])
             processed_r = retry_if_cuda_oom(self.interactive_object_inference)(mask_pred_per_image, 
                                                                                objects_per_image, 
-                                                                               queries_per_object.tolist(), 
+                                                                               num_queries_per_object, 
                                                                                seq_objects)
             processed_results.append(processed_r)
 
@@ -369,9 +369,9 @@ class DynamiteModel(nn.Module):
         mask_pred = torch.stack(temp_out)       # (N+1)xHxW
 
         # soft-aggregation
-        prob = torch.cat([torch.prod(1-mask_pred, dim=0, keepdim=True), mask_pred], 0).clamp(1e-7, 1-1e-7)
+        prob = mask_pred.clamp(1e-7, 1-1e-7)
         logits = torch.log((prob /(1-prob)))
-        logits = F.softmax(logits, dim=0)[1:]
+        logits = F.softmax(logits, dim=0)#[1:]
         binary = (logits > 0.5).to(torch.uint8)
         
         binary_masks = torch.zeros((len(queries_per_object),H,W), dtype=torch.uint8)

@@ -76,20 +76,20 @@ def evaluate(cfg,
             round_num = 1
             lowest_frame_index = 0
 
-            visualize_dir = "/home/roy/REPOS/dynamite_video/experiments/eval_test/visualize"
+            visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/eval/storage"
             # generate indices of shorter sub-sequences or clips from the whole sequence
             clip_indices = manager.generate_clip_indices(start=lowest_frame_index)
 
             # make predictions for one clip at a time
             for num, indices in enumerate(tqdm(clip_indices, leave=False, desc="Clip")):
 
-                clip, clip_inputs = manager.extract_clip(indices)
-                # torch.save(clip, os.path.join(visualize_dir, f"clip_{indices}.pth"))
-                # torch.save(clip_inputs, os.path.join(visualize_dir, f"clip_inputs_{indices}.pth"))
-                clip_preds = predictor.get_prediction([clip_inputs], indices)    # T,N,H,W
-                # torch.save(clip_preds, os.path.join(visualize_dir, f"clip_preds_{indices}.pth"))
-                clip_semantic_preds = manager.store_prediction(clip_preds, clip, indices)
-                # torch.save(clip_semantic_preds, os.path.join(visualize_dir, f"clip_semantic_preds_{indices}.pth"))
+                clip, clip_inputs = manager.extract_non_overlapping_clip(indices)
+                torch.save(clip, os.path.join(visualize_dir, f"clip.pth"))
+                torch.save(clip_inputs, os.path.join(visualize_dir, f"clip_inputs.pth"))
+                binary_pred_masks = predictor.get_prediction([clip_inputs], indices)    # T,N,H,W
+                torch.save(binary_pred_masks, os.path.join(visualize_dir, f"binary_pred_masks.pth"))
+                panoptic_pred_masks = manager.store_prediction(binary_pred_masks, clip)
+                torch.save(panoptic_pred_masks, os.path.join(visualize_dir, f"panoptic_pred_masks.pth"))
 
                 if save_vis:
                     manager.save_visualization(vis_path=vis_path, round_num=1, indices=indices)
@@ -244,4 +244,4 @@ class Predictor:
         #     self.mask_features[idx] = mask_features[i]
         #     self.multi_scale_features[idx] = multi_scale_features[i]
 
-        return [x.to('cpu',dtype=torch.uint8) for x in pred_masks]
+        return torch.stack([x.to('cpu',dtype=torch.uint8) for x in pred_masks])

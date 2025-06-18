@@ -5,7 +5,7 @@ import torch
 
 from PIL import Image
 
-from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks, serialize_object_ids
+from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks, serialize_object_ids, convert_binary_to_panoptic, convert_panoptic_to_binary
 from dynamite_video.evaluation.eval_utils import create_circular_mask, color_map, show_points, get_center_coords
 
 class SequenceManager:
@@ -56,11 +56,11 @@ class SequenceManager:
         
         # load images and ground truth masks
         self.images = self.sequence.load_images()
-        # gt semantic masks follow the labelling format: semantic_map * max_instances_per_category + instance_map
+        # gt panoptic masks follow the labelling format: semantic_map * max_instances_per_category + instance_map
         self.gt_masks = self.sequence.prepare_eval_masks(fill_value=self.ignore_class * self.max_instances_per_category)
         # transformations
         self.H, self.W = self.compute_tfm_sizes(tfms)
-        self.ignore_masks = (self.gt_masks==self.ignore_class * self.max_instances_per_category).astype(np.uint8)
+        self.ignore_masks = (self.gt_masks==self.ignore_class * self.max_instances_per_category)
 
         # maintain serialized object IDs
         self.orig_to_serial_ids, self.serial_to_orig_ids = serialize_object_ids(self.sequence.object_ids)
@@ -155,6 +155,68 @@ class SequenceManager:
         return indices
 
     
+    def extract_non_overlapping_clip(self, indices):
+        visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/eval/storage"
+        
+        # panoptic maps of the clip frames, including VOID - T,H,W
+        clip_gt_masks = self.gt_masks[indices[0]:indices[-1]+1]
+        
+        ign_label = self.ignore_class * self.max_instances_per_category
+
+        # serialize object IDs in the clip
+        clip_orig_ids = list(np.unique(clip_gt_masks))
+        clip_orig_to_serial_id, clip_serial_to_orig_id = serialize_object_ids(clip_orig_ids)
+        assert set(clip_orig_to_serial_id.keys()).intersection(set(clip_orig_to_serial_id.values())) == set()
+
+        # panoptic to serialized binary gt masks, !!minus VOID!!
+        clip_binary_gt_masks, clip_objects_per_frame = convert_panoptic_to_binary(clip_gt_masks, clip_orig_to_serial_id, ignore=ign_label)
+
+        # for each object, find the frame where it is the largest
+        largest_area_idx = clip_binary_gt_masks.sum((2,3)).argmax(0)
+        
+        # record clicks for the frames
+        N = clip_binary_gt_masks.shape[1]
+        clip_fg_coords_list = [[[] for _ in range(N)] for _ in range(len(indices))]
+        clip_num_clicks_per_object = np.zeros((len(indices), N), dtype=np.uint16)
+        
+        if ign_label in clip_orig_ids:
+            clip_orig_ids.remove(ign_label)
+
+        for global_obj_id, local_fr_idx in zip(clip_orig_ids, largest_area_idx):
+            
+            local_obj_id = clip_orig_to_serial_id[global_obj_id]
+            global_fr_idx = indices[local_fr_idx]
+            
+            # ground truth binary mask of the object in the frame
+            obj_mask = clip_binary_gt_masks[local_fr_idx][local_obj_id-1]
+            
+            center_coords = get_center_coords(obj_mask * self.not_clicked_map[global_fr_idx])
+            # serialized object ID in the clip
+            clip_fg_coords_list[local_fr_idx][local_obj_id-1].append([center_coords[0], center_coords[1], local_obj_id, local_fr_idx, self.t])
+            clip_num_clicks_per_object[local_fr_idx][local_obj_id-1] += 1
+
+            self.record_click(global_fr_idx, global_obj_id, center_coords)
+
+        clip = {
+            "indices": indices,
+            "orig_to_serial_id": clip_orig_to_serial_id,
+            "serial_to_orig_id": clip_serial_to_orig_id,
+            "panoptic_gt_masks": clip_gt_masks,
+            "binary_gt_masks": clip_binary_gt_masks,
+        }
+        # input to model forward pass
+        input = {
+            "images": torch.as_tensor(self.images[indices[0]:indices[-1]+1], dtype=torch.uint8),
+            "objects_per_frame": clip_objects_per_frame,
+            "num_clicks_per_object": clip_num_clicks_per_object,
+            "fg_coords_list": clip_fg_coords_list,
+            "bg_coords_list": [[] for _ in range(len(indices))],
+            "max_timestamp_list": self.max_timestamps[indices[0]:indices[-1]+1],
+        }
+        
+        return clip, input
+    
+    
     def extract_clip(self, _indices):
         """
         Given a list of frame indices, extract a clip consisting of these indices 
@@ -171,7 +233,7 @@ class SequenceManager:
             indices = _indices[::-1]
 
         visualize_dir = "/home/roy/REPOS/dynamite_video/experiments/expt_2/visualize"
-        # semantic maps of the clip frames - T,H,W
+        # panoptic maps of the clip frames - T,H,W
         clip_gt_masks = self.gt_masks[indices[0]:indices[-1]+1]
         # np.save(os.path.join(visualize_dir, f"clip_gt_masks_{indices}.npy"), clip_gt_masks)
 
@@ -289,28 +351,26 @@ class SequenceManager:
         self.t+=1
         
 
-    def store_prediction(self, clip_preds, clip, indices):
+    def store_prediction(self, binary_pred_masks, clip):
         """
         Store predicted masks of a clip in the whole sequence
 
         Args:
-            clip_preds: list of N,H,W predicted binary masks
+            binary_pred_masks: T,N,H,W predicted binary masks
             clip: GenericVideoSequence
             indices: indices w.r.t whole sequence
         """
-        # convert binary masks to panoptic
-        pred_sem_masks = np.zeros((len(indices), self.H, self.W), dtype=np.uint32) # T,H,W
-
-        for local_fr_idx, fr_pred in enumerate(clip_preds):
-            for i, msk in enumerate(fr_pred):
-                pred_sem_masks[local_fr_idx][np.where(msk == 1)] = clip["serial_to_orig_id"][i+1]
-
+        indices = clip["indices"]        
+        panoptic_pred_masks = convert_binary_to_panoptic(binary_pred_masks, clip["serial_to_orig_id"])
+        
         # ignore masks
         clip_ignore_masks = self.ignore_masks[indices]
-        pred_sem_masks[np.where(clip_ignore_masks==1)] = self.ignore_class * self.max_instances_per_category
+        ign_label = self.ignore_class * self.max_instances_per_category
+        panoptic_pred_masks[np.where(clip_ignore_masks)] = ign_label
 
-        self.pred_masks[indices] = pred_sem_masks
-        return pred_sem_masks
+        self.pred_masks[indices] = panoptic_pred_masks
+
+        return panoptic_pred_masks
 
 
     def save_visualization(self, vis_path, round_num=0, indices=None, alpha = 0.5):
@@ -374,6 +434,10 @@ class SequenceManager:
         """
         pred = self.pred_masks[frame_idx]
         gt = self.gt_masks[frame_idx]
+
+        visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/eval/storage"
+        np.save(os.path.join(visualize_dir, "pred_mask.npy", pred))
+        np.save(os.path.join(visualize_dir, "gt_mask.npy", gt))
 
         objects = np.unique(gt)
         ious = []
