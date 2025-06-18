@@ -139,7 +139,7 @@ debug
 notebooks
 jobscripts
 detectron2
-experiments/*
+experiments
 datasets_backup
 dataset_juwels
 
@@ -148,4 +148,3 @@ dataset_juwels
 !dynamite_video/.env
 !datasets/.gitkeep
 !weights/.gitkeep
-!experiments/.gitkeep
