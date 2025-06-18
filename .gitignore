@@ -132,13 +132,20 @@ dmypy.json
 .vscode
 
 # chunky directories
-weights
-datasets
+weights/*
+datasets/*
 wandb
 debug
 notebooks
 jobscripts
 detectron2
-experiments*
+experiments/*
 datasets_backup
 dataset_juwels
+
+
+# do not remove
+!dynamite_video/.env
+!datasets/.gitkeep
+!weights/.gitkeep
+!experiments/.gitkeep
