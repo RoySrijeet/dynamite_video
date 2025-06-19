@@ -1,4 +1,5 @@
-import numpy as np
+import os
+import yaml
 
 from detectron2.utils import comm
 from detectron2.engine import DefaultTrainer
@@ -48,7 +49,7 @@ class Evaluator(DefaultTrainer):
             
             from dynamite_video.evaluation.multi_instance_evaluation import evaluate
             
-            result = evaluate(cfg,
+            dataset_result = evaluate(cfg,
                             model,
                             dataset,
                             dataset_meta,
@@ -59,7 +60,10 @@ class Evaluator(DefaultTrainer):
                             seed_id=seed_id,
                             save_vis=save_vis,
             )
-        
             # save result
-            mean_score = np.mean(np.asarray(result), axis=0)
-            logger.info(f"Mean scores, {dataset_name}  [IoU, J&F]: {mean_score}")
+            with open(os.path.join(cfg.OUTPUT_DIR, f"metrics_{dataset_name}.yaml"), 'w') as f:
+                yaml.dump(dict(dataset_result), f)
+        
+            for vid, res in dataset_result.items():
+                logger.info(f"Video: {vid}")
+                logger.info(f"Scores: {res}")

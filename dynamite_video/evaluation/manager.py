@@ -376,7 +376,7 @@ class SequenceManager:
         return panoptic_pred_masks
 
 
-    def save_visualization(self, vis_path, round_num=0, indices=None, alpha = 0.5):
+    def save_visualization(self, vis_path, round_num, indices=None, alpha = 0.5):
         """
         Save predicted mask visualization to the disc
 

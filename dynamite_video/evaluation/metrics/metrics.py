@@ -35,8 +35,6 @@ def compute_stq(gt_masks, pred_masks, dataset_meta):
         stq_metric.update_state(frame_gt, frame_pred)
 
     result = stq_metric.result()
-    for k, v in result.items():
-        print(f"{k}: {v}")
 
     def np_to_native_type(x):
         if isinstance(x, np.ndarray):
@@ -46,7 +44,13 @@ def compute_stq(gt_masks, pred_masks, dataset_meta):
         else:
             return x
 
-    result = {k: np_to_native_type(v) for k, v in result.items()}
-    result["IoU_per_seq"] = [x.item() for x in result["IoU_per_seq"]]
+    return (np_to_native_type(result["STQ"]), 
+            np_to_native_type(result["AQ"]), 
+            np_to_native_type(result["IoU"]))
+    # for k, v in result.items():
+    #     print(f"{k}: {v}")
 
-    return result
+    # result = {k: np_to_native_type(v) for k, v in result.items()}
+    # result["IoU_per_seq"] = [x.item() for x in result["IoU_per_seq"]]
+
+    # return result
