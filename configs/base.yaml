@@ -198,9 +198,19 @@ ITERATIVE:
     MAX_NUM_REFINEMENT_ROUNDS: 3
   TEST:
     INTERACTIVE_EVALAUTION: True
-    # EVAL_STRATEGY: "random"
-    MAX_NUM_REFINEMENT_ROUNDS: 20
-    IOU_THRESHOLD: 0.85
+    # perform evaluation on specified datsets
+    DATASETS: [KITTI_STEP]
+    # refine a target until threshold is reached
+    IOU_THRESHOLD: 0.95
+    # Max no. of interactions allowed per target, in an entire sequence
+    MAX_INTERACTIONS_PER_TARGET: 3
+    # Max no. of corrective rounds
+    MAX_ROUNDS: 3
+    # save mask predictions
+    SAVE_VISUALIZATIONS: false
+    # Strategy to select the instance to add corrective clicks on. Choose between 'random', 'worst', 'best'
+    EVAL_STRATEGY: "random"
+    SINGLE_INSTANCE: false
 
 CLICKER:
   TRAINING:

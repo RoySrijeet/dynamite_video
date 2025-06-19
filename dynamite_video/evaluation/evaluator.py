@@ -9,7 +9,7 @@ from dynamite_video.data.dataset_builder import build_evaluation_dataset
 class Evaluator(DefaultTrainer):
     
     @classmethod
-    def interactive_evaluation(cls, cfg, args, model):
+    def interactive_evaluation(cls, cfg, model):
         """
         Perform interactive evaluation on evaluation datasets one-by-one
 
@@ -21,13 +21,13 @@ class Evaluator(DefaultTrainer):
         
         logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="Evaluator")
 
-        eval_datasets = args.eval_datasets
-        iou_threshold = args.iou_threshold
-        max_interactions = args.max_interactions
-        max_rounds = args.max_rounds
-        eval_strategy = args.eval_strategy
-        seed_id = args.seed_id
-        save_vis = args.save_vis
+        eval_datasets = cfg.ITERATIVE.TEST.DATASETS
+        iou_threshold = cfg.ITERATIVE.TEST.IOU_THRESHOLD
+        max_interactions = cfg.ITERATIVE.TEST.MAX_INTERACTIONS_PER_TARGET
+        max_rounds = cfg.ITERATIVE.TEST.MAX_ROUNDS
+        eval_strategy = cfg.ITERATIVE.TEST.EVAL_STRATEGY
+        seed_id = cfg.SEED
+        save_vis = cfg.ITERATIVE.TEST.SAVE_VISUALIZATIONS
 
         logger.info("Initiating interactive evaluation with following setup:")
         logger.info(f"Evaluation datasets: {eval_datasets}")

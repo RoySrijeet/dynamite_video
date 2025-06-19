@@ -46,7 +46,7 @@ def evaluation_pipeline(args):
     DetectionCheckpointer(model, 
                           save_dir=cfg.OUTPUT_DIR).resume_or_load(cfg.MODEL.WEIGHTS)
     
-    Evaluator.interactive_evaluation(cfg, args, model)
+    Evaluator.interactive_evaluation(cfg, model)
 
 
 def training_pipeline(args):

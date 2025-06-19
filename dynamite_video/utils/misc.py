@@ -83,7 +83,7 @@ def load_config(args):
 
     if args.resume or args.eval_only:
         # check if checkpoint directory contains config file
-        ckpt_folder = args.expt_dir #os.path.dirname(args.resume) if args.resume else args.expt_dir
+        ckpt_folder = args.expt_dir
         path_to_ckpt_config = os.path.join(ckpt_folder, "config.yaml")
         assert os.path.exists(path_to_ckpt_config), f"Config file not found! Checkpoint folder \
             ({ckpt_folder}) must contain both .pth and config.yaml files from previous run."
@@ -93,6 +93,7 @@ def load_config(args):
         if args.eval_config:
             cfg.set_new_allowed(True)
             cfg.merge_from_file(args.eval_config)
+            cfg.MODEL.WEIGHTS = os.path.join(args.expt_dir, cfg.MODEL.WEIGHTS)
 
     else:
         # current experiment config - overwrites on base configuration
@@ -157,23 +158,9 @@ def get_cl_arguments():
     )
     
     parser.add_argument(           # eval
-        "--eval-datasets", 
-        type=tuple_type, 
-        help="perform evaluation on given datsets"
-    )
-    
-    parser.add_argument(           # eval
         "--eval-only", 
         action="store_true", 
         help="perform evaluation only"
-    )
-
-    parser.add_argument(            # eval
-        "--eval-strategy", 
-        type=str, 
-        default="random", 
-        help="Strategy to select the instance to add corrective clicks on. Default: 'random'"
-        "Choose between 'random', 'worst', 'best'."
     )
 
     parser.add_argument(
@@ -194,32 +181,11 @@ def get_cl_arguments():
         "to the directory containing the pretrained checkpoint, and not the checkpoint file itself."
     )
 
-    parser.add_argument(           # eval
-        "--iou-threshold",
-        type=float, 
-        default=0.85,
-        help="IoU threshold for interactive evaluation"
-    )
-
     parser.add_argument(
         "--machine-rank", 
         type=int, 
         default=0, 
         help="Unique rank of this machine (machine==node)"
-    )
-
-    parser.add_argument(            # eval
-        "--max-interactions",
-        type=int, 
-        default=10,
-        help="Max no. of interactions allowed per instance for interactive evaluation"
-    )
-
-    parser.add_argument(            # eval
-        "--max-rounds",
-        type=int, 
-        default=3,
-        help="Max no. of corrective rounds in interactive evaluation"
     )
 
     parser.add_argument(
@@ -264,12 +230,6 @@ def get_cl_arguments():
         type=int, 
         default=0, 
         help="Seed id for random evaluation."
-    )
-
-    parser.add_argument(           # eval
-        "--save-vis", 
-        action="store_true", 
-        help="Save visualizations of predictions."
     )
 
     args = parser.parse_args()
