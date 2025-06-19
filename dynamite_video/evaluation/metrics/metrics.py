@@ -54,3 +54,12 @@ def compute_stq(gt_masks, pred_masks, dataset_meta):
     # result["IoU_per_seq"] = [x.item() for x in result["IoU_per_seq"]]
 
     # return result
+
+
+def compute_j_and_f(gt_masks, pred_masks, num_instances):
+    
+    jaccard_mean, jaccard_instances = batched_jaccard(gt_masks, pred_masks, average_over_objects=True, nb_objects=num_instances)
+    contour_mean, _ = batched_f_measure(gt_masks, pred_masks, average_over_objects=True, nb_objects=num_instances)
+    j_and_f = 0.5*jaccard_mean + 0.5*contour_mean
+
+    return j_and_f

@@ -51,7 +51,7 @@ class SequenceManager:
         self.sequence = sequence
         # dimensions T,N,H,W
         self.T = len(self.sequence)
-        self.N = len(self.sequence.object_ids) - 1 # ignoring ignore mask
+        self.N = len(self.sequence.object_ids) - 1 # ignoring VOID mask
         self.orig_H, self.orig_W = self.sequence.image_dims
         
         # load images and ground truth masks
