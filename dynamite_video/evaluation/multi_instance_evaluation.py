@@ -3,7 +3,7 @@ import os
 import random
 import torch
 import torch.nn as nn
-
+import yaml
 from contextlib import ExitStack, contextmanager
 from tqdm import tqdm
 
@@ -84,17 +84,20 @@ def evaluate(cfg,
             for num, indices in enumerate(tqdm(clip_indices, leave=False, desc="Clip")):
 
                 clip, clip_inputs = manager.extract_non_overlapping_clip(indices)
-                torch.save(clip, os.path.join(visualize_dir, f"clip.pth"))
-                torch.save(clip_inputs, os.path.join(visualize_dir, f"clip_inputs.pth"))
+                # torch.save(clip, os.path.join(visualize_dir, f"clip.pth"))
+                # torch.save(clip_inputs, os.path.join(visualize_dir, f"clip_inputs.pth"))
                 binary_pred_masks = predictor.get_prediction([clip_inputs], indices)    # T,N,H,W
-                torch.save(binary_pred_masks, os.path.join(visualize_dir, f"binary_pred_masks.pth"))
+                # torch.save(binary_pred_masks, os.path.join(visualize_dir, f"binary_pred_masks.pth"))
                 panoptic_pred_masks = manager.store_prediction(binary_pred_masks, clip)
-                torch.save(panoptic_pred_masks, os.path.join(visualize_dir, f"panoptic_pred_masks.pth"))
+                # torch.save(panoptic_pred_masks, os.path.join(visualize_dir, f"panoptic_pred_masks.pth"))
 
                 if save_vis:
                     manager.save_visualization(vis_path=vis_path, round_num=1, indices=indices)
 
             stq = compute_stq(manager.gt_masks, manager.pred_masks, dataset_meta)
+
+            with open(os.path.join(cfg.OUTPUT_DIR, "metrics.yaml"), 'w') as fh:
+                yaml.dump(stq, fh)
 
             del manager
 

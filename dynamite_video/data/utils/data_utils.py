@@ -12,9 +12,9 @@ from torch import Tensor
 from typing import List, Tuple, Optional
 
 
-def convert_binary_to_panoptic(binary_masks, mapping):
+def convert_binary_to_panoptic(binary_masks, mapping, fill_value):
     T,N,H,W = binary_masks.shape
-    panoptic_masks = np.zeros((T,H,W)).astype(np.uint32)
+    panoptic_masks = np.full((T,H,W), fill_value=fill_value).astype(np.uint32)
 
     for fr_idx in range(T):
         fr_binary_masks = binary_masks[fr_idx]

@@ -172,7 +172,10 @@ class SequenceManager:
         clip_binary_gt_masks, clip_objects_per_frame = convert_panoptic_to_binary(clip_gt_masks, clip_orig_to_serial_id, ignore=ign_label)
 
         # for each object, find the frame where it is the largest
-        largest_area_idx = clip_binary_gt_masks.sum((2,3)).argmax(0)
+        # frame_to_sample_from = clip_binary_gt_masks.sum((2,3)).argmax(0)
+        
+        # for each object, find the frame where it first appeared
+        frame_to_sample_from = clip_binary_gt_masks.any((2,3)).argmax(0)
         
         # record clicks for the frames
         N = clip_binary_gt_masks.shape[1]
@@ -182,7 +185,7 @@ class SequenceManager:
         if ign_label in clip_orig_ids:
             clip_orig_ids.remove(ign_label)
 
-        for global_obj_id, local_fr_idx in zip(clip_orig_ids, largest_area_idx):
+        for global_obj_id, local_fr_idx in zip(clip_orig_ids, frame_to_sample_from):
             
             local_obj_id = clip_orig_to_serial_id[global_obj_id]
             global_fr_idx = indices[local_fr_idx]
@@ -360,12 +363,12 @@ class SequenceManager:
             clip: GenericVideoSequence
             indices: indices w.r.t whole sequence
         """
-        indices = clip["indices"]        
-        panoptic_pred_masks = convert_binary_to_panoptic(binary_pred_masks, clip["serial_to_orig_id"])
+        indices = clip["indices"]
+        ign_label = self.ignore_class * self.max_instances_per_category
+        panoptic_pred_masks = convert_binary_to_panoptic(binary_pred_masks, clip["serial_to_orig_id"], fill_value=ign_label)
         
         # ignore masks
         clip_ignore_masks = self.ignore_masks[indices]
-        ign_label = self.ignore_class * self.max_instances_per_category
         panoptic_pred_masks[np.where(clip_ignore_masks)] = ign_label
 
         self.pred_masks[indices] = panoptic_pred_masks
@@ -410,22 +413,22 @@ class SequenceManager:
             fr_msk.save(os.path.join(vis_path, f"mask_{fr_idx}_iou_{iou}.png"))
             
             # Convert both to BGR (for OpenCV)
-            image_bgr = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
-            fr_msk = np.array(fr_msk.convert("RGB"))
-            mask_bgr = cv2.cvtColor(fr_msk, cv2.COLOR_RGB2BGR)
-            overlayed = cv2.addWeighted(image_bgr, 1 - alpha, mask_bgr, alpha, 0)
+            # image_bgr = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
+            # fr_msk = np.array(fr_msk.convert("RGB"))
+            # mask_bgr = cv2.cvtColor(fr_msk, cv2.COLOR_RGB2BGR)
+            # overlayed = cv2.addWeighted(image_bgr, 1 - alpha, mask_bgr, alpha, 0)
             
-            # display clicks
-            fg_coords = self.fg_coords_list[fr_idx]
-            flattened_fg_coords = []
-            for coords in fg_coords:
-                flattened_fg_coords.extend(coords)
-            if len(flattened_fg_coords) > 0:
-                show_points(overlayed, flattened_fg_coords, 1)
-            if len(self.bg_coords_list[fr_idx]) > 0:
-                show_points(overlayed, self.bg_coords_list[fr_idx], 0)
+            # # display clicks
+            # fg_coords = self.fg_coords_list[fr_idx]
+            # flattened_fg_coords = []
+            # for coords in fg_coords:
+            #     flattened_fg_coords.extend(coords)
+            # if len(flattened_fg_coords) > 0:
+            #     show_points(overlayed, flattened_fg_coords, 1)
+            # if len(self.bg_coords_list[fr_idx]) > 0:
+            #     show_points(overlayed, self.bg_coords_list[fr_idx], 0)
             
-            cv2.imwrite(os.path.join(vis_path, f"overlayed_{fr_idx}_iou_{iou}.png"), overlayed)
+            # cv2.imwrite(os.path.join(vis_path, f"overlayed_{fr_idx}_iou_{iou}.png"), overlayed)
 
 
     def compute_iou(self, frame_idx):

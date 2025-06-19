@@ -369,29 +369,29 @@ class DynamiteModel(nn.Module):
         mask_pred = torch.stack(temp_out)       # (N+1)xHxW
 
         # soft-aggregation
-        prob = mask_pred.clamp(1e-7, 1-1e-7)
-        logits = torch.log((prob /(1-prob)))
-        logits = F.softmax(logits, dim=0)#[1:]
-        binary = (logits > 0.5).to(torch.uint8)
+        # prob = mask_pred.clamp(1e-7, 1-1e-7)
+        # logits = torch.log((prob /(1-prob)))
+        # logits = F.softmax(logits, dim=0)#[1:]
+        # binary = (logits > 0.5).to(torch.uint8)
         
-        binary_masks = torch.zeros((len(queries_per_object),H,W), dtype=torch.uint8)
-        c = 0
-        for i, q in enumerate(queries_per_object):
-            if q>0:
-                binary_masks[i][torch.where(binary[c]==1)] = 1
-                c += 1
+        # binary_masks = torch.zeros((len(queries_per_object),H,W), dtype=torch.uint8)
+        # c = 0
+        # for i, q in enumerate(queries_per_object):
+        #     if q>0:
+        #         binary_masks[i][torch.where(binary[c]==1)] = 1
+        #         c += 1
 
-        return binary_masks
+        # return binary_masks
 
-        # mask_pred = torch.argmax(mask_pred,0)
+        mask_pred = torch.argmax(mask_pred,0)
         
-        # m = []
-        # for obj_id in seq_objects:
-        #     if obj_id in objects_per_image:
-        #         m.append((mask_pred == obj_id-1).float())
-        #     else:
-        #         m.append(torch.zeros(H,W).to(mask_pred.device))
+        m = []
+        for obj_id in seq_objects:
+            if obj_id in objects_per_image:
+                m.append((mask_pred == obj_id-1).float())
+            else:
+                m.append(torch.zeros(H,W).to(mask_pred.device))
         
-        # mask_pred = torch.stack(m)
+        mask_pred = torch.stack(m)
      
-        # return mask_pred
+        return mask_pred

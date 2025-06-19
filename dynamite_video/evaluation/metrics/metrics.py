@@ -38,16 +38,15 @@ def compute_stq(gt_masks, pred_masks, dataset_meta):
     for k, v in result.items():
         print(f"{k}: {v}")
 
-    # def np_to_native_type(x):
-    #     if isinstance(x, np.ndarray):
-    #         return x.tolist()
-    #     elif hasattr(x, "item"):
-    #         return x.item()
-    #     else:
-    #         return x
+    def np_to_native_type(x):
+        if isinstance(x, np.ndarray):
+            return x.tolist()
+        elif hasattr(x, "item"):
+            return x.item()
+        else:
+            return x
 
-    # result = {k: np_to_native_type(v) for k, v in result.items()}
-    # result["IoU_per_seq"] = [x.item() for x in result["IoU_per_seq"]]
+    result = {k: np_to_native_type(v) for k, v in result.items()}
+    result["IoU_per_seq"] = [x.item() for x in result["IoU_per_seq"]]
 
-    # with open(osp.join(osp.dirname(args.pred), "metrics.yaml"), 'w') as fh:
-    #     yaml.dump(result, fh)
+    return result
