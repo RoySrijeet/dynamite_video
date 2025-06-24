@@ -6,74 +6,58 @@ import os
 import cv2
 import math
 import numpy as np
-from PIL import Image
 from skimage.morphology import disk
 
 __all__ = ['batched_jaccard', 'batched_f_measure']
 
 
-def batched_jaccard(y_true, y_pred, average_over_objects=True, nb_objects=None):
+def batched_jaccard(
+        y_true, 
+        y_pred, 
+        object_ids, 
+        ign_label=None
+):
     """ Batch jaccard similarity for multiple instance segmentation.
 
-    Jaccard similarity over two subsets of binary elements $A$ and $B$:
-
-    $$
-    \mathcal{J} = \\frac{A \\cap B}{A \\cup B}
-    $$
-
-    # Arguments
-        y_true: Numpy Array. Array of shape (B x H x W) and type integer giving the
-            ground truth of the object instance segmentation.
-        y_pred: Numpy Array. Array of shape (B x H x W) and type integer giving the
-            prediction of the object segmentation.
-        average_over_objects: Boolean. Weather or not to average the jaccard over
-            all the objects in the sequence. Default True.
-        nb_objects: Integer. Number of objects in the ground truth mask. If
-            `None` the value will be infered from `y_true`. Setting this value
-            will speed up the computation.
-
-    # Returns
-        ndarray: Returns an array of shape (B) with the average jaccard for
-            all instances at each frame if `average_over_objects=True`. If
-            `average_over_objects=False` returns an array of shape (B x nObj)
-            with nObj being the number of objects on `y_true`.
+    Args:
+        y_true: ground truth labels, np.ndarray, shape TxHxW and type integer
+        y_pred: predicted labels, np.ndarray, shape TxHxW and type integer
+        object_ids: list of IDs of objects present in `y_true`
+        ign_label: label of ignore class
     """
-    y_true = np.asarray(y_true, dtype=np.int_)
-    y_pred = np.asarray(y_pred, dtype=np.int_)
-    if y_true.ndim != 3:
-        raise ValueError('y_true array must have 3 dimensions.')
-    if y_pred.ndim != 3:
-        raise ValueError('y_pred array must have 3 dimensions.')
-    if y_true.shape != y_pred.shape:
-        raise ValueError('y_true and y_pred must have the same shape. {} != {}'.format(y_true.shape, y_pred.shape))
+    vis_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/metrics/batched_jaccard"
+    np.save(os.path.join(vis_dir, "y_true.npy"), y_true)
+    np.save(os.path.join(vis_dir, "y_pred.npy"), y_pred)
+    np.save(os.path.join(vis_dir, "object_ids.npy"), np.asarray(object_ids))
+    T = len(y_true)
+    N = len(object_ids)
 
-    if nb_objects is None:
-        objects_ids = np.unique(y_true[(y_true < 255) & (y_true > 0)])
-        nb_objects = len(objects_ids)
-    else:
-        objects_ids = [i + 1 for i in range(nb_objects)]
-        objects_ids = np.asarray(objects_ids, dtype=np.int_)
-    if nb_objects == 0:
-        raise ValueError('Number of objects in y_true should be higher than 0.')
-    nb_frames = len(y_true)
+    # compute J-score for all objects except that of the ignore class
+    if ign_label is not None and ign_label in object_ids:
+        N -= 1
+    
+    jaccard = np.empty((T, N), dtype=np.single)
 
-    jaccard = np.empty((nb_frames, nb_objects), dtype=np.single)
-
-    for i, obj_id in enumerate(objects_ids):
+    for i, obj_id in enumerate(object_ids):
+        
+        if ign_label is not None and obj_id==ign_label:
+            # skip any ignore class
+            continue
+        
+        # g.t. and predicted masklets of the object
         mask_true, mask_pred = y_true == obj_id, y_pred == obj_id
 
         union = (mask_true | mask_pred).sum(axis=(1, 2))
         intersection = (mask_true & mask_pred).sum(axis=(1, 2))
 
-        for j in range(nb_frames):
+        for j in range(T):
             if np.isclose(union[j], 0):
+                # if an object doesn't appear in the g.t.
+                # or prediction, IoU is set to 1.
                 jaccard[j, i] = 1.
             else:
                 jaccard[j, i] = intersection[j] / union[j]
     
-    if average_over_objects:
-        jaccard_mean = jaccard.mean(axis=1)
-        return jaccard_mean, jaccard
     return jaccard
 
 
@@ -202,60 +186,38 @@ def f_measure(true_mask, pred_mask, bound_th=0.008):
     return F
 
 
-def batched_f_measure(y_true,
-                      y_pred,
-                      average_over_objects=True,
-                      nb_objects=None,
-                      bound_th=0.008):
+def batched_f_measure(
+        y_true,
+        y_pred,
+        object_ids,
+        ign_label=None,
+        bound_th=0.008
+):
     """ Batch F-measure for multiple instance segmentation.
 
-    # Arguments
-        y_true: Numpy Array. Array of shape (B x H x W) and type integer giving
-            the ground truth of the object instance segmentation.
-        y_pred: Numpy Array. Array of shape (B x H x W) and type integer giving
-            the
-            prediction of the object segmentation.
-        average_over_objects: Boolean. Weather or not to average the F-measure
-            over all the objects in the sequence. Default True.
-        nb_objects: Integer. Number of objects in the ground truth mask. If
-            `None` the value will be infered from `y_true`. Setting this value
-            will speed up the computation.
-
-    # Returns
-        ndarray: Returns an array of shape (B) with the average F-measure for
-            all instances at each frame if `average_over_objects=True`. If
-            `average_over_objects=False` returns an array of shape (B x nObj)
-            with nObj being the number of objects on `y_true`.
+    Args:
+        y_true: ground truth labels, np.ndarray, shape TxHxW and type integer
+        y_pred: predicted labels, np.ndarray, shape TxHxW and type integer
+        object_ids: list of IDs of objects present in `y_true`
+        ign_label: label of ignore class
     """
-    y_true = np.asarray(y_true, dtype=np.int_)
-    y_pred = np.asarray(y_pred, dtype=np.int_)
-    if y_true.ndim != 3:
-        raise ValueError('y_true array must have 3 dimensions.')
-    if y_pred.ndim != 3:
-        raise ValueError('y_pred array must have 3 dimensions.')
-    if y_true.shape != y_pred.shape:
-        raise ValueError('y_true and y_pred must have the same shape. {} != {}'.format(y_true.shape, y_pred.shape))
+    T = len(y_true)
+    N = len(object_ids)
 
-    if nb_objects is None:
-        objects_ids = np.unique(y_true[(y_true < 255) & (y_true > 0)])
-        nb_objects = len(objects_ids)
-    else:
-        objects_ids = [i + 1 for i in range(nb_objects)]
-        objects_ids = np.asarray(objects_ids, dtype=np.int_)
-    if nb_objects == 0:
-        raise ValueError('Number of objects in y_true should be higher than 0.')
-    nb_frames = len(y_true)
+    # compute F-score for all objects except that of the ignore class
+    if ign_label is not None and ign_label in object_ids:
+        N -= 1
+    
+    f_measure_result = np.empty((T, N), dtype=np.single)
 
-    f_measure_result = np.empty((nb_frames, nb_objects), dtype=np.single)
-
-    for i, obj_id in enumerate(objects_ids):
-        for frame_id in range(nb_frames):
+    for i, obj_id in enumerate(object_ids):
+        if ign_label is not None and obj_id==ign_label:
+            # skip any ignore class
+            continue
+        
+        for frame_id in range(T):
             gt_mask = y_true[frame_id, :, :] == obj_id
             pred_mask = y_pred[frame_id, :, :] == obj_id
-            f_measure_result[frame_id, i] = f_measure(
-                gt_mask, pred_mask, bound_th=bound_th)
+            f_measure_result[frame_id, i] = f_measure(gt_mask, pred_mask, bound_th=bound_th)
 
-    if average_over_objects:
-        f_measure_mean = f_measure_result.mean(axis=1)
-        return f_measure_mean, f_measure_result
     return f_measure_result

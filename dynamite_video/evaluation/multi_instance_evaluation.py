@@ -80,10 +80,12 @@ def evaluate(cfg,
             click_budget = max_interactions * manager.N
 
             # rounding starts at first frame
-            round_num = 1
+            round_num = 0
             lowest_frame_index = 0
+            vid_ious = []
 
-            while True: 
+            while lowest_frame_index!=-1:
+                round_num += 1
 
                 # generate indices of shorter sub-sequences or clips from the whole sequence
                 clip_indices = manager.generate_clip_indices(start=lowest_frame_index)
@@ -96,51 +98,56 @@ def evaluate(cfg,
                     panoptic_pred_masks = manager.store_prediction(binary_pred_masks, clip)
 
                     if save_vis:
-                        manager.save_visualization(vis_path, round_num, indices)
+                        ious = manager.save_visualization(vis_path, round_num, indices)
+                        vid_ious.append(np.asarray(ious).mean())
 
                 # metrics
                 video_stq, video_aq, video_iou = compute_stq(manager.gt_masks, manager.pred_masks, dataset_meta)
-                video_j_and_f = compute_j_and_f(manager.gt_masks, manager.pred_masks, manager.N)
-                dataset_stq[manager.sequence.id].append({"Round": round_num, "STQ": video_stq, "AQ": video_aq, "IoU": video_iou, "J&F": video_j_and_f.mean()})
-                logger.info(f"{manager.sequence.id}, Round {round_num} scores: \nSTQ: {video_stq} \nAQ: {video_aq} \nIoU: {video_iou} \nJ&F: {video_j_and_f.mean()}")
+                j_and_f_dict = compute_j_and_f(manager.gt_masks, manager.pred_masks, list(manager.orig_to_serial_ids.keys()), manager.ignore_label)
+                jaccard_mean_per_frame = j_and_f_dict["jaccard_mean_per_frame"]     # T
+                f_measure_mean_per_frame = j_and_f_dict["f_measure_mean_per_frame"] # T
+                j_and_f = j_and_f_dict["j_and_f"]   # T
+                
+                dataset_stq[manager.sequence.id].append({
+                    "Round": round_num, "STQ": video_stq, "AQ": video_aq, "IoU": video_iou, 
+                    "J": jaccard_mean_per_frame.mean(), "F": f_measure_mean_per_frame.mean(), "J&F": j_and_f.mean()
+                })
+                logger.info(f"{manager.sequence.id}, Round {round_num} scores: \
+                    \nTotal #clicks: {manager.num_clicks_per_frame.sum()} \
+                    \nSTQ: {video_stq} \nAQ: {video_aq} \nIoU: {video_iou} \
+                    \nJ: {jaccard_mean_per_frame.mean()} \nF: {f_measure_mean_per_frame.mean()} \nJ&F: {j_and_f.mean()}")
 
-                curr_click_count = ...
+                curr_click_count = manager.num_clicks_per_frame.sum()
 
                 ## WEAKEST PREDICTION ##
-                while True:
-                    # Stopping criterion 1: check whether round budget is over
-                    if round_num == max_rounds:
-                        logger.info(f'{manager.sequence.id}, Round {round_num}:: Maximum round limit ({max_rounds}) reached!')
-                        lowest_frame_index = -1
-                        break
+                # Stopping criterion 1: check whether round budget is over
+                if round_num == max_rounds:
+                    logger.info(f'{manager.sequence.id}, Round {round_num}:: Maximum round limit ({max_rounds}) reached!')
+                    lowest_frame_index = -1
 
-                    # Stopping criterion 2: check whether click budget is over
-                    if click_budget == curr_click_count:
-                        logger.info(f'{manager.sequence.id}, Round {round_num}:: Click budget ({max_interactions} per frame) over!')
-                        lowest_frame_index = -1
-                        break
+                # Stopping criterion 2: check whether click budget is over
+                if click_budget <= curr_click_count:
+                    logger.info(f'{manager.sequence.id}, Round {round_num}:: Click budget ({max_interactions} per frame) over!')
+                    lowest_frame_index = -1
 
-                    # select the object with weakest mIoU and the frame where it has the weakest IoU
-                    min_iou, min_iou_index = ...
+                if lowest_frame_index != -1:
+                    # select the object with weakest mIoU
+                    jaccard_mean_per_object = j_and_f_dict["jaccard"].mean(axis=0)  # N
+                    min_iou = jaccard_mean_per_object.min()
                     
-                    # Stopping criterion 2: check whether all frames meet IoU threshold
+                    # Stopping criterion 3: check whether all objects meet IoU threshold
                     if min_iou >= iou_threshold:
+                        logger.info(f'{manager.sequence_id}, Round {round_num}:: All objects meet IoU requirement!')
                         lowest_frame_index = -1
-                        logger.info(f'{manager.sequence_id}, Round {round_num}:: All frames meet IoU requirement!')
-                        break
                     else:
-                        lowest_frame_index = min_iou_index[0]
-                        lowest_instance_id = min_iou_index[1]
+                        lowest_obj_serial_id = jaccard_mean_per_object.argmin()
+                        lowest_obj_orig_id = list(manager.orig_to_serial_ids.keys())[lowest_obj_serial_id]
+                        lowest_frame_index = j_and_f_dict["jaccard"][:, lowest_obj_serial_id].argmin()
                 
-                # hit one of the stopping criteria
-                if lowest_frame_index == -1:
-                    break
-
-                round_num += 1
-
-                ## CORRECTIVE CLICK ##
-                refined_obj_index = manager.get_corrective_click(frame_idx=lowest_frame_index, inst_id=lowest_instance_id)
-                logger.info(f'{manager.sequence.id}, Round {round_num}:: Sampled a click on instance {refined_obj_index+1} in frame {lowest_frame_index}')
+                if lowest_frame_index != -1:
+                    ## CORRECTIVE CLICK ##
+                    refined_obj_index = manager.get_corrective_click(frame_idx=lowest_frame_index, obj_id=lowest_obj_orig_id)
+                    logger.info(f'{manager.sequence.id}, Round {round_num}:: Sampled a click on instance {refined_obj_index+1} in frame {lowest_frame_index}')
         
             del manager
         return dataset_stq
