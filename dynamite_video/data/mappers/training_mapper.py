@@ -85,11 +85,17 @@ class TrainingMapper:
         # NOTE: 0-labelled region in foreground masks at this point corresponds to 
         # the ignore mask area, the padding area, and any potential background
         
-        # for "panoptic" task there is no background
-        bg_masks = None
-        # for "instance" task the background is the region not included in foreground masks, padding mask or ignore mask
         if task_type != "panoptic":
-            bg_masks = np.logical_not(np.logical_or(np.logical_or(padding_mask, foreground_masks), ignore_masks)).astype(np.uint8)
+            # for "instance" task the background is the region not 
+            # included in foreground masks, padding mask or ignore mask
+            bg_masks = (foreground_masks==0) & ~ignore_masks
+            bg_masks = bg_masks.astype(np.uint8)
+        else:
+            # for "panoptic" task there is no background, make all 0-labelled
+            # region the ignore mask
+            bg_masks = None
+            ignore_masks = (foreground_masks==0) & ~padding_mask 
+
         
         # sample clicks
         (num_clicks_per_target, 
@@ -109,6 +115,8 @@ class TrainingMapper:
         meta_info = {
             "orig_dims": images.shape[2:],
             "seq_name": video.id,
+            "frame_indices": frame_indices,
+            "task_type": task_type,
             "orig_to_serial_id": clip.orig_to_serial_id, 
             "serial_to_orig_id": clip.serial_to_orig_id, 
             "ignore_class": clip.ignore_class,
