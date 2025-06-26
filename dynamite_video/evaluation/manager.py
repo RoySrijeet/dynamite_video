@@ -17,13 +17,21 @@ class SequenceManager:
         """
         Initialize with information on the sequence data, including ground truth masks
 
+        Sequence Manager maintains all object-related info in their original ID, which
+        follows the format: semantic_label * max_instances_per_category + instance_id
+
         Args:
             sequence: `GenericVideoSequence` instance of current video
             dataset_meta: dict with dataset level info on following properties:
                 * category_labels: mapping between category ID and label, e.g., 0: 'road'
                 * clip_length: int, length of each sub-sequence
                 * num_overlapping_frames: int, overlap between consecutive sub-sequences
-                * fps: sequence FPS
+                * fps: int, sequence FPS
+                * split: str, dataset split (val/test)
+                * num_classes: int, number of semantic classes
+                * things_list: list(int), semantic labels of `thing` classes
+                * ignore_class: int, semantic label of `VOID` class
+                * max_instances_per_category: int, max #instances to expect per semantic class
             tfms: transformation info from config, cfg.INPUT
         """
 
@@ -43,62 +51,85 @@ class SequenceManager:
         self.ignore_class = dataset_meta["ignore_class"]
         # max num of instances per category
         self.max_instances_per_category = dataset_meta["max_instances_per_category"]
+        # ignore class label in panoptic masks
         self.ignore_label = self.ignore_class * self.max_instances_per_category
+        
+        # sequence level information
+        
+        # `GenericVideoSequence` instance of current video
+        self.sequence = sequence
+        # num of frames in the sequence
+        self.T = len(self.sequence)
+        # num of targets in the sequence, ignore VOID mask
+        self.N = len(self.sequence.object_ids) - 1
+        # original spatial resolution
+        self.orig_H, self.orig_W = self.sequence.image_dims
+        
+        # load tensors
+        
+        # load images - T,3,orig_H,orig_W
+        self.images = self.sequence.load_images()
+        # load ground truth panoptic masks - T,orig_H,orig_W
+        self.gt_masks = self.sequence.prepare_eval_masks(fill_value=self.ignore_label)
+        # apply transformation on image and gt mask tensors
+        self.H, self.W = self.compute_tfm_sizes(tfms)
+        # ignore mask - T,H,W
+        self.ignore_masks = (self.gt_masks==self.ignore_label)
+
+        # object level information
+
+        # IDs of the objec
+        self.object_ids = self.sequence.object_ids
+        if self.ignore_label in self.object_ids:
+            self.object_ids.remove(self.ignore_label)
+        # serialize object IDs
+        self.orig_to_serial_ids, self.serial_to_orig_ids = serialize_object_ids(self.object_ids)
+        # ensure there's no intersection between original IDs and the serialized IDs
+        assert set(self.orig_to_serial_ids.keys()).intersection(set(self.orig_to_serial_ids.values())) == set()
+        # maintain a record to keep track of objects that were already discovered
+        self.object_discovery = set()
+
+        # clip level information
+
         # length of clips to be extracted from the sequence
         self.clip_length = dataset_meta["clip_length"]
         # overlap between successive clips
         self.num_overlapping_frames = dataset_meta["num_overlapping_frames"]
-        # sequence level information
-        self.sequence = sequence
-        # dimensions T,N,H,W
-        self.T = len(self.sequence)
-        self.N = len(self.sequence.object_ids) - 1 # ignoring VOID mask
-        self.orig_H, self.orig_W = self.sequence.image_dims
+
+        # click level information
         
-        # load images and ground truth masks
-        self.images = self.sequence.load_images()
-        # gt panoptic masks follow the labelling format: semantic_map * max_instances_per_category + instance_map
-        self.gt_masks = self.sequence.prepare_eval_masks(fill_value=self.ignore_label)
-        # transformations
-        self.H, self.W = self.compute_tfm_sizes(tfms)
-        self.ignore_masks = (self.gt_masks==self.ignore_label)
-
-        # maintain serialized object IDs
-        self.orig_to_serial_ids, self.serial_to_orig_ids = serialize_object_ids(self.sequence.object_ids)
-        # ensure there's no intersection between original IDs and the serialized IDs
-        assert set(self.orig_to_serial_ids.keys()).intersection(set(self.orig_to_serial_ids.values())) == set()
-        # whether an object was already discovered or not
-        self.object_discovery = set()
-
         # click radius - region around a existing click that is excluded when sampling a new click
         self.click_radius = 5
         # Strategy to avoid regions while sampling next clicks
+        # 0: new click avoids all the previously sampled click locations
+        # 1: new click avoids all locations upto radius=self.click_radius around all prev sampled clicks
         self.sampling_strategy = 1
+        # allow sampling a click if object area is larger than a threshold
+        self.MIN_MASK_AREA = 0
         # maintain a map of regions to avoid during click sampling, initialized with ignore mask regions
         self.not_clicked_map = (self.gt_masks!=self.ignore_label).astype(np.bool_)
-
-        # initialize buffers
         # foreground clicks sampled on each object in each frame
         self.fg_coords_list = [[[] for _ in range(self.N)] for _ in range(self.T)]
         # background clicks sampled on each frame
         self.bg_coords_list = [[] for _ in range(self.T)]
-        # time stamp of the latest click on each frame
-        self.max_timestamps = np.zeros((self.T), dtype=np.uint16)
         # num clicks on each object in each frame
         self.num_clicks_per_object = np.zeros((self.T, self.N), dtype=np.uint16)
-        # first click at timestamp 1
-        self.t = 1
         # num clicks per frame
         self.num_clicks_per_frame = np.zeros((self.T), dtype=np.uint16)
+        # time stamp of the latest click on each frame
+        self.max_timestamps = np.zeros((self.T), dtype=np.uint16)
+        # first click at timestamp 1
+        self.t = 1
+        
+        # prediction information
         
         # to store predicted masks
         self.pred_masks = np.zeros((self.T, self.H, self.W), dtype=np.uint32)
-        # store frame-level IoU
-        self.ious = np.zeros((self.T,self.N))
+        # store IoU
+        self.ious = np.full((self.T, self.N), fill_value=-1., dtype=np.single)
+        self.frame_level_ious = np.zeros((self.T), dtype=np.single)
 
-        self.MIN_MASK_AREA = 400
         
-    
     def compute_tfm_sizes(self, tfms):
         """
         Compute transformed resolution
@@ -158,40 +189,54 @@ class SequenceManager:
         return indices
 
     
-    def extract_non_overlapping_clip(self, _indices):
+    def extract_clip(self, _indices):
+        """
+        Extract a clip from the sequence specified by the indices. The clip could be reversed
+        in time.
+
+        Args:
+            _indices: list(int), list of frame indices
+
+        Returns:
+            input: dict, compatible with `inputs` argument in `DynamiteModel.forward()`
+        """
         
         indices = _indices
         if len(indices) >= 2 and indices[1] < indices[0]:
             indices = _indices[::-1]
         
-        # panoptic maps of the clip frames, including VOID - T,H,W
+        # panoptic maps of the clip frames, including `ignore_label` - T,H,W
         clip_gt_masks = self.gt_masks[indices[0]:indices[-1]+1]
 
-        # serialize object IDs in the clip
+        # objects present in the ground truth panoptic mask
         clip_orig_ids = list(np.unique(clip_gt_masks))
+        # remove `ignore_label`, if present
+        if self.ignore_label in clip_orig_ids:
+            clip_orig_ids.remove(self.ignore_label)
+        
+        # serialize object IDs
         clip_orig_to_serial_id, clip_serial_to_orig_id = serialize_object_ids(clip_orig_ids)
         assert set(clip_orig_to_serial_id.keys()).intersection(set(clip_orig_to_serial_id.values())) == set()
 
-        # panoptic to serialized binary gt masks, !!minus VOID!!
+        # panoptic to serialized binary gt masks, ** excluding ** VOID
         clip_binary_gt_masks, clip_objects_per_frame = convert_panoptic_to_binary(clip_gt_masks, clip_orig_to_serial_id, ignore=self.ignore_label)
 
         # for each object, find the frame where it is the largest
-        # frame_to_sample_from = clip_binary_gt_masks.sum((2,3)).argmax(0)
+        frame_to_sample_from = clip_binary_gt_masks.sum((2,3)).argmax(0)
         
-        # for each object, find the frame where it first appeared
-        frame_to_sample_from = clip_binary_gt_masks.any((2,3)).argmax(0)
+        # # for each object, find the frame where it first appeared
+        # frame_to_sample_from = clip_binary_gt_masks.any((2,3)).argmax(0)
         
         # record clicks for the frames
-        N = clip_binary_gt_masks.shape[1]
-        clip_fg_coords_list = [[[] for _ in range(N)] for _ in range(len(indices))]
-        clip_num_clicks_per_object = np.zeros((len(indices), N), dtype=np.uint16)
-        
-        if self.ignore_label in clip_orig_ids:
-            clip_orig_ids.remove(self.ignore_label)
+        clip_T = len(indices)
+        clip_N = len(clip_orig_ids)
+        clip_fg_coords_list = [[[] for _ in range(clip_N)] for _ in range(len(indices))]
+        clip_num_clicks_per_object = np.zeros((clip_T, clip_N), dtype=np.uint16)
 
         for global_obj_id, local_fr_idx in zip(clip_orig_ids, frame_to_sample_from):
 
             if global_obj_id in self.object_discovery:
+                # do not sample a click if the object has been already discovered in a previous frame
                 continue
             
             local_obj_id = clip_orig_to_serial_id[global_obj_id]
@@ -199,8 +244,13 @@ class SequenceManager:
             
             # ground truth binary mask of the object in the frame
             obj_mask = clip_binary_gt_masks[local_fr_idx][local_obj_id-1]
+
+            sm = obj_mask.sum()
+            if obj_mask.sum() < self.MIN_MASK_AREA:
+                continue
             
             center_coords = get_center_coords(obj_mask * self.not_clicked_map[global_fr_idx])
+            
             # serialized object ID in the clip
             clip_fg_coords_list[local_fr_idx][local_obj_id-1].append([center_coords[0], center_coords[1], local_obj_id, local_fr_idx, self.t])
             clip_num_clicks_per_object[local_fr_idx][local_obj_id-1] += 1
@@ -209,35 +259,44 @@ class SequenceManager:
             self.object_discovery.add(global_obj_id)
 
         # overlapping frames
-        # NOTE: use the original frame order in the clip
-        overlapping_frame_indices = sorted(_indices[:self.num_overlapping_frames])
-        overlapping_frame_preds = np.stack(self.pred_masks[overlapping_frame_indices])
+        if self.num_overlapping_frames > 0:
+            overlapping_frame_indices = sorted(_indices[:self.num_overlapping_frames])
+            overlapping_frame_preds = np.stack(self.pred_masks[overlapping_frame_indices])
 
-        if overlapping_frame_preds.any():
-            overlapping_objects_predicted = list(np.unique(overlapping_frame_preds))
+            if overlapping_frame_preds.any():
+                overlapping_objects_predicted = list(np.unique(overlapping_frame_preds))
 
-            # for each object, randomly pick one frame to sample a click from
-            for global_obj_id in overlapping_objects_predicted:
-                if global_obj_id == self.ignore_label:
-                    continue
+                # for each object, randomly pick one frame to sample a click from
+                for global_obj_id in overlapping_objects_predicted:
+                    if global_obj_id == self.ignore_label:
+                        continue
 
-                # find the frames where the object was predicted in
-                fr_idx = (overlapping_frame_preds==global_obj_id).astype(np.uint8).sum(axis=(1,2)) > 0
-                # select one frame randomly
-                fr_idx = np.random.choice(np.where(fr_idx)[0])
-                global_fr_idx = overlapping_frame_indices[fr_idx]
-                local_fr_idx = indices.index(global_fr_idx)
+                    # find the frames where the object was predicted in and randomly select one
+                    fr_idx = (overlapping_frame_preds==global_obj_id).astype(np.uint8).sum(axis=(1,2)) > 0
+                    fr_idx = np.random.choice(np.where(fr_idx)[0])
 
-                obj_mask = (overlapping_frame_preds[fr_idx]==global_obj_id).astype('uint8')
-                # obj_mask = (clip_gt_masks[fr_idx]==global_obj_id).astype('uint8')
-                center_coords = get_center_coords(obj_mask)
+                    global_fr_idx = overlapping_frame_indices[fr_idx]
+                    local_fr_idx = indices.index(global_fr_idx)
 
-                # serialized object ID in the clip
-                local_obj_id = clip_orig_to_serial_id[global_obj_id]
-                clip_fg_coords_list[local_fr_idx][local_obj_id-1].append([center_coords[0], center_coords[1], local_obj_id, local_fr_idx, self.t])
-                clip_num_clicks_per_object[local_fr_idx][local_obj_id-1] += 1
+                    obj_mask = (overlapping_frame_preds[fr_idx]==global_obj_id).astype('uint8')
+                    center_coords = get_center_coords(obj_mask)
 
-                self.record_click(global_fr_idx, global_obj_id, center_coords)
+                    # serialized object ID in the clip
+                    local_obj_id = clip_orig_to_serial_id[global_obj_id]
+                    clip_fg_coords_list[local_fr_idx][local_obj_id-1].append([center_coords[0], center_coords[1], local_obj_id, local_fr_idx, self.t])
+                    clip_num_clicks_per_object[local_fr_idx][local_obj_id-1] += 1
+
+                    self.record_click(global_fr_idx, global_obj_id, center_coords)
+        
+        # input to model forward pass
+        input = {
+            "images": torch.as_tensor(self.images[indices[0]:indices[-1]+1], dtype=torch.uint8),
+            "objects_per_frame": clip_objects_per_frame,
+            "num_clicks_per_object": clip_num_clicks_per_object,
+            "fg_coords_list": clip_fg_coords_list,
+            "bg_coords_list": [[] for _ in range(len(indices))],
+            "max_timestamp_list": self.max_timestamps[indices[0]:indices[-1]+1],
+        }
 
         clip = {
             "indices": _indices,
@@ -245,126 +304,6 @@ class SequenceManager:
             "serial_to_orig_id": clip_serial_to_orig_id,
             "panoptic_gt_masks": clip_gt_masks,
             "binary_gt_masks": clip_binary_gt_masks,
-        }
-        # input to model forward pass
-        input = {
-            "images": torch.as_tensor(self.images[indices[0]:indices[-1]+1], dtype=torch.uint8),
-            "objects_per_frame": clip_objects_per_frame,
-            "num_clicks_per_object": clip_num_clicks_per_object,
-            "fg_coords_list": clip_fg_coords_list,
-            "bg_coords_list": [[] for _ in range(len(indices))],
-            "max_timestamp_list": self.max_timestamps[indices[0]:indices[-1]+1],
-        }
-        
-        return clip, input
-    
-    
-    def extract_clip(self, _indices):
-        """
-        Given a list of frame indices, extract a clip consisting of these indices 
-        from the whole sequence.
-
-        Args:
-            _indices: list(int)
-
-        Returns:
-            clip: dict, compatible with `inputs` argument in `DynamiteModel.forward()`
-        """
-        indices = _indices
-        if len(indices) >= 2 and indices[1] < indices[0]:
-            indices = _indices[::-1]
-
-        visualize_dir = "/home/roy/REPOS/dynamite_video/experiments/expt_2/visualize"
-        # panoptic maps of the clip frames - T,H,W
-        clip_gt_masks = self.gt_masks[indices[0]:indices[-1]+1]
-        # np.save(os.path.join(visualize_dir, f"clip_gt_masks_{indices}.npy"), clip_gt_masks)
-
-        # serialize object IDs in the clip
-        clip_orig_ids = list(np.unique(clip_gt_masks))
-        clip_orig_to_serial_id, clip_serial_to_orig_id = serialize_object_ids(clip_orig_ids)
-        assert set(clip_orig_to_serial_id.keys()).intersection(set(clip_orig_to_serial_id.values())) == set()
-        
-        # sample gt clicks
-        clip_fg_coords_list = [[[] for _ in range(len(clip_orig_ids))] for _ in range(len(indices))]
-        clip_num_clicks_per_object = np.zeros((len(indices), len(clip_orig_ids)), dtype=np.uint16)
-        clip_objects_per_frame = []
-        
-        for local_fr_idx, global_fr_idx in enumerate(indices):
-            
-            # gt mask of current frame - H,W
-            fr_mask = clip_gt_masks[local_fr_idx].copy()
-            fr_obj_ids = list(np.unique(fr_mask))
-            
-            clip_objects_per_frame.append([clip_orig_to_serial_id[obj_id] for obj_id in fr_obj_ids])
-
-            for global_obj_id in fr_obj_ids:
-                
-                if global_obj_id in self.object_discovery:
-                    # sample only if this object has appeared in the sequence for the first time
-                    continue
-                
-                if global_obj_id == self.ignore_label:
-                    # do not sample click for ignore class
-                    continue
-
-                # ground truth binary mask of the object in the frame
-                obj_mask = (fr_mask == global_obj_id).astype(np.uint8)
-
-                if obj_mask.sum() < self.MIN_MASK_AREA:
-                    # sample a click only if the object is large enough
-                    continue
-                
-                center_coords = get_center_coords(obj_mask)
-                # serialized object ID in the clip
-                local_obj_id = clip_orig_to_serial_id[global_obj_id]
-                clip_fg_coords_list[local_fr_idx][local_obj_id-1].append([center_coords[0], center_coords[1], local_obj_id, local_fr_idx, self.t])
-                clip_num_clicks_per_object[local_fr_idx][local_obj_id-1] += 1
-
-                self.record_click(global_fr_idx, global_obj_id, center_coords)
-                self.object_discovery.add(global_obj_id)
-
-        # sample from overlapping frames in the clip
-        overlapping_frame_indices = sorted(_indices[:self.num_overlapping_frames])
-        overlapping_frame_preds = np.stack(self.pred_masks[overlapping_frame_indices])
-        
-        if overlapping_frame_preds.any():
-            overlapping_objects_predicted = list(np.unique(overlapping_frame_preds))
-
-            # for each object, randomly pick one frame to sample a click from
-            for global_obj_id in overlapping_objects_predicted:
-                if global_obj_id == self.ignore_label:
-                    continue
-
-                fr_idx = (overlapping_frame_preds==global_obj_id).astype(np.uint8).sum(axis=(1,2)) > 0
-                fr_idx = np.random.choice(np.where(fr_idx)[0])
-                global_fr_idx = overlapping_frame_indices[fr_idx]
-                local_fr_idx = indices.index(global_fr_idx)
-
-                obj_mask = (overlapping_frame_preds[fr_idx]==global_obj_id).astype('uint8')
-                # obj_mask = (clip_gt_masks[fr_idx]==global_obj_id).astype('uint8')
-                center_coords = get_center_coords(obj_mask)
-
-                # serialized object ID in the clip
-                local_obj_id = clip_orig_to_serial_id[global_obj_id]
-                clip_fg_coords_list[local_fr_idx][local_obj_id-1].append([center_coords[0], center_coords[1], local_obj_id, local_fr_idx, self.t])
-                clip_num_clicks_per_object[local_fr_idx][local_obj_id-1] += 1
-
-                self.record_click(global_fr_idx, global_obj_id, center_coords)
-            
-        clip = {
-            "indices": _indices,
-            "orig_to_serial_id": clip_orig_to_serial_id,
-            "serial_to_orig_id": clip_serial_to_orig_id,
-            "gt_masks": clip_gt_masks
-        }
-        # input to model forward pass
-        input = {
-            "images": torch.as_tensor(self.images[indices[0]:indices[-1]+1], dtype=torch.uint8),
-            "objects_per_frame": clip_objects_per_frame,
-            "num_clicks_per_object": clip_num_clicks_per_object,
-            "fg_coords_list": clip_fg_coords_list,
-            "bg_coords_list": [[] for _ in range(len(indices))],
-            "max_timestamp_list": self.max_timestamps[indices[0]:indices[-1]+1],
         }
         
         return clip, input
@@ -374,8 +313,6 @@ class SequenceManager:
         """
         Record a click in global buffers and update `not_clicked_map` at the clicked location
         Strategy is specified by `self.sampling_strategy`
-            0: new click avoids all the previously sampled click locations
-            1: new click avoids all locations upto radius=self.click_radius around all prev sampled clicks
         """
         # obj_id still has the format: semantic_map * max_instances_per_category + instance_map
         obj_id = self.orig_to_serial_ids[obj_id]
@@ -412,6 +349,10 @@ class SequenceManager:
 
         self.pred_masks[indices] = panoptic_pred_masks
 
+        # compute IoU
+        for fr_idx in indices:
+            self.frame_level_ious[fr_idx] = self.compute_iou(fr_idx)
+
         return panoptic_pred_masks
 
 
@@ -431,18 +372,18 @@ class SequenceManager:
         if not os.path.isdir(vis_path):
             os.makedirs(vis_path)
 
-        save_masks = self.pred_masks[indices].copy()
+        save_masks = np.zeros_like(self.pred_masks[indices], dtype=np.uint8)
         
         # pred_mask has labels in the format: semantic_map * max_instances_per_category + instance_map
         # for easier visualization, the object IDs are serialized
-        obj_ids = np.unique(save_masks)
+        obj_ids = np.unique(self.pred_masks[indices]).tolist()
+        if self.ignore_label in obj_ids:
+            obj_ids.remove(self.ignore_label)
         for i in obj_ids:
             save_masks[np.where(save_masks==i)] = self.orig_to_serial_ids[i]
         
-        ious = []
         for fr_idx, fr_msk in zip(indices, save_masks):
-            iou = self.compute_iou(fr_idx)
-            ious.append(iou)
+            iou = self.frame_level_ious[fr_idx]
             
             im = self.images[fr_idx].transpose(1,2,0)
             if self.resize:
@@ -470,7 +411,6 @@ class SequenceManager:
             #     show_points(overlayed, self.bg_coords_list[fr_idx], 0)
             
             # cv2.imwrite(os.path.join(vis_path, f"overlayed_{fr_idx}_iou_{iou}.png"), overlayed)
-        return ious
 
     def compute_iou(self, frame_idx):
         """
@@ -479,33 +419,23 @@ class SequenceManager:
         pred = self.pred_masks[frame_idx]
         gt = self.gt_masks[frame_idx]
 
-        # objects in the sequence
-        objects = list(self.orig_to_serial_ids.keys())
-        # objects present in the frame
-        objects_in_frame = np.unique(gt)
+        # objects in the sequence, not including VOID
+        objects = self.object_ids
         
-        ious_for_frame = []
-        ious_for_sequence = []
-        for obj_id in objects:
-            if obj_id == self.ignore_label:
-                continue
+        for orig_id in objects:
             
-            g = (gt == obj_id).astype('uint8')
-            p = (pred == obj_id).astype('uint8')
+            g = (gt == orig_id).astype('uint8')
+            p = (pred == orig_id).astype('uint8')
             intersection = np.logical_and(p, g).sum()
             union = np.logical_or(p,g).sum()
-            if union == 0:
-                iou = 1.
-            else:
+            if union > 0:
                 iou = intersection/union
 
-            ious_for_sequence.append(iou)
-            if obj_id in objects_in_frame:
-                ious_for_frame.append(iou)
-        
-        self.ious[frame_idx] = ious_for_sequence
-        
-        return sum(ious_for_frame)/len(ious_for_frame)
+                serial_id = self.orig_to_serial_ids[orig_id]
+                self.ious[frame_idx][serial_id-1] = iou
+
+        frame_iou = self.ious[frame_idx]
+        return frame_iou[np.where(frame_iou>=0)].mean()
 
 
     def get_corrective_click(self, frame_idx, obj_id, padding=True):
@@ -573,3 +503,32 @@ class SequenceManager:
         self.max_timestamps[frame_idx] = timestamp+1
         self.num_clicks_per_frame[frame_idx] += 1
         return obj_index
+    
+
+    def find_refinement_target(self, iou_threshold):
+        """
+        Find the object with the worst IoU over the sequence
+        Find the frame where this object has the worst IoU
+        """
+        avg_obj_ious = []
+        for orig_id in self.object_ids:
+            serial_id = self.orig_to_serial_ids[orig_id]
+            
+            obj_ious = self.ious[:, serial_id-1]         # T
+            avg_obj_ious.append(obj_ious[np.where(obj_ious>=0)].mean())
+
+        min_iou = min(avg_obj_ious)
+        if min_iou >= iou_threshold:
+            return -1, -1
+        
+        min_obj_idx = np.asarray(avg_obj_ious).argmin()
+        ious_obj_id_to_refine = self.ious[:, min_obj_idx]
+        frames_present = np.where(ious_obj_id_to_refine>=0)
+        frame_idx = ious_obj_id_to_refine[frames_present].argmin()
+        lowest_frame_idx = frames_present[0][frame_idx]
+
+        orig_obj_id_to_refine = self.serial_to_orig_ids[min_obj_idx+1]
+
+        return lowest_frame_idx, orig_obj_id_to_refine
+
+        

@@ -33,11 +33,13 @@ class TrainingMapper:
                 `video`: source video cast as GenericVideoSequence object
 
         """
-       # source video
+        # source video
         video = sample['video']
+        clip_id = sample["vid_id"]
+        # panoptic or instance
+        task_type = sample.get("task_type", "panoptic")
         # get absolute frame indices in the video that will form a clip
         frame_indices = [sample["ref_frame"]] + sample["other_frames"]
-        clip_id = sample["vid_id"]
 
         # extract clip from the video
         clip = video.extract_subsequence(frame_indices, new_id=clip_id)
@@ -45,7 +47,7 @@ class TrainingMapper:
         # load images [T,H,W,3]
         images = clip.load_images()
         
-        # load binary instance masks [T,N,H,W]
+        # load binary instance masks [T,N,H,W]; NOTE: ignore masks are not part of the binary masks
         binary_masks, targets_per_frame, target_ids, ignore_masks = clip.prepare_masks()
         
         # color augmentations
@@ -73,40 +75,34 @@ class TrainingMapper:
             # BGR -> RGB
             images = np.flip(images, 1).copy()
         
-        # semantic maps
+        # foreground masks
         T, _, H, W = binary_masks.shape
-        # for each target, keep a record of all the frames it appears in
-        frame_target_occupancy = defaultdict(list)
-        semantic_masks = np.zeros((T,H,W), dtype=np.uint8)
+        foreground_masks = np.zeros((T,H,W), dtype=np.uint8)
         for fr_idx in range(T):
             for inst_id, inst_mask in enumerate(binary_masks[fr_idx]):
-                semantic_masks[fr_idx][inst_mask==1] = inst_id+1
-                if np.any(inst_mask):
-                    # target is present in the frame
-                    frame_target_occupancy[inst_id+1].append(fr_idx)
+                foreground_masks[fr_idx][inst_mask==1] = inst_id+1
         
-        # NOTE: 0-labelled region in semantic masks at this point 
-        # corresponds to the ignore mask area and the padding area
+        # NOTE: 0-labelled region in foreground masks at this point corresponds to 
+        # the ignore mask area, the padding area, and any potential background
         
-        # background mask contains ignore mask and all small objects and gaps that were omitted
-        bg_masks = np.logical_not(np.logical_or(padding_mask, semantic_masks)).astype('uint8')
-        # set all of background as ignore mask
-        ignore_masks = bg_masks
+        # for "panoptic" task there is no background
+        bg_masks = None
+        # for "instance" task the background is the region not included in foreground masks, padding mask or ignore mask
+        if task_type != "panoptic":
+            bg_masks = np.logical_not(np.logical_or(np.logical_or(padding_mask, foreground_masks), ignore_masks)).astype(np.uint8)
         
         # sample clicks
-        num_clicks_per_target, fg_coords_list, bg_coords_list, max_timestamp_list = get_clicks_coords(
-                                                                                    target_ids=target_ids,
-                                                                                    target_masks=binary_masks, 
-                                                                                    bg_masks=None,
-                                                                                    frame_target_occupancy=frame_target_occupancy,
-                                                                                    serial_to_orig_id=clip.serial_to_orig_id,
-                                                                                    max_instances_per_category=clip.meta_info["max_instances_per_category"],
-                                                                                    max_num_points=self.cfg.CLICKER.TRAINING.MAX_NUM_CLICKS_PER_INSTANCE,
-                                                                                    optional_frames_fg_prob=self.cfg.CLICKER.TRAINING.OPTIONAL_FRAMES_FG_SAMPLE_PROB,
-                                                                                    bg_prob=self.cfg.CLICKER.TRAINING.BACKGROUND_SAMPLING_PROB,
-                                                                                    gamma=self.cfg.CLICKER.TRAINING.GAMMA,
-                                                                                    start_t=1,
-                                                                                )
+        (num_clicks_per_target, 
+         fg_coords_list, 
+         bg_coords_list, 
+         max_timestamp_list) = get_clicks_coords(target_masks=binary_masks, 
+                                                max_num_points=self.cfg.CLICKER.TRAINING.MAX_NUM_CLICKS_PER_INSTANCE,
+                                                optional_frames_fg_prob=self.cfg.CLICKER.TRAINING.OPTIONAL_FRAMES_FG_SAMPLE_PROB,
+                                                bg_masks=bg_masks,
+                                                bg_prob=self.cfg.CLICKER.TRAINING.BACKGROUND_SAMPLING_PROB,
+                                                gamma=self.cfg.CLICKER.TRAINING.GAMMA,
+                                                start_t=1,
+                                            )
         if not all(np.sum(num_clicks_per_target, axis=0)):
             raise "One or more targets did not receive a click!"
 
@@ -120,13 +116,18 @@ class TrainingMapper:
             "max_instances_per_category": clip.meta_info['max_instances_per_category'],
         }
         
+        if bg_masks is not None:
+            bg_masks = torch.as_tensor(bg_masks, dtype=torch.uint8)
+        if ignore_masks is not None:
+            ignore_masks = torch.as_tensor(ignore_masks, dtype=torch.bool)
+
         return {
             "images": torch.as_tensor(images, dtype=torch.uint8),
             "binary_masks": torch.as_tensor(binary_masks, dtype=torch.uint8),
-            "semantic_masks": torch.as_tensor(semantic_masks, dtype=torch.uint8),
-            "padding_mask": torch.as_tensor(padding_mask, dtype=torch.uint8),
-            "bg_masks": torch.as_tensor(bg_masks, dtype=torch.uint8),
-            "ignore_masks": torch.as_tensor(ignore_masks, dtype=torch.bool),
+            "padding_mask": torch.as_tensor(padding_mask, dtype=torch.bool),
+            "semantic_masks": torch.as_tensor(foreground_masks, dtype=torch.uint8),
+            "bg_masks": bg_masks,
+            "ignore_masks": ignore_masks,
             "objects_per_frame": targets_per_frame,
             "num_clicks_per_object": num_clicks_per_target,
             "fg_coords_list": fg_coords_list,

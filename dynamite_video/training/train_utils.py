@@ -100,7 +100,8 @@ def get_next_clicks(
     gt_masks_clip = [x.cpu().numpy() for x in data["binary_masks"]]        # [T,N,H,W]
     pred_masks_clip = [x.cpu().numpy() for x in pred_output]               # [T,N,H,W]
     semantic_maps_clip = [x.cpu().numpy() for x in data['semantic_masks']] # [T,H,W]
-
+    ignore_mask_clip = [x.cpu().numpy() for x in data['ignore_masks']]     # [T,H,W]
+    padding_mask_clip = data['padding_mask'].cpu().numpy()
     # if visualize:
     #     import os
     #     visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/training_clicker"
@@ -109,7 +110,7 @@ def get_next_clicks(
     #     torch.save(semantic_maps_clip,  os.path.join(visualize_dir, f"semantic_maps_round_{round_num}_iter_{train_iter}.pth"))
 
     for obj_id, fr_idx in zip(refine_objects, refine_frames):
-        gt_masks = gt_masks_clip[fr_idx]
+        gt_masks = gt_masks_clip[fr_idx] * ignore_mask_clip[fr_idx] * padding_mask_clip
         pred_masks = pred_masks_clip[fr_idx]
         semantic_map = semantic_maps_clip[fr_idx]
 
@@ -125,11 +126,14 @@ def get_next_clicks(
                 
                 # BG click
                 if click_obj == -1:
-                    bg_coords[fr_idx].append([click_y, click_x, click_obj, fr_idx, click_time])
+                    bg_coords.append([click_y, click_x, click_obj, fr_idx, click_time])
                 
                 # FG click
                 else:
-                    fg_coords[fr_idx][click_obj].append([click_y, click_x, click_obj+1, fr_idx, click_time])
+                    total_num_clicks_per_obj = np.asarray(num_clicks_per_object).sum(axis=0)
+                    insert_idx = total_num_clicks_per_obj[:click_obj].sum()
+                    
+                    fg_coords.insert(insert_idx+1, [click_y, click_x, click_obj+1, fr_idx.item(), click_time])
                     num_clicks_per_object[fr_idx][click_obj]+= 1
 
                 max_timestamp[fr_idx] = click_time

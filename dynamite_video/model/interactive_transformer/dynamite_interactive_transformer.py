@@ -247,6 +247,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                                    size_list, 
                                                                                    mask_features, 
                                                                                    fg_coords, bg_coords, 
+                                                                                   num_clicks_per_object,
                                                                                    max_timestamp,
                                                                                    visualize=visualize, train_iter=train_iter)
                 
@@ -270,6 +271,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                            size_list, 
                                                                            mask_features, 
                                                                            fg_coords, bg_coords, 
+                                                                           num_clicks_per_object, 
                                                                            max_timestamp,
                                                                            visualize=visualize, train_iter=train_iter)
         else:
@@ -279,6 +281,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                            size_list, 
                                                                            mask_features, 
                                                                            fg_coords, bg_coords, 
+                                                                           num_clicks_per_object, 
                                                                            max_timestamp)
         
         return outputs, num_queries_per_object
@@ -323,6 +326,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             mask_features,
             fg_coords,
             bg_coords, 
+            num_clicks_per_object, 
             max_timestamp,
             visualize=None,
             train_iter=None
@@ -342,7 +346,8 @@ class DynamiteInteractiveTransformer(nn.Module):
          normalized_clicks,                 # TxQxD
          num_queries_per_object) = self.query_descriptors_initializer(features=multi_scale_features,
                                                                     batched_fg_coords_list=fg_coords, 
-                                                                    batched_bg_coords_list=bg_coords, 
+                                                                    batched_bg_coords_list=bg_coords,
+                                                                    num_clicks_per_object=num_clicks_per_object, 
                                                                     norms=(height, width, max(max_timestamp)),
                                                                 )
         
@@ -368,7 +373,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             descriptors = torch.cat((descriptors, static_bg_queries), dim=1)   # TxQxD
             static_bg_pe = repeat(self.static_bg_pe, "Bg C -> Bg T C", T=T)
             query_embed = torch.cat((query_embed, static_bg_pe), dim=0)        # QxTxD
-            num_queries_per_object.append(static_bg_queries.shape[1])
+            num_queries_per_object[-1] += static_bg_queries.shape[1]
 
             if visualize:
                 visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/queries"
@@ -376,6 +381,9 @@ class DynamiteInteractiveTransformer(nn.Module):
                 torch.save(query_embed, os.path.join(visualize_dir, f"query_embed_w_static_bg_iter_{train_iter}.pth"))
                 torch.save(num_queries_per_object, os.path.join(visualize_dir, f"num_queries_per_object_w_static_bg_iter_{train_iter}.pth"))
         
+        # if there's no bg query, remove from record
+        if num_queries_per_object[-1] == 0:
+            num_queries_per_object = num_queries_per_object[:-1]
 
         # total num queries per object across T frames
         if self.use_qqca == "masked":

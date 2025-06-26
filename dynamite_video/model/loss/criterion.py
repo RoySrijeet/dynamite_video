@@ -143,8 +143,9 @@ class SetFinalCriterion(nn.Module):
         # Compute number of target boxes accross all nodes, for normalization purposes
         num_masks = 0
         for i,t in enumerate(targets):
-            # target_bg_mask = t['bg_masks']
-            # targets[i]["binary_masks"] = torch.cat((t["binary_masks"], target_bg_mask.unsqueeze(0)), dim=0)
+            target_bg_mask = t['bg_masks']
+            if target_bg_mask is not None:
+                targets[i]["binary_masks"] = torch.cat((t["binary_masks"], target_bg_mask.unsqueeze(0)), dim=0)
             num_masks += len(targets[i]["binary_masks"])
         
         num_masks = torch.as_tensor([num_masks], dtype=torch.float, device=outputs['pred_masks'].device)

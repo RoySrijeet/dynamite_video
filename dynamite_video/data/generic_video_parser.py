@@ -254,7 +254,12 @@ class GenericVideoSequence(object):
     
     def prepare_eval_masks(self, fill_value):
         """
-        Prepare ground truth semantic masks for evaluation
+        Prepare ground truth panoptic masks for evaluation
+
+        The binary RLE masks are converted to the panoptic mask
+
+        Args:
+            fill_value: any region not covered by the binary RLEs is assigned the `fill_value`
         """
         semantic_masks = np.full((len(self), self.height, self.width), fill_value=fill_value, dtype=np.uint32)
         for fr_idx, fr_rles in enumerate(self.segmentations):

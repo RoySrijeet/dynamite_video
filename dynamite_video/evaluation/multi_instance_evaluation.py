@@ -1,6 +1,7 @@
 import numpy as np
 import os
 import random
+import time
 import torch
 import torch.nn as nn
 
@@ -58,17 +59,12 @@ def evaluate(cfg,
         if isinstance(model, nn.Module):
             stack.enter_context(inference_context(model))
         stack.enter_context(torch.no_grad())
-
         random.seed(123456+seed_id)
-
-        avg = []
-
-        pbar = tqdm(dataset, leave=False)
 
         dataset_stq = defaultdict(list)
         
-        for i, video in enumerate(pbar):
-            pbar.set_description(f"{video.id}")
+        for i, video in enumerate(dataset):
+            logger.info(f"\nSequence {video.id} [{i+1}/{len(dataset)}]...")
 
             # a fresh model for each sequence
             predictor = Predictor(model, len(video))
@@ -82,73 +78,83 @@ def evaluate(cfg,
             # rounding starts at first frame
             round_num = 0
             lowest_frame_index = 0
-            vid_ious = []
 
+            propagation_time = []
+            metric_compute_time = []
+            
             while lowest_frame_index!=-1:
                 round_num += 1
+                logger.info(f"\nRound {round_num}:")
+
+                prop_time = 0
 
                 # generate indices of shorter sub-sequences or clips from the whole sequence
                 clip_indices = manager.generate_clip_indices(start=lowest_frame_index)
 
                 ## PROPAGATION ##
+                logger.info(f"Predicting {manager.N} masklets in {manager.T} frames...")
                 for num, indices in enumerate(tqdm(clip_indices, leave=False, desc="Clip")):
 
-                    clip, clip_inputs = manager.extract_non_overlapping_clip(indices)
+                    propagation_start_time = time.perf_counter()
+                    
+                    clip, clip_inputs = manager.extract_clip(indices)
                     binary_pred_masks = predictor.get_prediction([clip_inputs], indices)    # T,N,H,W
                     panoptic_pred_masks = manager.store_prediction(binary_pred_masks, clip)
 
+                    propagation_end_time = time.perf_counter()
+                    prop_time+= (propagation_end_time - propagation_start_time)
+
                     if save_vis:
-                        ious = manager.save_visualization(vis_path, round_num, indices)
-                        vid_ious.append(np.asarray(ious).mean())
-
-                # metrics
-                video_stq, video_aq, video_iou = compute_stq(manager.gt_masks, manager.pred_masks, dataset_meta)
-                j_and_f_dict = compute_j_and_f(manager.gt_masks, manager.pred_masks, list(manager.orig_to_serial_ids.keys()), manager.ignore_label)
-                jaccard_mean_per_frame = j_and_f_dict["jaccard_mean_per_frame"]     # T
-                f_measure_mean_per_frame = j_and_f_dict["f_measure_mean_per_frame"] # T
-                j_and_f = j_and_f_dict["j_and_f"]   # T
+                        manager.save_visualization(vis_path, round_num, indices)
+                propagation_time.append(prop_time)
                 
-                dataset_stq[manager.sequence.id].append({
-                    "Round": round_num, "STQ": video_stq, "AQ": video_aq, "IoU": video_iou, 
-                    "J": jaccard_mean_per_frame.mean(), "F": f_measure_mean_per_frame.mean(), "J&F": j_and_f.mean()
-                })
-                logger.info(f"{manager.sequence.id}, Round {round_num} scores: \
-                    \nTotal #clicks: {manager.num_clicks_per_frame.sum()} \
-                    \nSTQ: {video_stq} \nAQ: {video_aq} \nIoU: {video_iou} \
-                    \nJ: {jaccard_mean_per_frame.mean()} \nF: {f_measure_mean_per_frame.mean()} \nJ&F: {j_and_f.mean()}")
-
+                # metrics
+                logger.info(f"Computing metrics...")
+                metric_compute_start_time = time.perf_counter()
+                # video_stq, video_aq, video_iou = compute_stq(manager.gt_masks, manager.pred_masks, dataset_meta)
+                avg_iou = manager.frame_level_ious.mean()
                 curr_click_count = manager.num_clicks_per_frame.sum()
 
+                metric_compute_end_time = time.perf_counter()
+                metric_compute_time.append(metric_compute_end_time - metric_compute_start_time)
+                
+                dataset_stq[manager.sequence.id].append({
+                    "Round": round_num, "#frames": manager.T, "#targets": manager.N, 
+                    "#clicks": int(curr_click_count), "IoU": float(avg_iou),
+                    # "STQ": video_stq, "AQ": video_aq, "IoU": video_iou, 
+                })
+                logger.info(f"Round {round_num} scores: \n#frames: {manager.T}, \n#targets: {manager.N} \
+                    \nTotal #clicks: {curr_click_count} \nIoU: {avg_iou}")
+                    # \nSTQ: {video_stq} \nAQ: {video_aq} \nIoU: {video_iou}")
+
                 ## WEAKEST PREDICTION ##
+                logger.info(f"Looking for an object/frame to refine...")
                 # Stopping criterion 1: check whether round budget is over
                 if round_num == max_rounds:
-                    logger.info(f'{manager.sequence.id}, Round {round_num}:: Maximum round limit ({max_rounds}) reached!')
+                    logger.info(f'Maximum round limit ({max_rounds}) reached!')
                     lowest_frame_index = -1
 
                 # Stopping criterion 2: check whether click budget is over
                 if click_budget <= curr_click_count:
-                    logger.info(f'{manager.sequence.id}, Round {round_num}:: Click budget ({max_interactions} per frame) over!')
+                    logger.info(f'Click budget ({max_interactions} per frame) over!')
                     lowest_frame_index = -1
 
-                if lowest_frame_index != -1:
+                if lowest_frame_index != -1:                    
                     # select the object with weakest mIoU
-                    jaccard_mean_per_object = j_and_f_dict["jaccard"].mean(axis=0)  # N
-                    min_iou = jaccard_mean_per_object.min()
-                    
-                    # Stopping criterion 3: check whether all objects meet IoU threshold
-                    if min_iou >= iou_threshold:
-                        logger.info(f'{manager.sequence_id}, Round {round_num}:: All objects meet IoU requirement!')
-                        lowest_frame_index = -1
-                    else:
-                        lowest_obj_serial_id = jaccard_mean_per_object.argmin()
-                        lowest_obj_orig_id = list(manager.orig_to_serial_ids.keys())[lowest_obj_serial_id]
-                        lowest_frame_index = j_and_f_dict["jaccard"][:, lowest_obj_serial_id].argmin()
+                    # also checks stopping criterion 3: check whether all objects meet IoU threshold
+                    lowest_frame_index, lowest_obj_id = manager.find_refinement_target(iou_threshold)
                 
                 if lowest_frame_index != -1:
                     ## CORRECTIVE CLICK ##
-                    refined_obj_index = manager.get_corrective_click(frame_idx=lowest_frame_index, obj_id=lowest_obj_orig_id)
-                    logger.info(f'{manager.sequence.id}, Round {round_num}:: Sampled a click on instance {refined_obj_index+1} in frame {lowest_frame_index}')
-        
+                    refined_obj_index = manager.get_corrective_click(frame_idx=lowest_frame_index, obj_id=lowest_obj_id)
+                    logger.info(f'Sampled a click on instance {refined_obj_index+1} in frame {lowest_frame_index}')
+
+            logger.info(f"{manager.sequence.id}, time analysis: \
+                        \nTotal propagation time: {sum(propagation_time)} \
+                        \nAverage propagation time per round: {sum(propagation_time)/len(propagation_time)} \
+                        \nTotal Metric computation time: {sum(metric_compute_time)} \
+                        \nAverage metric computation time per round: {sum(metric_compute_time)/len(metric_compute_time)}")
+            
             del manager
         return dataset_stq
 

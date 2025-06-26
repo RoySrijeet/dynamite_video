@@ -291,12 +291,12 @@ class DynamiteModel(nn.Module):
             clip_targets = []
             for i in range(clip["images"].shape[0]):
                 clip_targets.append({
-                    "labels": clip["objects_per_frame"][i],
-                    "semantic_masks": clip["semantic_masks"][i].to(self.device),
-                    "ignore_masks": clip["ignore_masks"][i].to(self.device) if clip["ignore_masks"] is not None else None, 
                     "binary_masks": clip["binary_masks"][i].to(self.device),
-                    "bg_masks": clip["bg_masks"][i].to(self.device),
+                    "semantic_masks": clip["semantic_masks"][i].to(self.device),
+                    "bg_masks": clip["bg_masks"][i].to(self.device) if clip["bg_masks"]is not None else None,
+                    "labels": clip["objects_per_frame"][i],
                     "padding_mask": clip["padding_mask"].to(self.device),
+                    "ignore_masks": clip["ignore_masks"][i].to(self.device) if clip["ignore_masks"] is not None else None, 
                 })
             targets.append(clip_targets)
         return targets
