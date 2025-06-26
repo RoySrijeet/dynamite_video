@@ -142,89 +142,74 @@ class DynamiteModel(nn.Module):
         assert len(inputs) == 1, "Don't try more than one clip in a batch"  # TODO
         
         # extract resources from batch
-        if (images is None) or (num_clicks_per_object is None) or (fg_coords is None):
-            (
-                images, 
-                objects_per_frame, 
-                num_clicks_per_object,
-                fg_coords, 
-                bg_coords, 
-                max_timestamp
-            ) = self.preprocess_batch_data(inputs)
+        (images, 
+        objects_per_frame, 
+        num_clicks_per_object,
+        fg_coords, 
+        bg_coords, 
+        max_timestamp
+        ) = self.preprocess_batch_data(inputs)
 
+        if features is None:
+            # extract backbone features from clip frames
+            clip_fs = self.backbone(images.tensor)
+            features = clip_fs
+
+        
         if self.training:
-
-            if features is None:
-                # extract backbone features from clip frames
-                features = []
-                for clip_ims in images:
-                    clip_fs = self.backbone(clip_ims.tensor)
-                    features.append(clip_fs)
         
             # prepare ground truth mask information
             targets = self.prepare_targets(inputs)
 
             if visualize:
                 import os
-                visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/dynamite_model_forward"
-                torch.save(inputs, os.path.join(visualize_dir, "input", f"inputs_iter_{train_iter}.pth"))
-                torch.save(features, os.path.join(visualize_dir, "features", f"features_iter_{train_iter}.pth"))
-                torch.save(targets, os.path.join(visualize_dir, "targets", f"targets_iter_{train_iter}.pth"))
-
-            for clip_idx in range(len(inputs)):
+                visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/sem_seg_head_input"
+                torch.save(images, os.path.join(visualize_dir, f"images_iter_{train_iter}.pth"))
+                torch.save(features, os.path.join(visualize_dir, f"features_iter_{train_iter}.pth"))
+                torch.save(targets, os.path.join(visualize_dir, f"targets_iter_{train_iter}.pth"))
             
-                clip_mask_features = mask_features[clip_idx] if mask_features is not None else None
-                clip_multi_scale_features = multi_scale_features[clip_idx] if multi_scale_features is not None else None
-                
-                clip_outputs, clip_num_queries_per_object = self.sem_seg_head(inputs[clip_idx], 
-                                                                                images[clip_idx],
-                                                                                features[clip_idx],
-                                                                                objects_per_frame[clip_idx],
-                                                                                clip_mask_features, 
-                                                                                clip_multi_scale_features,
-                                                                                num_clicks_per_object[clip_idx],
-                                                                                fg_coords[clip_idx],
-                                                                                bg_coords[clip_idx],
-                                                                                max_timestamp[clip_idx],
-                                                                                visualize=visualize,
-                                                                                train_iter=train_iter,
-                                                                            )
-                
-                losses = self.criterion(clip_outputs, targets[clip_idx], clip_num_queries_per_object)
+            outputs, num_queries_per_object = self.sem_seg_head(inputs[0], 
+                                                                            images,
+                                                                            features,
+                                                                            objects_per_frame,
+                                                                            mask_features, 
+                                                                            multi_scale_features,
+                                                                            num_clicks_per_object,
+                                                                            fg_coords,
+                                                                            bg_coords,
+                                                                            max_timestamp,
+                                                                            visualize=False,
+                                                                            train_iter=train_iter,
+                                                                        )
+            
+            losses = self.criterion(outputs, targets, num_queries_per_object)
 
-                for k in list(losses.keys()):
-                    if k in self.criterion.weight_dict:
-                        losses[k] *= self.criterion.weight_dict[k]
-                    else:
-                        # remove this loss if not specified in `weight_dict`
-                        losses.pop(k)
-                return losses
+            for k in list(losses.keys()):
+                if k in self.criterion.weight_dict:
+                    losses[k] *= self.criterion.weight_dict[k]
+                else:
+                    # remove this loss if not specified in `weight_dict`
+                    losses.pop(k)
+            return losses
            
         else:
             # iterative evaluation - for each batch (a clip) we only compute image features and 
             # mask features once and pass them as arguments to use them again in the next round
 
-            if features is None:
-                # extract backbone features from clip frames
-                features = []
-                for clip_ims in images:
-                    clip_fs = self.backbone(clip_ims.tensor)
-                    features.append(clip_fs)
-
             (outputs, num_queries_per_object,
             mask_features, multi_scale_features) = self.sem_seg_head(inputs[0],
-                                                                    images[0],
-                                                                    features[0],
-                                                                    objects_per_frame[0],
+                                                                    images,
+                                                                    features,
+                                                                    objects_per_frame,
                                                                     mask_features, 
                                                                     multi_scale_features, 
-                                                                    num_clicks_per_object[0],
-                                                                    fg_coords[0], 
-                                                                    bg_coords[0], 
-                                                                    max_timestamp[0]
+                                                                    num_clicks_per_object,
+                                                                    fg_coords, 
+                                                                    bg_coords, 
+                                                                    max_timestamp
                                                                 )
 
-            processed_results = self.process_results(images[0], outputs, objects_per_frame[0], num_queries_per_object)
+            processed_results = self.process_results(images, outputs, objects_per_frame, num_queries_per_object)
             
             return processed_results, images, features, mask_features, multi_scale_features
 
@@ -235,38 +220,29 @@ class DynamiteModel(nn.Module):
         initial click coordinates and click count.
 
         Returns:
-            images: list of (d2) ImageList objects, one for each clip in the batch. Each 
-                ImageList object contains the image tensors of the frames in the corres
-                -ponding clip as [T,3,H,W] tensors, where T: #frames in the clip
-            objects_per_frame: list of object count in each frame of each clip in the batch.
-                If a clip has T frames, then one element in this list would be 
-                [c1, c2, ..., cT] where cn is the #objects in the n-th frame of the clip
+            images: (d2) ImageList objects, contains the image tensors of the frames in 
+                    the corresponding clip as [T,3,H,W] tensors, where T: #frames in the clip
+            objects_per_frame: list of list of object IDs in each frame of the clip
             num_clicks_per_object: list of click count per object
             fg_coords: list of foreground clicks
             bg_coords: list of background clicks
         """
-        images = []
-        objects_per_frame = []
-        num_clicks_per_object = []
-        fg_coords = []
-        bg_coords = []
-        max_timestamp = []
-
-        for clip in inputs:
-            # convert each frame in the clip to `torch.Tensor`
-            images_sample = [x.to(self.device) for x in clip["images"]]
-            # normalize each frame
-            images_sample = [(x - self.pixel_mean) / self.pixel_std for x in images_sample]
-            # store the frames as detectron2.ImageList
-            images_sample = ImageList.from_tensors(images_sample, self.size_divisibility)
-            
-            images.append(images_sample)
-            # extract object and click info
-            objects_per_frame.append(clip["objects_per_frame"])
-            num_clicks_per_object.append(clip["num_clicks_per_object"])
-            fg_coords.append(clip["fg_coords_list"])
-            bg_coords.append(clip["bg_coords_list"])
-            max_timestamp.append(clip["max_timestamp_list"])
+        clip = inputs[0]
+        
+        # convert each frame in the clip to `torch.Tensor`
+        images_sample = [x.to(self.device) for x in clip["images"]]
+        # normalize each frame
+        images_sample = [(x - self.pixel_mean) / self.pixel_std for x in images_sample]
+        # store the frames as detectron2.ImageList
+        images_sample = ImageList.from_tensors(images_sample, self.size_divisibility)
+        images = images_sample
+        
+        # extract object and click info
+        objects_per_frame = clip["objects_per_frame"]
+        num_clicks_per_object = ["num_clicks_per_object"]
+        fg_coords = clip["fg_coords_list"]
+        bg_coords = clip["bg_coords_list"]
+        max_timestamp = clip["max_timestamp_list"]
 
         return images, objects_per_frame, num_clicks_per_object, fg_coords, bg_coords, max_timestamp
 
@@ -279,26 +255,26 @@ class DynamiteModel(nn.Module):
             inputs: batch
 
         Returns:
-            A list of dictionaries, one for each clip (of T frames) in the batch. Each dict contains:
+            A list of dictionaries, one for each frame in the clip. Each dict contains:
+                * binary_masks - ground truth binary masks of target objects (N,H,W)
+                * semantic_masks - panoptic mask of each frame (H,W)
+                * bg_mask - background mask of each frame (H,W)
                 * labels - labels of the objects in the clip (a list of ints)
-                * masks - binary object masks of the frames in the clip (a list of T [N,H,W] tensors)
-                * padding_mask - padding applied to the clip, [H,W] np.ndarray
-                * bg_mask - background mask of the frames in the clip (a list of T [H,W] tensors)
+                * padding_mask - padding applied to the clip (H,W)
+                * ignore_mask - ignore mask of each frame (H,W)
         """
 
         targets = []
-        for clip in inputs:
-            clip_targets = []
-            for i in range(clip["images"].shape[0]):
-                clip_targets.append({
-                    "binary_masks": clip["binary_masks"][i].to(self.device),
-                    "semantic_masks": clip["semantic_masks"][i].to(self.device),
-                    "bg_masks": clip["bg_masks"][i].to(self.device) if clip["bg_masks"]is not None else None,
-                    "labels": clip["objects_per_frame"][i],
-                    "padding_mask": clip["padding_mask"].to(self.device),
-                    "ignore_masks": clip["ignore_masks"][i].to(self.device) if clip["ignore_masks"] is not None else None, 
-                })
-            targets.append(clip_targets)
+        clip = inputs[0]
+        for i in range(clip["images"].shape[0]):
+            targets.append({
+                "binary_masks": clip["binary_masks"][i].to(self.device),
+                "semantic_masks": clip["semantic_masks"][i].to(self.device),
+                "bg_masks": clip["bg_masks"][i].to(self.device) if clip["bg_masks"]is not None else None,
+                "labels": clip["objects_per_frame"][i],
+                "padding_mask": clip["padding_mask"].to(self.device),
+                "ignore_masks": clip["ignore_masks"][i].to(self.device) if clip["ignore_masks"] is not None else None, 
+            })
         return targets
 
 

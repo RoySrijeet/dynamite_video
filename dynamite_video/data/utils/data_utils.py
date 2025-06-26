@@ -48,6 +48,16 @@ def convert_panoptic_to_binary(panoptic_masks, mapping, ignore=None):
     return binary_masks, objects_per_frame
 
 
+def mask_area(self, rle, img_dims):
+    """
+    Area of an RLE segment
+    """
+    return mt.area({
+        "counts": rle.encode("utf-8"),
+        "size": img_dims
+    })
+
+
 def decode_mask(encoded_mask, size=None):
     """
     Decode RLE mask into `np.ndarray`

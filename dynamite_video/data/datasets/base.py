@@ -280,28 +280,6 @@ class EvaluationDataset(Dataset):
         orig_to_serial_id = OrderedDict(zip(orig_ids, serial_ids))
         return orig_to_serial_id, serial_to_orig_id
 
-    def mask_area(self, rle, img_dims):
-        """
-        Area of an RLE segment
-        """
-        return mt.area({
-            "counts": rle.encode("utf-8"),
-            "size": img_dims
-        })
-
-    def decode_mask(self, rle, img_dims=None):
-        """
-        Decode RLE mask to numpy.ndarray
-        """
-        if img_dims is not None:
-            encoded_mask = {
-                "counts": rle.encode("utf-8"),
-                "size": img_dims
-            }
-        else:
-            encoded_mask = rle
-        return np.ascontiguousarray(mt.decode(encoded_mask)).astype(np.uint8)
-
 
 ########################### CONCATENATED DATASET ###########################
 

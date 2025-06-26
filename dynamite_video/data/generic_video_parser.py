@@ -262,8 +262,11 @@ class GenericVideoSequence(object):
             fill_value: any region not covered by the binary RLEs is assigned the `fill_value`
         """
         semantic_masks = np.full((len(self), self.height, self.width), fill_value=fill_value, dtype=np.uint32)
+        thing_classes = ['11000', '13000']
         for fr_idx, fr_rles in enumerate(self.segmentations):
             for obj_id in fr_rles:
+                if obj_id in thing_classes:
+                    continue
                 # decode RLE
                 img_dims = None if isinstance(fr_rles[obj_id], dict) else self.image_dims
                 _m = decode_mask(fr_rles[obj_id], img_dims)
