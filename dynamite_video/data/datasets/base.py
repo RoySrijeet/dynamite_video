@@ -64,27 +64,12 @@ class TrainingDataset(Dataset, ABC):
 
     def __len__(self):
         return len(self.samples)
-    
-    
-    @abstractmethod
-    def map_annotations(self, *args, **kwargs):
-        """Map dataset-specific annotation info to a common dataset dictionary format"""
-        pass
 
     def random_draw(self, x):
         while True:
             yield random.randint(0, x)
-
-    def mask_area(self, rle, img_dims):
-        """
-        Area of an RLE segment
-        """
-        return mt.area({
-            "counts": rle.encode("utf-8"),
-            "size": img_dims
-        })
     
-
+    
     def create_training_samples(
         self, 
         videos: Dict[str, GenericVideoSequence],

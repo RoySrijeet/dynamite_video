@@ -169,18 +169,18 @@ class DynamiteModel(nn.Module):
                 torch.save(targets, os.path.join(visualize_dir, f"targets_iter_{train_iter}.pth"))
             
             outputs, num_queries_per_object = self.sem_seg_head(inputs[0], 
-                                                                            images,
-                                                                            features,
-                                                                            objects_per_frame,
-                                                                            mask_features, 
-                                                                            multi_scale_features,
-                                                                            num_clicks_per_object,
-                                                                            fg_coords,
-                                                                            bg_coords,
-                                                                            max_timestamp,
-                                                                            visualize=False,
-                                                                            train_iter=train_iter,
-                                                                        )
+                                                                images,
+                                                                features,
+                                                                objects_per_frame,
+                                                                mask_features, 
+                                                                multi_scale_features,
+                                                                num_clicks_per_object,
+                                                                fg_coords,
+                                                                bg_coords,
+                                                                max_timestamp,
+                                                                visualize=False,
+                                                                train_iter=train_iter,
+                                                            )
             
             losses = self.criterion(outputs, targets, num_queries_per_object)
 

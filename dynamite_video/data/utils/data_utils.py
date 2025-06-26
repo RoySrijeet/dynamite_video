@@ -48,7 +48,7 @@ def convert_panoptic_to_binary(panoptic_masks, mapping, ignore=None):
     return binary_masks, objects_per_frame
 
 
-def mask_area(self, rle, img_dims):
+def mask_area(rle, img_dims):
     """
     Area of an RLE segment
     """
