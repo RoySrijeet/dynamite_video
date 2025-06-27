@@ -183,7 +183,7 @@ class DynamiteModel(nn.Module):
                                                                 train_iter=train_iter,
                                                             )
             
-            losses = self.criterion(outputs, targets, num_queries_per_object)
+            losses = self.criterion(outputs, targets, num_queries_per_object, visualize=visualize, train_iter=train_iter)
 
             for k in list(losses.keys()):
                 if k in self.criterion.weight_dict:

@@ -47,7 +47,8 @@ class SetFinalCriterion(nn.Module):
             outputs, 
             targets,
             num_masks, 
-            num_queries_per_object
+            num_queries_per_object,
+            visualize=False, train_iter=None,
     ):
         """
         Compute the losses related to the masks: the focal loss and the dice loss.
@@ -80,6 +81,12 @@ class SetFinalCriterion(nn.Module):
         target_masks = [t["binary_masks"] for t in targets]
         target_masks = torch.cat(target_masks,dim=0).to(dtype=torch.float16)
         target_masks = target_masks[:, None]
+
+        if visualize:
+            import os
+            visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/loss"
+            torch.save(src_masks, os.path.join(visualize_dir, f"src_masks_iter_{train_iter}.pth"))
+            torch.save(target_masks, os.path.join(visualize_dir, f"target_masks_iter_{train_iter}.pth"))
 
         with torch.no_grad():
             # sample point_coords
@@ -116,20 +123,22 @@ class SetFinalCriterion(nn.Module):
             outputs, 
             targets, 
             num_masks, 
-            num_queries_per_object
+            num_queries_per_object, 
+            visualize=False, train_iter=None,
     ):
         loss_map = {
             'masks': self.loss_masks,
         }
         assert loss in loss_map, f"do you really want to compute {loss} loss?"
-        return loss_map[loss](outputs, targets, num_masks, num_queries_per_object)
+        return loss_map[loss](outputs, targets, num_masks, num_queries_per_object, visualize, train_iter)
 
     
     def forward(
             self, 
             outputs, 
             targets,
-            num_queries_per_object
+            num_queries_per_object, 
+            visualize=False, train_iter=None,
     ):
         """This performs the loss computation.
         Parameters:
@@ -156,7 +165,7 @@ class SetFinalCriterion(nn.Module):
         # Compute all the requested losses
         losses = {}
         for loss in self.losses:
-            losses.update(self.get_loss(loss, outputs, targets, num_masks, num_queries_per_object))
+            losses.update(self.get_loss(loss, outputs, targets, num_masks, num_queries_per_object, visualize, train_iter))
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
         if "aux_outputs" in outputs:
