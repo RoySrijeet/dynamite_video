@@ -102,12 +102,18 @@ def get_next_clicks(
     semantic_maps_clip = [x.cpu().numpy() for x in data['semantic_masks']] # [T,H,W]
     ignore_mask_clip = [x.cpu().numpy() for x in data['ignore_masks']]     # [T,H,W]
     padding_mask_clip = data['padding_mask'].cpu().numpy()
-    # if visualize:
-    #     import os
-    #     visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/training_clicker"
-    #     torch.save(gt_masks_clip,       os.path.join(visualize_dir, f"gt_masks_round_{round_num}_iter_{train_iter}.pth"))
-    #     torch.save(pred_masks_clip,     os.path.join(visualize_dir, f"pred_masks_round_{round_num}_iter_{train_iter}.pth"))
-    #     torch.save(semantic_maps_clip,  os.path.join(visualize_dir, f"semantic_maps_round_{round_num}_iter_{train_iter}.pth"))
+    if visualize:
+        import os
+        visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/training_clicker"
+        torch.save(gt_masks_clip,       os.path.join(visualize_dir, f"gt_masks_clicker_round_{round_num}_iter_{train_iter}.pth"))
+        torch.save(pred_masks_clip,     os.path.join(visualize_dir, f"pred_masks_clicker_round_{round_num}_iter_{train_iter}.pth"))
+        torch.save(semantic_maps_clip,  os.path.join(visualize_dir, f"semantic_maps_clicker_round_{round_num}_iter_{train_iter}.pth"))
+        torch.save(ignore_mask_clip,    os.path.join(visualize_dir, f"ignore_mask_clicker_round_{round_num}_iter_{train_iter}.pth"))
+        torch.save(padding_mask_clip,   os.path.join(visualize_dir, f"padding_mask_clicker_round_{round_num}_iter_{train_iter}.pth"))
+        torch.save(num_clicks_per_object, os.path.join(visualize_dir, f"num_clicks_per_object_before_clicker_round_{round_num}_iter_{train_iter}.pth"))
+        torch.save(fg_coords,           os.path.join(visualize_dir, f"fg_coords_before_clicker_round_{round_num}_iter_{train_iter}.pth"))
+        torch.save(max_timestamp,       os.path.join(visualize_dir, f"max_timestamp_before_clicker_round_{round_num}_iter_{train_iter}.pth"))
+
 
     for obj_id, fr_idx in zip(refine_objects, refine_frames):
         gt_masks = gt_masks_clip[fr_idx] * ignore_mask_clip[fr_idx] * padding_mask_clip

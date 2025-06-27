@@ -230,15 +230,16 @@ class DynamiteInteractiveTransformer(nn.Module):
             memory_pe[-1] = memory_pe[-1].permute(2, 0, 1)  # TxDxhw -> hwxTxD
             memory[-1] = memory[-1].permute(2, 0, 1)        # TxDxhw -> hwxTxD
 
-        # if visualize:
-        #     visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/memory"
-        #     torch.save(memory,      os.path.join(visualize_dir, f"memory_iter_{train_iter}.pth"))
-        #     torch.save(memory_pe,   os.path.join(visualize_dir, f"memory_pe_iter_{train_iter}.pth"))
+        if visualize:
+            visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/memory"
+            torch.save(memory,      os.path.join(visualize_dir, f"memory_iter_{train_iter}.pth"))
+            torch.save(memory_pe,   os.path.join(visualize_dir, f"memory_pe_iter_{train_iter}.pth"))
         
         if self.training:
 
             # number of corrective iterations
             num_rounds = random.randint(0, self.max_num_rounds)
+            num_rounds = 2
             for i in range(num_rounds):
 
                 # generate current queries, transformer forward pass
@@ -361,7 +362,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             query_embed = query_embed + pos_coord_embed                                     # QxTxD
 
         if visualize:
-            visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/queries"
+            visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/query"
             torch.save(descriptors, os.path.join(visualize_dir, f"descriptors_iter_{train_iter}.pth"))
             torch.save(query_embed, os.path.join(visualize_dir, f"query_embed_iter_{train_iter}.pth"))
             torch.save(num_queries_per_object, os.path.join(visualize_dir, f"num_queries_per_object_iter_{train_iter}.pth"))
@@ -376,7 +377,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             num_queries_per_object[-1] += static_bg_queries.shape[1]
 
             if visualize:
-                visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/queries"
+                visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/static_bg_query"
                 torch.save(descriptors, os.path.join(visualize_dir, f"descriptors_w_static_bg_iter_{train_iter}.pth"))
                 torch.save(query_embed, os.path.join(visualize_dir, f"query_embed_w_static_bg_iter_{train_iter}.pth"))
                 torch.save(num_queries_per_object, os.path.join(visualize_dir, f"num_queries_per_object_w_static_bg_iter_{train_iter}.pth"))
@@ -408,7 +409,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                 mask_features, 
                                                                 attn_mask_target_size=size_list[0])
         if visualize:
-            visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/forward_prediction_heads"
+            visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/forward_prediction_heads"
             torch.save(outputs_mask,    os.path.join(visualize_dir, f"outputs_mask_pre_enc_iter_{train_iter}.pth"))
             torch.save(attn_mask,       os.path.join(visualize_dir, f"attn_mask_pre_enc_iter_{train_iter}.pth"))
         
@@ -425,7 +426,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             #### CROSS-ATTENTION
             
             if visualize:
-                visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/image_query_cross_attention"
+                visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/encoder/image_query_cross_attention"
                 torch.save(output,                  os.path.join(visualize_dir, f"input_query_enc_layer_{i}_iter_{train_iter}.pth"))
                 torch.save(query_embed,             os.path.join(visualize_dir, f"input_query_pe_enc_layer_{i}_iter_{train_iter}.pth"))
                 torch.save(memory[level_index],     os.path.join(visualize_dir, f"input_memory_enc_layer_{i}_iter_{train_iter}.pth"))
@@ -434,7 +435,7 @@ class DynamiteInteractiveTransformer(nn.Module):
 
             
             # cross-attention between image features and queries in each frame
-            output, weights = self.encoder.cross_attention_layers[i](tgt=output,                     # QxTxD
+            output, weights = self.encoder.cross_attention_layers[i](tgt=output,            # QxTxD
                                                             memory=memory[level_index],     # (hw)xTxD
                                                             memory_mask=attn_mask,          # (T*#attn_heads)xQx(hw)
                                                             memory_key_padding_mask=None,   # here we do not apply masking on padded region
@@ -442,13 +443,13 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                             query_pos=query_embed           # QxTxD pos emb for query
                                                         )
             if visualize:
-                visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/image_query_cross_attention"
+                visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/encoder/image_query_cross_attention"
                 torch.save(output,                  os.path.join(visualize_dir, f"output_query_enc_layer_{i}_iter_{train_iter}.pth"))
                 torch.save(weights,                 os.path.join(visualize_dir, f"attn_weights_enc_layer_{i}_iter_{train_iter}.pth"))
                 
                 outputs_mask_inspection, _ = self.forward_prediction_heads(output, mask_features, 
                                                                             attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
-                visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/inspection_query_query_cross_attention"
+                visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/encoder/image_query_cross_attention"
                 torch.save(outputs_mask_inspection, os.path.join(visualize_dir, f"output_inspection_after_iqca_enc_layer_{i}_iter_{train_iter}.pth"))
         
 
@@ -464,7 +465,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                             query_pos=query_embed.view(Q*T, 1, D))
                 output = output.view(Q,T,D)
                 if visualize:
-                    visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/vanilla_qqca"
+                    visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/encoder/vanilla_qqca"
                     torch.save(output,               os.path.join(visualize_dir, f"output_query_enc_layer_{i}_iter_{train_iter}.pth"))
                     torch.save(weights,              os.path.join(visualize_dir, f"attn_weights_enc_layer_{i}_iter_{train_iter}.pth"))
                     outputs_mask_inspection, _ = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
@@ -479,7 +480,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                 # cross-attention between object-specific queries of different frames
                 inst_batched_query, qqca_mask = self.get_object_batched_query(output, num_queries_per_object)
                 if visualize:
-                    visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/masked_qqca"
+                    visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/encoder/masked_qqca"
                     torch.save(inst_batched_query,               os.path.join(visualize_dir, f"inst_batched_query_enc_layer_{i}_iter_{train_iter}.pth"))
                     torch.save(inst_batched_query_embed,         os.path.join(visualize_dir, f"inst_batched_query_embed_enc_layer_{i}_iter_{train_iter}.pth"))
                     torch.save(qqca_mask,                        os.path.join(visualize_dir, f"qqca_mask_enc_layer_{i}_iter_{train_iter}.pth"))
@@ -491,7 +492,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                                     )
                 output = self.get_frame_batched_query(output, padded_output, num_queries_per_object)
                 if visualize:
-                    visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/masked_qqca"
+                    visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/encoder/masked_qqca"
                     torch.save(padded_output,        os.path.join(visualize_dir, f"inst_batched_query_output_enc_layer_{i}_iter_{train_iter}.pth"))
                     torch.save(weights,              os.path.join(visualize_dir, f"attn_weights_enc_layer_{i}_iter_{train_iter}.pth"))
                     torch.save(output,               os.path.join(visualize_dir, f"output_query_enc_layer_{i}_iter_{train_iter}.pth"))
@@ -502,7 +503,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             #### SELF-ATTENTION
 
             if visualize:
-                visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/self_attention"
+                visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/encoder/self_attention"
                 torch.save(output,                  os.path.join(visualize_dir, f"input_query_enc_layer_{i}_iter_{train_iter}.pth"))
                 torch.save(query_embed,             os.path.join(visualize_dir, f"input_query_pe_enc_layer_{i}_iter_{train_iter}.pth"))
             
@@ -512,7 +513,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                            tgt_key_padding_mask=None,
                                                            query_pos=query_embed)
             if visualize:
-                visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/self_attention"
+                visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/encoder/self_attention"
                 torch.save(output,  os.path.join(visualize_dir, f"output_query_enc_layer_{i}_iter_{train_iter}.pth"))
                 torch.save(weights, os.path.join(visualize_dir, f"attn_weights_enc_layer_{i}_iter_{train_iter}.pth"))
                 
@@ -529,7 +530,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                     mask_features, 
                                                                     attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
             if visualize:
-                visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/ffn"
+                visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/encoder/ffn"
                 torch.save(output,                  os.path.join(visualize_dir, f"output_query_enc_layer_{i}_iter_{train_iter}.pth"))
                 torch.save(outputs_mask,            os.path.join(visualize_dir, f"outputs_mask_enc_layer_{i}_iter_{train_iter}.pth"))
                 torch.save(attn_mask,               os.path.join(visualize_dir, f"attn_mask_enc_layer_{i}_{train_iter}.pth"))
@@ -550,12 +551,10 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                     mask_features, 
                                                                     attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
             if visualize:
-                visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/decoder"
+                visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/decoder"
                 torch.save(output,          os.path.join(visualize_dir, f"query_decoder_iter_{train_iter}.pth"))
                 torch.save(mask_features,   os.path.join(visualize_dir, f"mask_features_decoder_iter_{train_iter}.pth"))
                 torch.save(weights,         os.path.join(visualize_dir, f"attn_weights_decoder_iter_{train_iter}.pth"))
-
-                visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/iterative_batch_forward/forward_prediction_heads"
                 torch.save(outputs_mask,    os.path.join(visualize_dir, f"outputs_mask_decoder_iter_{train_iter}.pth"))
                 torch.save(attn_mask,       os.path.join(visualize_dir, f"attn_mask_decoder_{train_iter}.pth"))
             
@@ -731,7 +730,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             processed_results.append(processed_r * padding_mask * fr_ignore_mask)
 
         if visualize:
-            visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/interactive_transformer/process_results"
+            visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/process_results"
             torch.save(mask_pred_results,       os.path.join(visualize_dir, f"upsampled_predictions_round_{round_num}_iter_{train_iter}.pth"))
             torch.save(padding_mask,            os.path.join(visualize_dir, f"padding_mask_round_{round_num}_iter_{train_iter}.pth"))
             torch.save(ignore_masks,            os.path.join(visualize_dir, f"ignore_masks_round_{round_num}_iter_{train_iter}.pth"))
@@ -768,29 +767,30 @@ class DynamiteInteractiveTransformer(nn.Module):
         
         mask_pred = torch.stack(temp_out)       # (N+1)xHxW
         
-        prob = torch.cat([torch.prod(1-mask_pred, dim=0, keepdim=True), mask_pred], 0).clamp(1e-7, 1-1e-7)
-        logits = torch.log((prob /(1-prob)))
-        logits = F.softmax(logits, dim=0)[1:]
-        binary = (logits > 0.5).to(torch.uint8)
+        # soft-aggregation
+        # prob = torch.cat([torch.prod(1-mask_pred, dim=0, keepdim=True), mask_pred], 0).clamp(1e-7, 1-1e-7)
+        # logits = torch.log((prob /(1-prob)))
+        # logits = F.softmax(logits, dim=0)[1:]
+        # binary = (logits > 0.5).to(torch.uint8)
         
-        binary_masks = torch.zeros((len(queries_per_object),H,W), dtype=torch.uint8)
-        c = 0
-        for i, q in enumerate(queries_per_object):
-            if q>0:
-                binary_masks[i][torch.where(binary[c]==1)] = 1
-                c += 1
+        # binary_masks = torch.zeros((len(queries_per_object),H,W), dtype=torch.uint8)
+        # c = 0
+        # for i, q in enumerate(queries_per_object):
+        #     if q>0:
+        #         binary_masks[i][torch.where(binary[c]==1)] = 1
+        #         c += 1
             
-        return binary_masks.to(mask_pred.device)
+        # return binary_masks.to(mask_pred.device)
         
-        # mask_pred = torch.argmax(mask_pred,0)
+        mask_pred = torch.argmax(mask_pred,0)
         
-        # m = []
-        # for inst_id in seq_objects:
-        #     if inst_id in objects_per_image:
-        #         m.append((mask_pred == inst_id-1).float())
-        #     else:
-        #         m.append(torch.zeros(H,W).to(mask_pred.device))
+        m = []
+        for obj_id in seq_objects:
+            if obj_id in objects_per_image:
+                m.append((mask_pred == obj_id-1).float())
+            else:
+                m.append(torch.zeros(H,W).to(mask_pred.device))
         
-        # mask_pred = torch.stack(m)
+        mask_pred = torch.stack(m)
      
-        # return mask_pred
+        return mask_pred

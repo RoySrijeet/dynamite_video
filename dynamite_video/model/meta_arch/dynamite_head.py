@@ -101,7 +101,7 @@ class DynamiteHead(nn.Module):
         if visualize:
             import os
             import torch
-            visualize_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/training/dynamite_head_px_decoder"
+            visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/pixel_decoder_output"
             torch.save(mask_features, os.path.join(visualize_dir, f"mask_features_iter_{train_iter}.pth"))
             torch.save(multi_scale_features, os.path.join(visualize_dir, f"multi_scale_features_iter_{train_iter}.pth"))
 

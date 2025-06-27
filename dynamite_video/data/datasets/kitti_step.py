@@ -49,7 +49,7 @@ def map_kitti_step_annotations(cfg, content, MIN_MASK_AREA):
             for class_id, sem_seg_rle in sem_masks.items():
 
                 # ignore 'void' class and 'thing' classes
-                if int(class_id) == ignore_class or class_id in thing_classes:
+                if int(class_id) == ignore_class or int(class_id) in thing_classes:
                     ignore_masks[-1].append(decode_mask(sem_seg_rle, img_dims))
                     continue
                 

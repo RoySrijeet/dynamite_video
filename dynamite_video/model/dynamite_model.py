@@ -163,10 +163,11 @@ class DynamiteModel(nn.Module):
 
             if visualize:
                 import os
-                visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/sem_seg_head_input"
+                visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/inputs"
                 torch.save(images, os.path.join(visualize_dir, f"images_iter_{train_iter}.pth"))
                 torch.save(features, os.path.join(visualize_dir, f"features_iter_{train_iter}.pth"))
                 torch.save(targets, os.path.join(visualize_dir, f"targets_iter_{train_iter}.pth"))
+                torch.save(inputs, os.path.join(visualize_dir, f"inputs_iter_{train_iter}.pth"))
             
             outputs, num_queries_per_object = self.sem_seg_head(inputs[0], 
                                                                 images,
@@ -178,7 +179,7 @@ class DynamiteModel(nn.Module):
                                                                 fg_coords,
                                                                 bg_coords,
                                                                 max_timestamp,
-                                                                visualize=False,
+                                                                visualize=visualize,
                                                                 train_iter=train_iter,
                                                             )
             
@@ -239,7 +240,7 @@ class DynamiteModel(nn.Module):
         
         # extract object and click info
         objects_per_frame = clip["objects_per_frame"]
-        num_clicks_per_object = ["num_clicks_per_object"]
+        num_clicks_per_object = clip["num_clicks_per_object"]
         fg_coords = clip["fg_coords_list"]
         bg_coords = clip["bg_coords_list"]
         max_timestamp = clip["max_timestamp_list"]
