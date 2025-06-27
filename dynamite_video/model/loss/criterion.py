@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 from detectron2.utils.comm import get_world_size
@@ -60,6 +61,15 @@ class SetFinalCriterion(nn.Module):
         """
         assert "pred_masks" in outputs
 
+        # T,N,H,W
+        tgt_masks = [t["binary_masks"] for t in targets]
+        tgt_masks = torch.stack(tgt_masks).to(dtype=torch.float16)
+
+        # T,1,H,W
+        ignore_masks_tgt = [t["ignore_masks"] for t in targets]
+        ignore_masks_tgt = torch.stack(ignore_masks_tgt).to(dtype=torch.float16)
+        ignore_masks_tgt = ignore_masks_tgt[:, None]
+        
         # Accumulate mask for each object (as there might be multiple clicks per object) and background
         new_outputs = []
         min_value = -1000.0
@@ -74,38 +84,38 @@ class SetFinalCriterion(nn.Module):
                     temp_out.append(torch.full((H,W), fill_value=min_value, dtype=mask_pred.dtype, device=mask_pred.device))
             new_outputs.append(torch.stack(temp_out))
         
-        # T*N,1,H,W
-        src_masks = torch.cat(new_outputs,dim=0)
-        src_masks = src_masks[:, None]
+        # T,N,H,W - 1/4th resolution
+        src_masks = torch.stack(new_outputs)
         
-        target_masks = [t["binary_masks"] for t in targets]
-        target_masks = torch.cat(target_masks,dim=0).to(dtype=torch.float16)
-        target_masks = target_masks[:, None]
+        # T,1,H,W - 1/4th resolution
+        ignore_masks_src = F.interpolate(ignore_masks_tgt.type_as(src_masks), scale_factor=0.25, mode='bilinear', align_corners=False)
+        ignore_masks_src = (ignore_masks_src > 0.5).detach()
 
         if visualize:
             import os
             visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/loss"
             torch.save(src_masks, os.path.join(visualize_dir, f"src_masks_iter_{train_iter}.pth"))
-            torch.save(target_masks, os.path.join(visualize_dir, f"target_masks_iter_{train_iter}.pth"))
+            torch.save(tgt_masks, os.path.join(visualize_dir, f"tgt_masks_iter_{train_iter}.pth"))
+            torch.save(ignore_masks_tgt, os.path.join(visualize_dir, f"ignore_masks_tgt_iter_{train_iter}.pth"))
+            torch.save(ignore_masks_src, os.path.join(visualize_dir, f"ignore_masks_src_iter_{train_iter}.pth"))
 
         with torch.no_grad():
-            # sample point_coords
-            point_coords = get_uncertain_point_coords_with_randomness(src_masks,
+            
+            # concatenate ignore mask to predicted masks
+            concat_src_w_ignore = torch.cat((src_masks, ignore_masks_src), dim=1)
+            
+            # sample PointRend points from predicted masks
+            point_coords = get_uncertain_point_coords_with_randomness(concat_src_w_ignore,
                                                                     lambda logits: calculate_uncertainty(logits),
                                                                     self.num_points,
                                                                     self.oversample_ratio,
                                                                     self.importance_sample_ratio,
                                                                 )
-            # get gt labels
-            point_labels = point_sample(target_masks,
-                                        point_coords,
-                                        align_corners=False,
-                                    ).squeeze(1)
+            # get gt & ignore labels at sampled locations
+            point_labels = point_sample(tgt_masks, point_coords, align_corners=False)#.squeeze(1)
+            point_ignore = point_sample(ignore_masks_tgt, point_coords, align_corners=False)#.squeeze(1)
 
-        point_logits = point_sample(src_masks,
-                                    point_coords,
-                                    align_corners=False,
-                                ).squeeze(1)
+        point_logits = point_sample(src_masks, point_coords, align_corners=False)#.squeeze(1)
 
         losses = {
             "loss_mask": sigmoid_ce_loss_jit(point_logits, point_labels, num_masks),
