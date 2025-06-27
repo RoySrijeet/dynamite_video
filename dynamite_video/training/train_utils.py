@@ -89,7 +89,7 @@ def get_next_clicks(
     """
 
     assert max_objects_to_refine >= 1
-    max_objects_to_refine = np.random.randint(1, max_objects_to_refine+1)
+    # max_objects_to_refine = np.random.randint(1, max_objects_to_refine+1)
     refine_objects, refine_frames = compute_iou(data["binary_masks"].detach().cpu(), torch.stack(pred_output).detach().cpu(), 
                                 strategy=refine_strategy, max_objects_to_refine=max_objects_to_refine, iou_thres=iou_threshold)
     
