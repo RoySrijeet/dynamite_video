@@ -14,8 +14,10 @@ def dice_loss(
                  classification label for each element in inputs
                 (0 for the negative class and 1 for the positive class).
     """
+    T,N,P = inputs.shape 
+    inputs = inputs.reshape((T*N),P)
+    targets = targets.reshape((T*N),P)
     inputs = inputs.sigmoid()
-    inputs = inputs.flatten(1)
     numerator = 2 * (inputs * targets).sum(-1)
     denominator = inputs.sum(-1) + targets.sum(-1)
     loss = 1 - (numerator + 1) / (denominator + 1)

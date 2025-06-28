@@ -9,7 +9,7 @@ from detectron2.projects.point_rend.point_features import ( # type: ignore
 )
 
 from dynamite_video.utils.misc import is_dist_avail_and_initialized
-from dynamite_video.model.loss.loss_functions import dice_loss, sigmoid_ce_loss, calculate_uncertainty
+from dynamite_video.model.loss.loss_functions import dice_loss_jit, sigmoid_ce_loss_jit, calculate_uncertainty
 
 
 class SetFinalCriterion(nn.Module):
@@ -76,7 +76,7 @@ class SetFinalCriterion(nn.Module):
 
         # Accumulate mask for each object (as there might be multiple clicks per object) and background
         new_outputs = []
-        for fr_idx, mask_pred in enumerate(outputs['pred_masks']):
+        for _, mask_pred in enumerate(outputs['pred_masks']):
             H,W = mask_pred.shape[1:]
             temp_out = []
             splited_masks = torch.split(mask_pred, num_queries_per_object, dim=0)
@@ -124,8 +124,8 @@ class SetFinalCriterion(nn.Module):
         point_logits = point_sample(pred_masks, point_coords, align_corners=False)      # T,N,num_points
 
         losses = {
-            "loss_mask": sigmoid_ce_loss(point_logits, point_labels, num_masks),
-            "loss_dice": dice_loss(point_logits, point_labels, num_masks),
+            "loss_mask": sigmoid_ce_loss_jit(point_logits, point_labels, num_masks),
+            "loss_dice": dice_loss_jit(point_logits, point_labels, num_masks),
         }
 
         del gt_masks, pred_masks
