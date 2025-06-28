@@ -9,7 +9,7 @@ from detectron2.projects.point_rend.point_features import ( # type: ignore
 )
 
 from dynamite_video.utils.misc import is_dist_avail_and_initialized
-from dynamite_video.model.loss.loss_functions import dice_loss_jit, sigmoid_ce_loss_jit, calculate_uncertainty
+from dynamite_video.model.loss.loss_functions import dice_loss, sigmoid_ce_loss, calculate_uncertainty
 
 
 class SetFinalCriterion(nn.Module):
@@ -61,69 +61,74 @@ class SetFinalCriterion(nn.Module):
         """
         assert "pred_masks" in outputs
 
-        # T,N,H,W
-        tgt_masks = [t["binary_masks"] for t in targets]
-        tgt_masks = torch.stack(tgt_masks).to(dtype=torch.float16)
+        # ground truth binary masks
+        gt_masks = [t["binary_masks"] for t in targets]
+        gt_masks = torch.stack(gt_masks).to(dtype=torch.float16)  # T,N,H,W
 
-        # T,1,H,W
-        ignore_masks_tgt = [t["ignore_masks"] for t in targets]
-        ignore_masks_tgt = torch.stack(ignore_masks_tgt).to(dtype=torch.float16)
-        ignore_masks_tgt = ignore_masks_tgt[:, None]
+        # ignore masks
+        ignore_masks = [t["ignore_masks"] for t in targets]
+        ignore_masks = torch.stack(ignore_masks).to(dtype=torch.float16)
+        ignore_masks = ignore_masks[:, None]                      # T,1,H,W
         
+        # downsample ignore masks to match the resolution of predicted masks
+        ignore_masks_ds = F.interpolate(ignore_masks, scale_factor=0.25, mode='bilinear', align_corners=False)
+        ignore_masks_ds = (ignore_masks_ds > 0.5).detach()        # T,1,H,W  
+
         # Accumulate mask for each object (as there might be multiple clicks per object) and background
         new_outputs = []
-        min_value = -1000.0
         for fr_idx, mask_pred in enumerate(outputs['pred_masks']):
             H,W = mask_pred.shape[1:]
             temp_out = []
             splited_masks = torch.split(mask_pred, num_queries_per_object, dim=0)
             for m in splited_masks:
-                if len(m)>0:
-                    temp_out.append(torch.max(m, dim=0).values)
-                else:
-                    temp_out.append(torch.full((H,W), fill_value=min_value, dtype=mask_pred.dtype, device=mask_pred.device))
+                temp_out.append(torch.max(m, dim=0).values)
             new_outputs.append(torch.stack(temp_out))
         
-        # T,N,H,W - 1/4th resolution
-        src_masks = torch.stack(new_outputs)
-        
-        # T,1,H,W - 1/4th resolution
-        ignore_masks_src = F.interpolate(ignore_masks_tgt.type_as(src_masks), scale_factor=0.25, mode='bilinear', align_corners=False)
-        ignore_masks_src = (ignore_masks_src > 0.5).detach()
+        # predicted masks at 1/4th resolution
+        pred_masks = torch.stack(new_outputs)    # T,N,h,w
 
         if visualize:
             import os
             visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/loss"
-            torch.save(src_masks, os.path.join(visualize_dir, f"src_masks_iter_{train_iter}.pth"))
-            torch.save(tgt_masks, os.path.join(visualize_dir, f"tgt_masks_iter_{train_iter}.pth"))
-            torch.save(ignore_masks_tgt, os.path.join(visualize_dir, f"ignore_masks_tgt_iter_{train_iter}.pth"))
-            torch.save(ignore_masks_src, os.path.join(visualize_dir, f"ignore_masks_src_iter_{train_iter}.pth"))
+            torch.save(pred_masks, os.path.join(visualize_dir, f"pred_masks_iter_{train_iter}.pth"))
+            torch.save(gt_masks, os.path.join(visualize_dir, f"gt_masks_iter_{train_iter}.pth"))
+            torch.save(ignore_masks, os.path.join(visualize_dir, f"ignore_masks_iter_{train_iter}.pth"))
+            torch.save(ignore_masks_ds, os.path.join(visualize_dir, f"ignore_masks_ds_iter_{train_iter}.pth"))
 
         with torch.no_grad():
             
-            # concatenate ignore mask to predicted masks
-            concat_src_w_ignore = torch.cat((src_masks, ignore_masks_src), dim=1)
+            # concatenate ignore mask to predicted masks - T,(N+1),h,w
+            concat_src_w_ignore = torch.cat((pred_masks, ignore_masks_ds), dim=1)
             
             # sample PointRend points from predicted masks
+            # Behind the scenes:
+            # 1. Sample P points from the input [T,(N+1),h,w] mask logits. This produces a (T,P,2) tensor, 
+            # where P = num_points * oversample_ratio
+            # 2. Find the predicted logits at these locations. This produces a [T,(N+1),P] tensor of pred logits
+            # 3. Compute uncertainty of the sampled predicted logits. Uncertainty is measured by the L1 distance 
+            # between 0.0 and the logit (if raw prediction is 0.75, uncertainty = -0.75)
+            # 4. Points sampled from ignore mask are used as a filter on the sampled prediction logits and ignored
+            # points are assigned very low uncertainty
+            # 5. Out of the P points, most uncertain (ß * p) points are considered, where ß = importance sampling 
+            # ratio and p = num_points
+            # 6. (1 - ß) * p points are randomly sampled additionally
             point_coords = get_uncertain_point_coords_with_randomness(concat_src_w_ignore,
                                                                     lambda logits: calculate_uncertainty(logits),
                                                                     self.num_points,
                                                                     self.oversample_ratio,
                                                                     self.importance_sample_ratio,
-                                                                )
-            # get gt & ignore labels at sampled locations
-            point_labels = point_sample(tgt_masks, point_coords, align_corners=False)#.squeeze(1)
-            point_ignore = point_sample(ignore_masks_tgt, point_coords, align_corners=False)#.squeeze(1)
+                                                                )   # T,num_points,2
+            # get gt labels at the sampled locations
+            point_labels = point_sample(gt_masks, point_coords, align_corners=False)    # T,N,num_points
 
-        point_logits = point_sample(src_masks, point_coords, align_corners=False)#.squeeze(1)
+        point_logits = point_sample(pred_masks, point_coords, align_corners=False)      # T,N,num_points
 
         losses = {
-            "loss_mask": sigmoid_ce_loss_jit(point_logits, point_labels, num_masks),
-            "loss_dice": dice_loss_jit(point_logits, point_labels, num_masks),
+            "loss_mask": sigmoid_ce_loss(point_logits, point_labels, num_masks),
+            "loss_dice": dice_loss(point_logits, point_labels, num_masks),
         }
 
-        del src_masks
-        del target_masks
+        del gt_masks, pred_masks
         return losses
 
     
