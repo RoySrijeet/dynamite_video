@@ -5,7 +5,7 @@ import json
 import numpy as np
 import os
 
-from collections import OrderedDict
+from collections import defaultdict, OrderedDict
 from typing import Any, List, Dict, Union
 
 from dynamite_video.data.utils.file_packer import FilePackReader
@@ -254,25 +254,32 @@ class GenericVideoSequence(object):
     
     def prepare_eval_masks(self, fill_value):
         """
-        Prepare ground truth panoptic masks for evaluation
+        Prepare ground truth panoptic masks for evaluation. NOTE: `thing` classes are
+        already excluded
 
         The binary RLE masks are converted to the panoptic mask
 
         Args:
             fill_value: any region not covered by the binary RLEs is assigned the `fill_value`
         """
+        object_appearance = defaultdict(list)
+        object_discovery = set()
         semantic_masks = np.full((len(self), self.height, self.width), fill_value=fill_value, dtype=np.uint32)
-        thing_classes = ['11000', '13000']
         for fr_idx, fr_rles in enumerate(self.segmentations):
             for obj_id in fr_rles:
-                if obj_id in thing_classes:
-                    continue
                 # decode RLE
                 img_dims = None if isinstance(fr_rles[obj_id], dict) else self.image_dims
                 _m = decode_mask(fr_rles[obj_id], img_dims)
                 semantic_masks[fr_idx][np.where(_m==1)] = obj_id
+                
+                # store which frame an object first appears
+                if obj_id not in object_discovery:
+                    object_appearance[fr_idx].append(obj_id)
 
-        return semantic_masks
+                # mark the object discovered
+                object_discovery.add(obj_id)
+
+        return semantic_masks, object_appearance
 
     
     def extract_subsequence(self, frame_idxes: List[int], object_ids_to_keep: List[int]=None, new_id: str=""):

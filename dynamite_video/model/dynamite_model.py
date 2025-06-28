@@ -306,13 +306,12 @@ class DynamiteModel(nn.Module):
         del outputs
 
         # objects in the whole clip
-        seq_objects = sorted(list(set(x for ids in objects_per_frame for x in ids)))
+        seq_objects = sorted(objects_per_frame)
 
         processed_results = []
-        for mask_pred_per_image, image_size, objects_per_image in zip(mask_pred_results, images.image_sizes, objects_per_frame):
+        for mask_pred_per_image, image_size in zip(mask_pred_results, images.image_sizes):
             mask_pred_per_image = retry_if_cuda_oom(sem_seg_postprocess)(mask_pred_per_image, image_size, image_size[0], image_size[1])
             processed_r = retry_if_cuda_oom(self.interactive_object_inference)(mask_pred_per_image, 
-                                                                               objects_per_image, 
                                                                                num_queries_per_object, 
                                                                                seq_objects)
             processed_results.append(processed_r)
@@ -323,7 +322,6 @@ class DynamiteModel(nn.Module):
     def interactive_object_inference(
             self, 
             mask_pred, 
-            objects_per_image, 
             queries_per_object,
             seq_objects,
     ):
@@ -364,10 +362,10 @@ class DynamiteModel(nn.Module):
         
         m = []
         for obj_id in seq_objects:
-            if obj_id in objects_per_image:
-                m.append((mask_pred == obj_id-1).float())
-            else:
-                m.append(torch.zeros(H,W).to(mask_pred.device))
+            # if obj_id in objects_per_image:
+            m.append((mask_pred == obj_id-1).float())
+            # else:
+            # m.append(torch.zeros(H,W).to(mask_pred.device))
         
         mask_pred = torch.stack(m)
      

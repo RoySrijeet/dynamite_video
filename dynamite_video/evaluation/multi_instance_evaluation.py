@@ -51,6 +51,7 @@ def evaluate(cfg,
     if save_vis:
         vis_path = os.path.join(cfg.OUTPUT_DIR, "vis")
         os.makedirs(vis_path, exist_ok=True)
+    dataset_meta["vis_path"] = vis_path
     
     logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="Multi Instance Evaluation")
     logger.info(f"Starting inference on {len(dataset)} sequences...")
@@ -76,15 +77,14 @@ def evaluate(cfg,
             click_budget = max_interactions * manager.N
 
             # rounding starts at first frame
-            round_num = 0
             lowest_frame_index = 0
 
             propagation_time = []
             metric_compute_time = []
             
             while lowest_frame_index!=-1:
-                round_num += 1
-                logger.info(f"\nRound {round_num}:")
+                manager.round_num += 1
+                logger.info(f"\nRound {manager.round_num}:")
 
                 prop_time = 0
 
@@ -92,20 +92,21 @@ def evaluate(cfg,
                 clip_indices = manager.generate_clip_indices(start=lowest_frame_index)
 
                 ## PROPAGATION ##
+                visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/evaluation"
                 logger.info(f"Predicting {manager.N} masklets in {manager.T} frames...")
                 for num, indices in enumerate(tqdm(clip_indices, leave=False, desc="Clip")):
-
                     propagation_start_time = time.perf_counter()
                     
                     clip, clip_inputs = manager.extract_clip(indices)
+                    # torch.save(clip, os.path.join(visualize_dir, f"clip_{indices}.pth"))
+                    # torch.save(clip_inputs, os.path.join(visualize_dir, f"clip_inputs_{indices}.pth"))
                     binary_pred_masks = predictor.get_prediction([clip_inputs], indices)    # T,N,H,W
-                    panoptic_pred_masks = manager.store_prediction(binary_pred_masks, clip)
-
+                    # torch.save(binary_pred_masks, os.path.join(visualize_dir, f"binary_pred_masks_{indices}.pth"))
                     propagation_end_time = time.perf_counter()
+                    panoptic_pred_masks = manager.store_prediction(binary_pred_masks, clip)
+                    # torch.save(panoptic_pred_masks, os.path.join(visualize_dir, f"panoptic_pred_masks_{indices}.pth"))
+                    
                     prop_time+= (propagation_end_time - propagation_start_time)
-
-                    if save_vis:
-                        manager.save_visualization(vis_path, round_num, indices)
                 propagation_time.append(prop_time)
                 
                 # metrics
@@ -119,18 +120,18 @@ def evaluate(cfg,
                 metric_compute_time.append(metric_compute_end_time - metric_compute_start_time)
                 
                 dataset_stq[manager.sequence.id].append({
-                    "Round": round_num, "#frames": manager.T, "#targets": manager.N, 
+                    "Round": manager.round_num, "#frames": manager.T, "#targets": manager.N, 
                     "#clicks": int(curr_click_count), "IoU": float(avg_iou),
                     # "STQ": video_stq, "AQ": video_aq, "IoU": video_iou, 
                 })
-                logger.info(f"Round {round_num} scores: \n#frames: {manager.T}, \n#targets: {manager.N} \
+                logger.info(f"Round {manager.round_num} scores: \n#frames: {manager.T}, \n#targets: {manager.N} \
                     \nTotal #clicks: {curr_click_count} \nIoU: {avg_iou}")
                     # \nSTQ: {video_stq} \nAQ: {video_aq} \nIoU: {video_iou}")
 
                 ## WEAKEST PREDICTION ##
                 logger.info(f"Looking for an object/frame to refine...")
                 # Stopping criterion 1: check whether round budget is over
-                if round_num == max_rounds:
+                if manager.round_num == max_rounds:
                     logger.info(f'Maximum round limit ({max_rounds}) reached!')
                     lowest_frame_index = -1
 
