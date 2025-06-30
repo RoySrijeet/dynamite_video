@@ -275,9 +275,12 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                            num_clicks_per_object, 
                                                                            max_timestamp,
                                                                            visualize=visualize, train_iter=train_iter)
+            
+            return outputs, num_queries_per_object
+        
         else:
             # evaluation
-            outputs, num_queries_per_object = self.iterative_batch_forward(multi_scale_features, 
+            outputs, num_queries_per_object, queries = self.iterative_batch_forward(multi_scale_features, 
                                                                            memory, memory_pe, 
                                                                            size_list, 
                                                                            mask_features, 
@@ -285,7 +288,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                            num_clicks_per_object, 
                                                                            max_timestamp)
         
-        return outputs, num_queries_per_object
+            return outputs, num_queries_per_object, queries
 
     
     def forward_prediction_heads(

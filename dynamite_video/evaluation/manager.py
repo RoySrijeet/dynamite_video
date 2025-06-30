@@ -198,7 +198,7 @@ class SequenceManager:
         return indices
 
     
-    def extract_clip(self, _indices):
+    def extract_clip(self, _indices, queries):
         """
         Extract a clip from the sequence specified by the indices. The clip could be reversed
         in time.
@@ -222,6 +222,13 @@ class SequenceManager:
         # panoptic maps of the clip frames, including `ignore_label` - T,H,W
         clip_gt_masks = self.gt_masks[indices[0]:indices[-1]+1]
 
+        # new_objects = []
+        # new_object_frames = []
+        # for fr_idx in indices:
+        #     new_obj = self.object_appearance.get(fr_idx, [])
+        #     if fr_idx in keys():
+        #         new_objects.extend(self)
+        
         new_objects = []
         new_object_frames = []
         overlapping_objects = []

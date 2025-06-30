@@ -94,16 +94,17 @@ def evaluate(cfg,
                 ## PROPAGATION ##
                 visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/evaluation"
                 logger.info(f"Predicting {manager.N} masklets in {manager.T} frames...")
+                queries = None
                 for num, indices in enumerate(tqdm(clip_indices, leave=False, desc="Clip")):
                     propagation_start_time = time.perf_counter()
                     
-                    clip, clip_inputs = manager.extract_clip(indices)
+                    clip, clip_inputs = manager.extract_clip(indices, queries)
                     # torch.save(clip, os.path.join(visualize_dir, f"clip_{indices}.pth"))
                     # torch.save(clip_inputs, os.path.join(visualize_dir, f"clip_inputs_{indices}.pth"))
                     binary_pred_masks, queries = predictor.get_prediction([clip_inputs], indices)    # T,N,H,W
                     # torch.save(binary_pred_masks, os.path.join(visualize_dir, f"binary_pred_masks_{indices}.pth"))
                     propagation_end_time = time.perf_counter()
-                    panoptic_pred_masks = manager.store_prediction(binary_pred_masks, queries, clip)
+                    panoptic_pred_masks = manager.store_prediction(binary_pred_masks, clip)
                     # torch.save(panoptic_pred_masks, os.path.join(visualize_dir, f"panoptic_pred_masks_{indices}.pth"))
                     
                     prop_time+= (propagation_end_time - propagation_start_time)
