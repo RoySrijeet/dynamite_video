@@ -572,7 +572,9 @@ class DynamiteInteractiveTransformer(nn.Module):
         
         if self.training:
             return out, num_queries_per_object
-        return out, num_queries_per_object, output
+        
+        Q,T,D = output.shape
+        return out, num_queries_per_object, output.reshape(T,Q,D)
 
 
     @torch.jit.unused

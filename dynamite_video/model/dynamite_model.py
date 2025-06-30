@@ -209,10 +209,10 @@ class DynamiteModel(nn.Module):
                                                                     bg_coords, 
                                                                     max_timestamp
                                                                 )
-
-            processed_results = self.process_results(images, outputs, objects_per_frame, num_queries_per_object)
             
-            return processed_results, queries, images, features, mask_features, multi_scale_features
+            processed_results, queries = self.process_results(images, outputs, queries, objects_per_frame, num_queries_per_object)
+            
+            return processed_results, queries, num_queries_per_object
 
 
     def preprocess_batch_data(self, inputs):
@@ -283,7 +283,8 @@ class DynamiteModel(nn.Module):
     def process_results(
             self, 
             images, 
-            outputs, 
+            outputs,
+            queries, 
             objects_per_frame,
             num_queries_per_object,
     ):
@@ -309,20 +310,24 @@ class DynamiteModel(nn.Module):
         seq_objects = sorted(objects_per_frame)
 
         processed_results = []
-        for mask_pred_per_image, image_size in zip(mask_pred_results, images.image_sizes):
+        processed_queries = []
+        for mask_pred_per_image, queries_per_image, image_size in zip(mask_pred_results, queries, images.image_sizes):
             mask_pred_per_image = retry_if_cuda_oom(sem_seg_postprocess)(mask_pred_per_image, image_size, image_size[0], image_size[1])
-            processed_r = retry_if_cuda_oom(self.interactive_object_inference)(mask_pred_per_image, 
+            processed_r, queries_r = retry_if_cuda_oom(self.interactive_object_inference)(mask_pred_per_image, 
+                                                                               queries_per_image,
                                                                                num_queries_per_object, 
                                                                                seq_objects)
             processed_results.append(processed_r)
+            processed_queries.append(queries_r)
 
-        return processed_results
+        return processed_results, torch.stack(processed_queries)
 
     
     def interactive_object_inference(
             self, 
             mask_pred, 
-            queries_per_object,
+            queries,
+            num_queries_per_object,
             seq_objects,
     ):
         """
@@ -335,13 +340,18 @@ class DynamiteModel(nn.Module):
             seq_objects: all objects present in the clip
         """
 
-        H,W = mask_pred.shape[1:]
+        splited_masks = torch.split(mask_pred, num_queries_per_object, dim=0)
+        splited_queries = torch.split(queries, num_queries_per_object, dim=0)
+        
         temp_out = []
-        splited_masks = torch.split(mask_pred, queries_per_object, dim=0)
-        for m in splited_masks:
+        temp_que = []
+        for m,q in zip(splited_masks, splited_queries):
             if len(m) >0:
                 temp_out.append(torch.max(m, dim=0).values)
+                temp_que.append(torch.mean(q, dim=0))
+
         mask_pred = torch.stack(temp_out)       # (N+1)xHxW
+        queries = torch.stack(temp_que)
 
         # soft-aggregation
         # prob = mask_pred.clamp(1e-7, 1-1e-7)
@@ -358,12 +368,13 @@ class DynamiteModel(nn.Module):
 
         # return binary_masks
 
+        # binary to panoptic
         mask_pred = torch.argmax(mask_pred,0)
         
+        # panoptic to binary - discarding overlaps
         m = []
         for obj_id in seq_objects:
             m.append((mask_pred == obj_id-1).float())
-        
         mask_pred = torch.stack(m)
      
-        return mask_pred
+        return mask_pred, queries
