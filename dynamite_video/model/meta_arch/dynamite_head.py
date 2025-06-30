@@ -98,27 +98,33 @@ class DynamiteHead(nn.Module):
         if (mask_features is None) or (multi_scale_features is None):
             mask_features, _, multi_scale_features = self.pixel_decoder.forward_features(features)
 
-        if visualize:
-            import os
-            import torch
-            visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/pixel_decoder_output"
-            torch.save(mask_features, os.path.join(visualize_dir, f"mask_features_iter_{train_iter}.pth"))
-            torch.save(multi_scale_features, os.path.join(visualize_dir, f"multi_scale_features_iter_{train_iter}.pth"))
-
         if self.transformer_in_feature == "multi_scale_pixel_decoder":
-            predictions, num_queries_per_object = self.interactive_transformer(data, 
-                                                                            images, 
-                                                                            objects_per_frame, 
-                                                                            multi_scale_features,
-                                                                            mask_features,
-                                                                            num_clicks_per_object,
-                                                                            fg_coords, 
-                                                                            bg_coords, 
-                                                                            max_timestamp,
-                                                                            visualize=visualize,
-                                                                            train_iter=train_iter,
-                                                                        )
-        if self.training:
-            return predictions, num_queries_per_object
-        else:
-            return predictions, num_queries_per_object, mask_features, multi_scale_features
+            if self.training:
+                predictions, num_queries_per_object = self.interactive_transformer(data, 
+                                                                                images, 
+                                                                                objects_per_frame, 
+                                                                                multi_scale_features,
+                                                                                mask_features,
+                                                                                num_clicks_per_object,
+                                                                                fg_coords, 
+                                                                                bg_coords, 
+                                                                                max_timestamp,
+                                                                                visualize=visualize,
+                                                                                train_iter=train_iter,
+                                                                            )
+                return predictions, num_queries_per_object
+            
+            else:
+                predictions, num_queries_per_object, queries = self.interactive_transformer(data, 
+                                                                                images, 
+                                                                                objects_per_frame, 
+                                                                                multi_scale_features,
+                                                                                mask_features,
+                                                                                num_clicks_per_object,
+                                                                                fg_coords, 
+                                                                                bg_coords, 
+                                                                                max_timestamp,
+                                                                                visualize=visualize,
+                                                                                train_iter=train_iter,
+                                                                            )
+                return predictions, num_queries_per_object, queries, mask_features, multi_scale_features

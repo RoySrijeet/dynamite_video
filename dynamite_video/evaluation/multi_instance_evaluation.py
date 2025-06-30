@@ -100,10 +100,10 @@ def evaluate(cfg,
                     clip, clip_inputs = manager.extract_clip(indices)
                     # torch.save(clip, os.path.join(visualize_dir, f"clip_{indices}.pth"))
                     # torch.save(clip_inputs, os.path.join(visualize_dir, f"clip_inputs_{indices}.pth"))
-                    binary_pred_masks = predictor.get_prediction([clip_inputs], indices)    # T,N,H,W
+                    binary_pred_masks, queries = predictor.get_prediction([clip_inputs], indices)    # T,N,H,W
                     # torch.save(binary_pred_masks, os.path.join(visualize_dir, f"binary_pred_masks_{indices}.pth"))
                     propagation_end_time = time.perf_counter()
-                    panoptic_pred_masks = manager.store_prediction(binary_pred_masks, clip)
+                    panoptic_pred_masks = manager.store_prediction(binary_pred_masks, queries, clip)
                     # torch.save(panoptic_pred_masks, os.path.join(visualize_dir, f"panoptic_pred_masks_{indices}.pth"))
                     
                     prop_time+= (propagation_end_time - propagation_start_time)
@@ -195,10 +195,10 @@ class Predictor:
         """
         
         if not self.initialized:
-            pred_masks, images, features, mask_features, multi_scale_features = self.model(inputs)
+            pred_masks, queries, images, features, mask_features, multi_scale_features = self.model(inputs)
             self.initialized = True
         else:
-            pred_masks, images, features, mask_features, multi_scale_features = self.model(inputs)
+            pred_masks, queries, images, features, mask_features, multi_scale_features = self.model(inputs)
 
         
         # for i, idx in enumerate(indices):
@@ -207,4 +207,4 @@ class Predictor:
         #     self.mask_features[idx] = mask_features[i]
         #     self.multi_scale_features[idx] = multi_scale_features[i]
 
-        return torch.stack([x.to('cpu',dtype=torch.uint8) for x in pred_masks])
+        return torch.stack([x.to('cpu',dtype=torch.uint8) for x in pred_masks]), queries.to('cpu')

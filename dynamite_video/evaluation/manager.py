@@ -134,6 +134,9 @@ class SequenceManager:
         # rounding info
         self.round_num = 0
         self.vis_path = dataset_meta["vis_path"]
+
+        # overlapping queries
+        self.overlapping_queries = None
         
 
     def compute_tfm_sizes(self, tfms):
@@ -218,31 +221,10 @@ class SequenceManager:
         
         # panoptic maps of the clip frames, including `ignore_label` - T,H,W
         clip_gt_masks = self.gt_masks[indices[0]:indices[-1]+1]
-        
-        # predicted objects in the overlapping frames
-        overlapping_objects = []
-        if self.num_overlapping_frames > 0:
-            overlapping_frame_indices = sorted(_indices[:self.num_overlapping_frames])
-            overlapping_frame_preds = np.stack(self.pred_masks[overlapping_frame_indices])
 
-            if overlapping_frame_preds.any():
-                overlapping_objects = list(np.unique(overlapping_frame_preds))
-                if self.ignore_label in overlapping_objects:
-                    overlapping_objects.remove(self.ignore_label)
-        
-        # new objects appearing in the clip
         new_objects = []
         new_object_frames = []
-        for fr_idx in indices:
-            new_appearances = self.object_appearance.get(fr_idx, [])
-            for obj_id in new_appearances:
-                if obj_id not in self.object_discovery:
-                    new_objects.append(obj_id)
-                    new_object_frames.append(fr_idx)
-                    self.object_discovery.add(obj_id)
-
-        all_orig_objects = overlapping_objects + new_objects
-
+        overlapping_objects = []
         if self.num_overlapping_frames == 0:
             new_objects = np.unique(clip_gt_masks).tolist()
             if self.ignore_label in new_objects:
@@ -254,6 +236,25 @@ class SequenceManager:
                 non_zero_per_frame = (obj_masks != 0).reshape(obj_masks.shape[0], -1).any(axis=1)
                 global_fr_idx = indices[np.argmax(non_zero_per_frame)]
                 new_object_frames.append(global_fr_idx)
+
+        else:
+            # predicted objects in the overlapping frames
+            if self.num_overlapping_frames > 0:
+                overlapping_frame_indices = sorted(_indices[:self.num_overlapping_frames])
+                overlapping_frame_preds = np.stack(self.pred_masks[overlapping_frame_indices])
+                if overlapping_frame_preds.any():
+                    overlapping_objects = list(np.unique(overlapping_frame_preds))
+                    if self.ignore_label in overlapping_objects:
+                        overlapping_objects.remove(self.ignore_label)
+            # new objects appearing in the clip
+            for fr_idx in indices:
+                new_appearances = self.object_appearance.get(fr_idx, [])
+                for obj_id in new_appearances:
+                    if obj_id not in self.object_discovery:
+                        new_objects.append(obj_id)
+                        new_object_frames.append(fr_idx)
+                        self.object_discovery.add(obj_id)
+            all_orig_objects = overlapping_objects + new_objects
         
         # serialize object IDs
         clip_orig_to_serial_id, clip_serial_to_orig_id = serialize_object_ids(all_orig_objects)
@@ -340,7 +341,7 @@ class SequenceManager:
         self.t+=1
         
 
-    def store_prediction(self, binary_pred_masks, clip):
+    def store_prediction(self, binary_pred_masks, queries, clip):
         """
         Store predicted masks of a clip in the whole sequence
 
@@ -349,6 +350,8 @@ class SequenceManager:
             clip: GenericVideoSequence
             indices: indices w.r.t whole sequence
         """
+        self.overlapping_queries = queries
+        
         indices = clip["indices"]
         if len(indices) >= 2 and indices[1] < indices[0]:
             indices = clip["indices"][::-1]

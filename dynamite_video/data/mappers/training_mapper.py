@@ -36,8 +36,6 @@ class TrainingMapper:
         # source video
         video = sample['video']
         clip_id = sample["vid_id"]
-        # panoptic or instance
-        task_type = sample.get("task_type", "panoptic")
         # get absolute frame indices in the video that will form a clip
         frame_indices = [sample["ref_frame"]] + sample["other_frames"]
 
@@ -48,7 +46,7 @@ class TrainingMapper:
         images = clip.load_images()
         
         # load binary instance masks [T,N,H,W]; NOTE: ignore masks are not part of the binary masks
-        binary_masks, targets_per_frame, target_ids, ignore_masks = clip.prepare_masks()
+        binary_masks, targets_per_frame, ignore_masks = clip.prepare_masks()
         
         # color augmentations
         if self.cfg.INPUT.AUGMENTATION.COLOR_AUG:
@@ -85,16 +83,8 @@ class TrainingMapper:
         # NOTE: 0-labelled region in foreground masks at this point corresponds to 
         # the ignore mask area, the padding area, and any potential background
         
-        if task_type != "panoptic":
-            # for "instance" task the background is the region not 
-            # included in foreground masks, padding mask or ignore mask
-            bg_masks = (foreground_masks==0) & ~ignore_masks
-            bg_masks = bg_masks.astype(np.uint8)
-        else:
-            # for "panoptic" task there is no background, make all 0-labelled
-            # region the ignore mask
-            bg_masks = None
-            ignore_masks = (foreground_masks==0) & ~padding_mask 
+        # consider all parts of the image withput fg label as bg
+        bg_masks = (foreground_masks==0) & ~padding_mask
 
         
         # sample clicks
@@ -116,7 +106,6 @@ class TrainingMapper:
             "orig_dims": images.shape[2:],
             "seq_name": video.id,
             "frame_indices": frame_indices,
-            "task_type": task_type,
             "orig_to_serial_id": clip.orig_to_serial_id, 
             "serial_to_orig_id": clip.serial_to_orig_id, 
             "ignore_class": clip.ignore_class,

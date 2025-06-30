@@ -239,7 +239,7 @@ class DynamiteInteractiveTransformer(nn.Module):
 
             # number of corrective iterations
             num_rounds = random.randint(0, self.max_num_rounds)
-            num_rounds = 2
+
             for i in range(num_rounds):
 
                 # generate current queries, transformer forward pass
@@ -374,13 +374,17 @@ class DynamiteInteractiveTransformer(nn.Module):
             descriptors = torch.cat((descriptors, static_bg_queries), dim=1)   # TxQxD
             static_bg_pe = repeat(self.static_bg_pe, "Bg C -> Bg T C", T=T)
             query_embed = torch.cat((query_embed, static_bg_pe), dim=0)        # QxTxD
+            # add bg queries to the count
             num_queries_per_object[-1] += static_bg_queries.shape[1]
+            # add proxy bg clicks to the click
+            normalized_clicks = torch.cat([normalized_clicks, torch.full((T, self.num_static_bg_queries, 5), -1.0, device=normalized_clicks.device, dtype=normalized_clicks.dtype)], dim=1)
 
             if visualize:
                 visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/static_bg_query"
                 torch.save(descriptors, os.path.join(visualize_dir, f"descriptors_w_static_bg_iter_{train_iter}.pth"))
                 torch.save(query_embed, os.path.join(visualize_dir, f"query_embed_w_static_bg_iter_{train_iter}.pth"))
                 torch.save(num_queries_per_object, os.path.join(visualize_dir, f"num_queries_per_object_w_static_bg_iter_{train_iter}.pth"))
+                torch.save(normalized_clicks, os.path.join(visualize_dir, f"normalized_click_w_static_bg_iter_{train_iter}.pth"))
         
         # if there's no bg query, remove from record
         if num_queries_per_object[-1] == 0:
@@ -398,8 +402,6 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                             self.positional_embeddings,
                                                             descriptors.shape[2])                        # Q'xNxD
             pos_coord_embed = self.ca_qpos_sine_proj(pos_coord_embed.to(inst_batched_query_embed.dtype)) # Q'xNxD
-            if self.use_static_bg_queries:
-                pos_coord_embed = torch.cat((pos_coord_embed, static_bg_pe.transpose(0,1)), dim=1)
             inst_batched_query_embed = inst_batched_query_embed + pos_coord_embed                        # Q'xNxD
 
         
@@ -564,7 +566,10 @@ class DynamiteInteractiveTransformer(nn.Module):
             'pred_masks': predictions_mask[-1],
             'aux_outputs': self._set_aux_loss(predictions_mask)
         }
-        return out, num_queries_per_object
+        
+        if self.training:
+            return out, num_queries_per_object
+        return out, num_queries_per_object, output
 
 
     @torch.jit.unused
@@ -782,15 +787,22 @@ class DynamiteInteractiveTransformer(nn.Module):
             
         # return binary_masks.to(mask_pred.device)
         
-        mask_pred = torch.argmax(mask_pred,0)
+        # mask_pred = torch.argmax(mask_pred,0)
         
+        # m = []
+        # for obj_id in seq_objects:
+        #     if obj_id in objects_per_image:
+        #         m.append((mask_pred == obj_id-1).float())
+        #     else:
+        #         m.append(torch.zeros(H,W).to(mask_pred.device))
+        
+        # mask_pred = torch.stack(m)
+
+        mask_pred = torch.argmax(mask_pred,0)
+
         m = []
         for obj_id in seq_objects:
-            if obj_id in objects_per_image:
-                m.append((mask_pred == obj_id-1).float())
-            else:
-                m.append(torch.zeros(H,W).to(mask_pred.device))
-        
+            m.append((mask_pred == obj_id-1).float())
         mask_pred = torch.stack(m)
      
         return mask_pred

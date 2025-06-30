@@ -249,7 +249,7 @@ class GenericVideoSequence(object):
             ignore_masks = [decode_mask(ig_msk, img_dims) for ig_msk in self.ignore_masks]
             ignore_masks = np.stack(ignore_masks)
         
-        return binary_masks, objects_per_frame, self.object_ids, ignore_masks
+        return binary_masks, objects_per_frame, ignore_masks
 
     
     def prepare_eval_masks(self, fill_value):

@@ -197,7 +197,7 @@ class DynamiteModel(nn.Module):
             # iterative evaluation - for each batch (a clip) we only compute image features and 
             # mask features once and pass them as arguments to use them again in the next round
 
-            (outputs, num_queries_per_object,
+            (outputs, num_queries_per_object, queries,
             mask_features, multi_scale_features) = self.sem_seg_head(inputs[0],
                                                                     images,
                                                                     features,
@@ -212,7 +212,7 @@ class DynamiteModel(nn.Module):
 
             processed_results = self.process_results(images, outputs, objects_per_frame, num_queries_per_object)
             
-            return processed_results, images, features, mask_features, multi_scale_features
+            return processed_results, queries, images, features, mask_features, multi_scale_features
 
 
     def preprocess_batch_data(self, inputs):
@@ -362,10 +362,7 @@ class DynamiteModel(nn.Module):
         
         m = []
         for obj_id in seq_objects:
-            # if obj_id in objects_per_image:
             m.append((mask_pred == obj_id-1).float())
-            # else:
-            # m.append(torch.zeros(H,W).to(mask_pred.device))
         
         mask_pred = torch.stack(m)
      

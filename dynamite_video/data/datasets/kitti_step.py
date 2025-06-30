@@ -48,10 +48,14 @@ def map_kitti_step_annotations(cfg, content, MIN_MASK_AREA):
 
             for class_id, sem_seg_rle in sem_masks.items():
 
-                # ignore 'void' class and 'thing' classes
-                if int(class_id) == ignore_class or int(class_id) in thing_classes:
+                # ignore 'void' class
+                if int(class_id) == ignore_class:
                     ignore_masks[-1].append(decode_mask(sem_seg_rle, img_dims))
                     continue
+                
+                # do not include 'thing' classes, they become part of the bg
+                if int(class_id) in thing_classes:
+                    continue 
                 
                 if mask_area(sem_seg_rle, img_dims) >= MIN_MASK_AREA:
                     track_id = int(class_id) * max_instances_per_category

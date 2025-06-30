@@ -237,19 +237,17 @@ def get_clicks_coords(
     bg_coords_list = []
     if bg_masks is not None:
         for fr_idx in range(T):
-
-            # with some probability, sample -ve clicks from this frame
+            
+            # with some probability, sample -ve clicks
             if np.random.rand() > bg_prob:
-                bg_coords_list.append([])
                 continue
-
-            bg_coords_list_fr, t = get_background_clicks(
-                                                fr_idx,
-                                                bg_masks[fr_idx],
-                                                max_num_points,
-                                                gamma,
-                                                t
-                                            )
+            
+            bg_coords_list_fr, t = get_background_clicks(fr_idx,
+                                                    bg_masks[fr_idx],
+                                                    max_num_points,
+                                                    gamma,
+                                                    t
+                                                )
             bg_coords_list.extend(bg_coords_list_fr)
             if len(bg_coords_list_fr) > 0:
                 max_timestamp[fr_idx]=t-1
