@@ -1,5 +1,7 @@
 #Modified by Amit Rana from https://github.com/facebookresearch/Mask2Former/blob/main/mask2former/modeling/meta_arch/mask_former_head.py
 
+import os
+import torch
 from torch import nn
 from typing import Dict
 
@@ -24,7 +26,9 @@ class DynamiteHead(nn.Module):
         pixel_decoder: nn.Module,
         # extra parameters
         interactive_transformer: nn.Module,
-        transformer_in_feature: str
+        transformer_in_feature: str,
+        # debug
+        output_dir: str,
     ):
         """
         Args:
@@ -44,6 +48,9 @@ class DynamiteHead(nn.Module):
 
         self.transformer_in_feature = transformer_in_feature
 
+        # debug
+        self.output_dir = os.path.join(output_dir, "vis")
+
 
     @classmethod
     def from_config(cls, cfg, input_shape: Dict[str, ShapeSpec]):
@@ -61,6 +68,9 @@ class DynamiteHead(nn.Module):
                 cfg,
                 interactive_transformer_in_channels,
             ),
+
+            # debug
+            "output_dir": cfg.OUTPUT_DIR,
         }
 
 
@@ -69,13 +79,10 @@ class DynamiteHead(nn.Module):
             data,
             images,
             features,
-            objects_per_frame, 
-            mask_features=None,
-            multi_scale_features=None, 
-            num_clicks_per_object=None,
-            fg_coords = None, 
-            bg_coords = None, 
-            max_timestamp=None,
+            num_clicks_per_object,
+            fg_coords, 
+            bg_coords, 
+            max_timestamp,
             visualize=None,
             train_iter=None,
     ):
@@ -87,44 +94,33 @@ class DynamiteHead(nn.Module):
             images: frames of the clip as [T, C, H, W] (d2 ImageList)
             features: frame features from image backbone
             objects_per_frame: num objects in each video frame
-            mask_features, multi_scale_features: frame features from pixel decoder
             num_clicks_per_object: #clicks on each object in each video frame
             fg_coords: list of fg clicks in each video frame
             bg_coords: list of bg clicks in each video frame
             max_timestamp: list of max timestamp of clicks in each video frame
         """
         
-        # multi-scale features
-        if (mask_features is None) or (multi_scale_features is None):
-            mask_features, _, multi_scale_features = self.pixel_decoder.forward_features(features)
+        visualize_dir_curr_iter = os.path.join(self.output_dir, str(train_iter))
 
-        if self.transformer_in_feature == "multi_scale_pixel_decoder":
-            if self.training:
-                predictions, num_queries_per_object = self.interactive_transformer(data, 
-                                                                                images, 
-                                                                                objects_per_frame, 
-                                                                                multi_scale_features,
-                                                                                mask_features,
-                                                                                num_clicks_per_object,
-                                                                                fg_coords, 
-                                                                                bg_coords, 
-                                                                                max_timestamp,
-                                                                                visualize=visualize,
-                                                                                train_iter=train_iter,
-                                                                            )
-                return predictions, num_queries_per_object
-            
-            else:
-                predictions, num_queries_per_object, queries = self.interactive_transformer(data, 
-                                                                                images, 
-                                                                                objects_per_frame, 
-                                                                                multi_scale_features,
-                                                                                mask_features,
-                                                                                num_clicks_per_object,
-                                                                                fg_coords, 
-                                                                                bg_coords, 
-                                                                                max_timestamp,
-                                                                                visualize=visualize,
-                                                                                train_iter=train_iter,
-                                                                            )
-                return predictions, num_queries_per_object, queries, mask_features, multi_scale_features
+        # multi-scale features
+        mask_features, _, multi_scale_features = self.pixel_decoder.forward_features(features)
+
+        if visualize:
+            visualize_dir = os.path.join(visualize_dir_curr_iter, "pixel_decoder")
+            os.makedirs(visualize_dir, exist_ok=True)
+            torch.save(mask_features, os.path.join(visualize_dir, f"mask_features_iter_{train_iter}.pth"))
+            torch.save(multi_scale_features, os.path.join(visualize_dir, f"multi_scale_features_iter_{train_iter}.pth"))
+
+        # forward to interactive transformer
+        predictions, num_queries_per_object, queries = self.interactive_transformer(data, 
+                                                                        images,
+                                                                        multi_scale_features,
+                                                                        mask_features,
+                                                                        num_clicks_per_object,
+                                                                        fg_coords, 
+                                                                        bg_coords, 
+                                                                        max_timestamp,
+                                                                        visualize=visualize,
+                                                                        train_iter=train_iter,
+                                                                    )
+        return predictions, num_queries_per_object, queries

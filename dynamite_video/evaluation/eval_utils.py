@@ -2,6 +2,8 @@ import numpy as np
 import cv2
 import torch
 
+from collections import OrderedDict
+
 def create_circular_mask(h, w, centers, radius):
     """
     create a circular mask of radius `radius` about the coordinates
@@ -79,3 +81,21 @@ def show_points(image, coords, label, marker_size=15):
             thickness=2,
             line_type=cv2.LINE_AA
         )
+
+def serialize_object_ids(orig_ids):
+    """
+    Serialize object IDs. IDs are 1-indexed to avoid conflict in semantic mask
+    with background pixels (0)
+
+    Args:
+        orig_ids: original object IDs, potentially non-sequential
+
+    Returns:
+        orig_to_serial_id: mapping from original IDs to sequential IDs
+        serial_to_orig_id: mapping from sequential IDs to original IDs
+    """
+    
+    serial_ids = [i for i in range(1, len(orig_ids)+1)]
+    serial_to_orig_id = OrderedDict(zip(serial_ids, orig_ids))
+    orig_to_serial_id = OrderedDict(zip(orig_ids, serial_ids))
+    return orig_to_serial_id, serial_to_orig_id

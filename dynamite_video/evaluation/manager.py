@@ -5,8 +5,8 @@ import torch
 
 from PIL import Image
 
-from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks, serialize_object_ids, convert_binary_to_panoptic, convert_panoptic_to_binary
-from dynamite_video.evaluation.eval_utils import create_circular_mask, color_map, show_points, get_center_coords
+from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks, convert_binary_to_panoptic, convert_panoptic_to_binary
+from dynamite_video.evaluation.eval_utils import create_circular_mask, color_map, show_points, get_center_coords, serialize_object_ids
 
 class SequenceManager:
     """
@@ -231,11 +231,19 @@ class SequenceManager:
             # mark the objects discovered
             self.object_discovery.update(new_obj)
         
-        all_objects = new_objects
-        
+        # overlap
+        overlapping_objects = []
         if self.prev_clip_output is not None:
-            ...
+            # indices of the overlapping frames
+            overlapping_indices = sorted(_indices[:self.num_overlapping_frames])
+            # objects appearing in overlapping objects
+            overlapping_preds_bool = self.prev_clip_output["predicted_objects_bool"][overlapping_indices,:].any(axis=0)
+            overlapping_objects = self.prev_clip_output["predicted_objects"][np.where(overlapping_preds_bool)].tolist()
+            # queries from the overlapping frames
+            overlapping_queries = self.prev_clip_output["queries"][-(self.num_overlapping_frames):, np.where(overlapping_preds_bool)[0],:]
 
+        all_objects =  overlapping_objects + new_objects
+            
         # serialize object IDs
         clip_orig_to_serial_id, clip_serial_to_orig_id = serialize_object_ids(all_objects)
         assert set(clip_orig_to_serial_id.keys()).intersection(set(clip_orig_to_serial_id.values())) == set()
@@ -247,10 +255,9 @@ class SequenceManager:
         clip_objects_per_frame = list(clip_serial_to_orig_id.keys())
         clip_fg_coords_list = []
 
-        if self.prev_clip_input is None:
-            clip_num_clicks_per_object = np.zeros((clip_T, clip_N), dtype=np.uint16)
-        else:
-            clip_num_clicks_per_object = self.prev_clip_output["num_clicks_per_object"]
+        clip_num_clicks_per_object = np.zeros((clip_T, clip_N), dtype=np.uint16)
+        if len(overlapping_objects) > 0:
+            clip_num_clicks_per_object[:len(overlapping_objects), :] = 1
         
         # record clicks serially on new objects
         for local_obj_id, global_obj_id in clip_serial_to_orig_id.items():
@@ -268,7 +275,7 @@ class SequenceManager:
             center_coords = get_center_coords(obj_mask * self.not_clicked_map[global_fr_idx])
             
             # serialized object ID in the clip
-            local_obj_id = clip_orig_to_serial_id[global_obj_id]
+
             clip_fg_coords_list.append([center_coords[0], center_coords[1], local_obj_id, local_fr_idx, self.t])
             clip_num_clicks_per_object[local_fr_idx][local_obj_id-1] += 1
 
@@ -316,7 +323,7 @@ class SequenceManager:
         self.t+=1
         
 
-    def store_prediction(self, binary_pred_masks, queries, num_queries_per_object):
+    def store_prediction(self, binary_pred_masks, queries):
         """
         Store predicted masks of a clip in the whole sequence
 
@@ -325,11 +332,6 @@ class SequenceManager:
             clip: GenericVideoSequence
             indices: indices w.r.t whole sequence
         """
-        self.prev_clip_output = {
-            "queries": queries,
-            "num_clicks_per_object": num_queries_per_object
-        }
-        
         indices = self.prev_clip_input["indices"]
         if len(indices) >= 2 and indices[1] < indices[0]:
             indices = self.prev_clip_input["indices"][::-1]
@@ -337,16 +339,23 @@ class SequenceManager:
         # ignore masks
         clip_ignore_masks = self.ignore_masks[indices]
         
-        predicted_objects_per_frame = []
         T,N,H,W = binary_pred_masks.shape
+        
+        predicted_objects = np.zeros((T,N), dtype=np.uint32)
+        predicted_objects_bool = np.zeros((T,N), dtype=np.bool_)
+        
         panoptic_pred_masks = np.full((T,H,W), fill_value=self.ignore_label).astype(np.uint32)
         for fr_idx in range(T):
-            predicted_objects_per_frame.append([])
             ign_mask = clip_ignore_masks[fr_idx]
             for obj_id in range(N):
                 mask = binary_pred_masks[fr_idx][obj_id]
-                panoptic_pred_masks[fr_idx][np.where(mask==1)] = self.prev_clip_input["serial_to_orig_id"][obj_id+1]
-                predicted_objects_per_frame[-1].append(False)
+                orig_id = self.prev_clip_input["serial_to_orig_id"][obj_id+1]
+                panoptic_pred_masks[fr_idx][np.where(mask==1)] = orig_id
+                
+                if mask.any():
+                    predicted_objects_bool[fr_idx][obj_id] = True
+                predicted_objects[fr_idx][obj_id] = orig_id
+                
             panoptic_pred_masks[fr_idx][np.where(ign_mask)] = self.ignore_label
                 
         # save in buffer
@@ -359,6 +368,12 @@ class SequenceManager:
         if self.vis_path is not None:
             self.save_visualization(indices)
 
+        # store 
+        self.prev_clip_output = {
+            "queries": queries,
+            "predicted_objects_bool": predicted_objects_bool,
+            "predicted_objects": predicted_objects[0]
+        }
         return panoptic_pred_masks
 
 

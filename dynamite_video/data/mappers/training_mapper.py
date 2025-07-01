@@ -103,7 +103,7 @@ class TrainingMapper:
             raise "One or more targets did not receive a click!"
 
         meta_info = {
-            "orig_dims": images.shape[2:],
+            "orig_dims": video.image_dims,
             "seq_name": video.id,
             "frame_indices": frame_indices,
             "orig_to_serial_id": clip.orig_to_serial_id, 
@@ -113,22 +113,40 @@ class TrainingMapper:
             "max_instances_per_category": clip.meta_info['max_instances_per_category'],
         }
         
-        if bg_masks is not None:
-            bg_masks = torch.as_tensor(bg_masks, dtype=torch.uint8)
-        if ignore_masks is not None:
-            ignore_masks = torch.as_tensor(ignore_masks, dtype=torch.bool)
-
         return {
+            # T,3,H,W image tensors, not normalized, padded region has value 128
             "images": torch.as_tensor(images, dtype=torch.uint8),
+            
+            # T,N,H,W binary masks of target objects. This includes the semantic maps of the `stuff` classes 
+            # and the instance maps of `thing` class instances. Which means, the binary masks do not include 
+            # region of `thing` class that is not covered by corresponding instances, and the VOID class.
             "binary_masks": torch.as_tensor(binary_masks, dtype=torch.uint8),
+            
+            # H,W boolean padding mask where padded region is labeled True
             "padding_mask": torch.as_tensor(padding_mask, dtype=torch.bool),
-            "semantic_masks": torch.as_tensor(foreground_masks, dtype=torch.uint8),
-            "bg_masks": bg_masks,
-            "ignore_masks": ignore_masks,
-            "objects_per_frame": targets_per_frame,
+            
+            # T,H,W boolean mask for `VOID` class
+            "ignore_masks": torch.as_tensor(ignore_masks, dtype=torch.bool) if ignore_masks is not None else None,
+            
+            # T,H,W bg mask includes any region not covered by the target object binary masks
+            # NOTE: this includes ignore mask regions as well
+            "bg_masks": torch.as_tensor(bg_masks, dtype=torch.uint8),
+            
+            # T,H,W semantic map with serialized target IDs. Background gets labeled 0
+            "panoptic_masks": torch.as_tensor(foreground_masks, dtype=torch.uint8),
+
+            # T,N array recording num clicks on each target in each frame
             "num_clicks_per_object": num_clicks_per_target,
+            
+            # list of fg clicks sampled on the clip. Each click follows the format: [y,x,i,f,t]
             "fg_coords_list": fg_coords_list,
+            
+            # list of bg clicks sampled on the clip. Each click follows the format: [y,x,-1,f,t]
             "bg_coords_list": bg_coords_list,
+
+            # list of length T recording timestamp of the latest click on each frame
             "max_timestamp_list": max_timestamp_list,
+
+            # info about the clip and its source video
             "meta": meta_info,
         }

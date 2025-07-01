@@ -1,5 +1,4 @@
-# Adapted from https://github.com/amitrana001/DynaMITe
-
+import os
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -31,6 +30,8 @@ class DynamiteModel(nn.Module):
         pixel_std: Tuple[float],
         # inference
         iterative_evaluation: bool,
+        # debug
+        output_dir: str,
     ):
         """
         Args:
@@ -57,11 +58,14 @@ class DynamiteModel(nn.Module):
         # iterative
         self.iterative_evaluation = iterative_evaluation
 
+        # debug
+        self.output_dir = os.path.join(output_dir, "vis")
+        os.makedirs(self.output_dir, exist_ok=True)
+
     @classmethod
     def from_config(cls, cfg):
         backbone = build_backbone(cfg)
         sem_seg_head = build_sem_seg_head(cfg, backbone.output_shape())
-        #sem_seg_head = DynamiteHead(cfg, backbone.output_shape())
         
         # Loss parameters:
         deep_supervision = cfg.MODEL.MASK_FORMER.DEEP_SUPERVISION
@@ -101,6 +105,9 @@ class DynamiteModel(nn.Module):
 
             #iterative
             "iterative_evaluation": cfg.ITERATIVE.TEST.INTERACTIVE_EVALAUTION,
+
+            # debug
+            "output_dir": cfg.OUTPUT_DIR
         }
         
     
@@ -111,50 +118,30 @@ class DynamiteModel(nn.Module):
     
     def forward(
             self, 
-            inputs, 
-            images=None,
-            objects_per_frame=None,
-            features=None, 
-            mask_features=None, 
-            multi_scale_features=None, 
-            num_clicks_per_object= None,
-            fg_coords = None, 
-            bg_coords = None, 
-            max_timestamp=None,
+            inputs,
             visualize=None,
             train_iter=None
     ):
         """
         Forward pass through the DynaMITe model
-
-        Args:
-            inputs: a list, batch output from DataLoader
-            features, mask_features, multi_scale_features:
-                computed once per clip and passed as an argument to avoid 
-                recomputation during iterative evaluation/inference
-            fg_coords: batched per clip, list of clicks coordinates for each object in each frame
-            bg_coords: batched per clip, list of background click coordinates from each frame
-            num_clicks_per_object: batched per clip, number of clicks per object in each frame
-            max_timestamp: batched per clip, timestamp of last click sampled from each clip
-            objects_per_frame: batched per clip, list of objects present in the frame
         """
 
-        assert len(inputs) == 1, "Don't try more than one clip in a batch"  # TODO
+        assert len(inputs) == 1, "Don't try more than one clip in a batch"
+
+        visualize_dir_curr_iter = os.path.join(self.output_dir, str(train_iter))
+        os.makedirs(visualize_dir_curr_iter)
+        
         
         # extract resources from batch
         (images, 
-        objects_per_frame, 
         num_clicks_per_object,
         fg_coords, 
         bg_coords, 
         max_timestamp
         ) = self.preprocess_batch_data(inputs)
 
-        if features is None:
-            # extract backbone features from clip frames
-            clip_fs = self.backbone(images.tensor)
-            features = clip_fs
-
+        # extract backbone features from clip frames
+        features = self.backbone(images.tensor)
         
         if self.training:
         
@@ -162,19 +149,16 @@ class DynamiteModel(nn.Module):
             targets = self.prepare_targets(inputs)
 
             if visualize:
-                import os
-                visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/inputs"
-                torch.save(images, os.path.join(visualize_dir, f"images_iter_{train_iter}.pth"))
-                torch.save(features, os.path.join(visualize_dir, f"features_iter_{train_iter}.pth"))
-                torch.save(targets, os.path.join(visualize_dir, f"targets_iter_{train_iter}.pth"))
+                visualize_dir = os.path.join(visualize_dir_curr_iter, "dynamite_model_forward")
+                os.makedirs(visualize_dir, exist_ok=True)
                 torch.save(inputs, os.path.join(visualize_dir, f"inputs_iter_{train_iter}.pth"))
+                torch.save(targets, os.path.join(visualize_dir, f"targets_iter_{train_iter}.pth"))
+                torch.save(features, os.path.join(visualize_dir, f"features_iter_{train_iter}.pth"))
             
-            outputs, num_queries_per_object = self.sem_seg_head(inputs[0], 
+            # forward to pixel decoder and interactive transformer
+            outputs, num_queries_per_object, _ = self.sem_seg_head(inputs[0], 
                                                                 images,
                                                                 features,
-                                                                objects_per_frame,
-                                                                mask_features, 
-                                                                multi_scale_features,
                                                                 num_clicks_per_object,
                                                                 fg_coords,
                                                                 bg_coords,
@@ -183,8 +167,8 @@ class DynamiteModel(nn.Module):
                                                                 train_iter=train_iter,
                                                             )
             
+            # loss computation
             losses = self.criterion(outputs, targets, num_queries_per_object, visualize=visualize, train_iter=train_iter)
-
             for k in list(losses.keys()):
                 if k in self.criterion.weight_dict:
                     losses[k] *= self.criterion.weight_dict[k]
@@ -197,20 +181,16 @@ class DynamiteModel(nn.Module):
             # iterative evaluation - for each batch (a clip) we only compute image features and 
             # mask features once and pass them as arguments to use them again in the next round
 
-            (outputs, num_queries_per_object, queries,
-            mask_features, multi_scale_features) = self.sem_seg_head(inputs[0],
+            outputs, num_queries_per_object, queries = self.sem_seg_head(inputs[0],
                                                                     images,
                                                                     features,
-                                                                    objects_per_frame,
-                                                                    mask_features, 
-                                                                    multi_scale_features, 
                                                                     num_clicks_per_object,
                                                                     fg_coords, 
                                                                     bg_coords, 
                                                                     max_timestamp
                                                                 )
             
-            processed_results, queries = self.process_results(images, outputs, queries, objects_per_frame, num_queries_per_object)
+            processed_results, queries = self.process_results(images, outputs, len(num_clicks_per_object[0]), queries, num_queries_per_object)
             
             return processed_results, queries, num_queries_per_object
 
@@ -223,7 +203,6 @@ class DynamiteModel(nn.Module):
         Returns:
             images: (d2) ImageList objects, contains the image tensors of the frames in 
                     the corresponding clip as [T,3,H,W] tensors, where T: #frames in the clip
-            objects_per_frame: list of list of object IDs in each frame of the clip
             num_clicks_per_object: list of click count per object
             fg_coords: list of foreground clicks
             bg_coords: list of background clicks
@@ -239,13 +218,12 @@ class DynamiteModel(nn.Module):
         images = images_sample
         
         # extract object and click info
-        objects_per_frame = clip["objects_per_frame"]
         num_clicks_per_object = clip["num_clicks_per_object"]
         fg_coords = clip["fg_coords_list"]
         bg_coords = clip["bg_coords_list"]
         max_timestamp = clip["max_timestamp_list"]
 
-        return images, objects_per_frame, num_clicks_per_object, fg_coords, bg_coords, max_timestamp
+        return images, num_clicks_per_object, fg_coords, bg_coords, max_timestamp
 
 
     def prepare_targets(self, inputs):
@@ -270,11 +248,10 @@ class DynamiteModel(nn.Module):
         for i in range(clip["images"].shape[0]):
             targets.append({
                 "binary_masks": clip["binary_masks"][i].to(self.device),
-                "semantic_masks": clip["semantic_masks"][i].to(self.device),
-                "bg_masks": clip["bg_masks"][i].to(self.device) if clip["bg_masks"]is not None else None,
-                "labels": clip["objects_per_frame"][i],
                 "padding_mask": clip["padding_mask"].to(self.device),
                 "ignore_masks": clip["ignore_masks"][i].to(self.device) if clip["ignore_masks"] is not None else None, 
+                "panoptic_masks": clip["panoptic_masks"][i].to(self.device),
+                "bg_masks": clip["bg_masks"][i].to(self.device) if clip["bg_masks"] is not None else None,
             })
         return targets
 
@@ -284,8 +261,8 @@ class DynamiteModel(nn.Module):
             self, 
             images, 
             outputs,
+            num_targets,
             queries, 
-            objects_per_frame,
             num_queries_per_object,
     ):
         """
@@ -306,17 +283,14 @@ class DynamiteModel(nn.Module):
         )
         del outputs
 
-        # objects in the whole clip
-        seq_objects = sorted(objects_per_frame)
-
         processed_results = []
         processed_queries = []
         for mask_pred_per_image, queries_per_image, image_size in zip(mask_pred_results, queries, images.image_sizes):
             mask_pred_per_image = retry_if_cuda_oom(sem_seg_postprocess)(mask_pred_per_image, image_size, image_size[0], image_size[1])
             processed_r, queries_r = retry_if_cuda_oom(self.interactive_object_inference)(mask_pred_per_image, 
+                                                                               num_targets,
                                                                                queries_per_image,
-                                                                               num_queries_per_object, 
-                                                                               seq_objects)
+                                                                               num_queries_per_object)
             processed_results.append(processed_r)
             processed_queries.append(queries_r)
 
@@ -326,9 +300,9 @@ class DynamiteModel(nn.Module):
     def interactive_object_inference(
             self, 
             mask_pred, 
+            num_targets,
             queries,
             num_queries_per_object,
-            seq_objects,
     ):
         """
         Given the raw predictions from Transformer, obtain binary segmentation masks
@@ -373,8 +347,8 @@ class DynamiteModel(nn.Module):
         
         # panoptic to binary - discarding overlaps
         m = []
-        for obj_id in seq_objects:
-            m.append((mask_pred == obj_id-1).float())
+        for obj_id in range(num_targets):
+            m.append((mask_pred == obj_id).float())
         mask_pred = torch.stack(m)
      
         return mask_pred, queries

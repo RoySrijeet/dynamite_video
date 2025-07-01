@@ -1,3 +1,4 @@
+import os
 import cv2
 import numpy as np
 import random
@@ -69,6 +70,7 @@ def get_next_clicks(
     iou_threshold,
     refine_strategy,
     visualize=False,
+    visualize_dir=None,
     train_iter=None,
     round_num=None
 ):
@@ -99,31 +101,22 @@ def get_next_clicks(
     # directly take data as input as they are already on the device
     gt_masks_clip = [x.cpu().numpy() for x in data["binary_masks"]]        # [T,N,H,W]
     pred_masks_clip = [x.cpu().numpy() for x in pred_output]               # [T,N,H,W]
-    semantic_maps_clip = [x.cpu().numpy() for x in data['semantic_masks']] # [T,H,W]
+    panoptic_maps_clip = [x.cpu().numpy() for x in data['panoptic_masks']] # [T,H,W]
     ignore_mask_clip = [x.cpu().numpy() for x in data['ignore_masks']]     # [T,H,W]
     padding_mask_clip = data['padding_mask'].cpu().numpy()
-    if visualize:
-        import os
-        visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/training_clicker"
-        torch.save(gt_masks_clip,       os.path.join(visualize_dir, f"gt_masks_clicker_round_{round_num}_iter_{train_iter}.pth"))
-        torch.save(pred_masks_clip,     os.path.join(visualize_dir, f"pred_masks_clicker_round_{round_num}_iter_{train_iter}.pth"))
-        torch.save(semantic_maps_clip,  os.path.join(visualize_dir, f"semantic_maps_clicker_round_{round_num}_iter_{train_iter}.pth"))
-        torch.save(ignore_mask_clip,    os.path.join(visualize_dir, f"ignore_mask_clicker_round_{round_num}_iter_{train_iter}.pth"))
-        torch.save(padding_mask_clip,   os.path.join(visualize_dir, f"padding_mask_clicker_round_{round_num}_iter_{train_iter}.pth"))
-        torch.save(num_clicks_per_object, os.path.join(visualize_dir, f"num_clicks_per_object_before_clicker_round_{round_num}_iter_{train_iter}.pth"))
-        torch.save(fg_coords,           os.path.join(visualize_dir, f"fg_coords_before_clicker_round_{round_num}_iter_{train_iter}.pth"))
-        torch.save(max_timestamp,       os.path.join(visualize_dir, f"max_timestamp_before_clicker_round_{round_num}_iter_{train_iter}.pth"))
 
-
+    count = 0
     for obj_id, fr_idx in zip(refine_objects, refine_frames):
         gt_masks = gt_masks_clip[fr_idx] * ignore_mask_clip[fr_idx] * padding_mask_clip
         pred_masks = pred_masks_clip[fr_idx]
-        semantic_map = semantic_maps_clip[fr_idx]
+        panoptic_map = panoptic_maps_clip[fr_idx]
 
         # timestamp of the latest click so far
         timestamp = max(max_timestamp)
-        sampled_clicks = _get_corrective_clicks(pred_masks[obj_id], gt_masks[obj_id], semantic_map,
-                                                    timestamp+1, max_num_points=1)
+        sampled_clicks = _get_corrective_clicks(pred_masks[obj_id], gt_masks[obj_id], panoptic_map,
+                                                    timestamp+1, max_num_points=1,
+                                                    visualize=visualize,visualize_dir=visualize_dir,
+                                                    train_iter=train_iter,round_num=round_num, count=count)
         
         if sampled_clicks is not None:
             for click in sampled_clicks:
@@ -144,7 +137,7 @@ def get_next_clicks(
 
                 max_timestamp[fr_idx] = click_time
                 timestamp = click_time
-
+        count += 1
     return num_clicks_per_object, fg_coords, bg_coords, max_timestamp
 
 
@@ -171,11 +164,16 @@ def _generate_probs(max_num_points, gamma=0.25):
 def _get_corrective_clicks(
     pred_mask,
     gt_mask,
-    semantic_map,
+    panoptic_map,
     # ignore_mask,
     # padding_mask,
     timestamp,
     max_num_points=2,
+    visualize=False,
+    visualize_dir=None,
+    train_iter=None,
+    round_num=None,
+    count=None
 ):
     """
     Sample corrective click on an object, in a frame
@@ -183,19 +181,27 @@ def _get_corrective_clicks(
     Args:
         pred_mask: H,W predicted segmentation mask of the object
         gt_mask: H,W ground truth segmentation mask of the object
-        semantic_map: H,W ground truth semantic map of the frame
+        panoptic_map: H,W ground truth panoptic map of the frame
         padding_mask: H,W padding mask applied during data-loading
         timestamp: timestamp of current click (int)
         max_num_points: maximum #clicks to sample (int, default: 2)
     """
     gt_mask = np.asarray(gt_mask, dtype = np.bool_)
     pred_mask = np.asarray(pred_mask, dtype = np.bool_)
+
+    if visualize:
+        np.save(os.path.join(visualize_dir, f"gt_mask_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), gt_mask)
+        np.save(os.path.join(visualize_dir, f"pred_mask_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), pred_mask)
     
     # negative error map - g.t. foreground missed by the prediction
     fn_mask =  np.logical_and(gt_mask, np.logical_not(pred_mask))
     
     # positive error map - g.t. background covered by the prediction
     fp_mask =  np.logical_and(np.logical_not(gt_mask), pred_mask)
+
+    if visualize:
+        np.save(os.path.join(visualize_dir, f"fn_mask_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), fn_mask)
+        np.save(os.path.join(visualize_dir, f"fp_mask_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), fp_mask)
     
     # distance transform to find the center of the error region
     fn_mask = np.pad(fn_mask, ((1, 1), (1, 1)), 'constant')
@@ -233,8 +239,12 @@ def _get_corrective_clicks(
             coords = sample_locations[index]
 
             # ID of the object in the g.t. mask at the sampled click location
-            obj_indx = semantic_map[coords[0]][coords[1]] - 1
+            obj_indx = panoptic_map[coords[0]][coords[1]] - 1
             points_coords.append([coords[0], coords[1], obj_indx, timestamp])   # [y,x,i,t]
             timestamp+=1
 
+    if visualize:
+        np.save(os.path.join(visualize_dir, f"inner_mask_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), inner_mask)
+        np.save(os.path.join(visualize_dir, f"points_coords_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), points_coords)
+    
     return points_coords

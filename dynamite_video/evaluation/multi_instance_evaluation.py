@@ -99,14 +99,14 @@ def evaluate(cfg,
                     propagation_start_time = time.perf_counter()
                     
                     clip_inputs = manager.extract_clip(indices)
-                    # torch.save(clip_inputs, os.path.join(visualize_dir, f"clip_inputs_{indices}.pth"))
+                    torch.save(clip_inputs, os.path.join(visualize_dir, f"clip_inputs_{indices}.pth"))
                     
                     binary_pred_masks, queries, num_queries_per_object = predictor.get_prediction([clip_inputs], indices)    # T,N,H,W
-                    # torch.save(binary_pred_masks, os.path.join(visualize_dir, f"binary_pred_masks_{indices}.pth"))
+                    torch.save(binary_pred_masks, os.path.join(visualize_dir, f"binary_pred_masks_{indices}.pth"))
                     
                     propagation_end_time = time.perf_counter()
-                    panoptic_pred_masks = manager.store_prediction(binary_pred_masks, queries, num_queries_per_object)
-                    # torch.save(panoptic_pred_masks, os.path.join(visualize_dir, f"panoptic_pred_masks_{indices}.pth"))
+                    panoptic_pred_masks = manager.store_prediction(binary_pred_masks, queries)
+                    torch.save(panoptic_pred_masks, os.path.join(visualize_dir, f"panoptic_pred_masks_{indices}.pth"))
                     
                     prop_time+= (propagation_end_time - propagation_start_time)
                 propagation_time.append(prop_time)
