@@ -4,6 +4,10 @@ import random
 import torch
 import os
 
+from PIL import Image
+import matplotlib.pyplot as plt
+from dynamite_video.evaluation.eval_utils import color_map
+
 from collections import defaultdict
 from einops import repeat, rearrange
 from torch import nn
@@ -237,19 +241,20 @@ class DynamiteInteractiveTransformer(nn.Module):
             memory_pe[-1] = memory_pe[-1].permute(2, 0, 1)  # TxDxhw -> hwxTxD
             memory[-1] = memory[-1].permute(2, 0, 1)        # TxDxhw -> hwxTxD
 
-        if visualize:
-            visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_memory")
-            os.makedirs(visualize_dir, exist_ok=True)
-            torch.save(memory,      os.path.join(visualize_dir, f"memory_iter_{train_iter}.pth"))
-            torch.save(memory_pe,   os.path.join(visualize_dir, f"memory_pe_iter_{train_iter}.pth"))
-        
+        # if visualize:
+        #     visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_memory")
+        #     os.makedirs(visualize_dir, exist_ok=True)
+        #     torch.save(memory,      os.path.join(visualize_dir, f"memory_iter_{train_iter}.pth"))
+        #     torch.save(memory_pe,   os.path.join(visualize_dir, f"memory_pe_iter_{train_iter}.pth"))
         
         # iterative training routine
         if self.training:
 
+            iou_tracking = []
             # number of corrective iterations
             num_rounds = self.max_num_rounds    # TODO: #random.randint(0, self.max_num_rounds)
 
+            i = 0
             for i in range(num_rounds):
 
                 # generate current queries, transformer forward pass
@@ -263,16 +268,17 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                                    num_clicks_per_object,
                                                                                    max_timestamp,
                                                                                    visualize=visualize, 
-                                                                                   train_iter=train_iter)
+                                                                                   train_iter=train_iter,
+                                                                                   round_num=i)
                 
                 # segmentation mask from prediction logits
-                processed_results = self.process_results(data, images, prev_output, len(num_clicks_per_object[0]), num_queries_per_object, visualize, train_iter, i)
+                processed_results, round_iou = self.process_results(data, images, prev_output, len(num_clicks_per_object[0]), num_queries_per_object, visualize, train_iter, i)
 
                 if visualize:
+                    iou_tracking.append(round_iou)
                     visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_clicker")
                     os.makedirs(visualize_dir, exist_ok=True)
-                else:
-                    visualize_dir = None
+                
                 # sample corrective clicks
                 num_clicks_per_object, fg_coords, bg_coords, max_timestamp = get_next_clicks(data, 
                                                                                              processed_results, 
@@ -283,7 +289,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                                              iou_threshold=self.iou_threshold,
                                                                                              refine_strategy=self.refine_strategy,
                                                                                              visualize=visualize, 
-                                                                                             visualize_dir=visualize_dir,
+                                                                                             visualize_dir=visualize_dir if visualize else None,
                                                                                              train_iter=train_iter, round_num=i)
             
             # generate current queries, transformer forward pass
@@ -297,7 +303,14 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                            num_clicks_per_object, 
                                                                            max_timestamp,
                                                                            visualize=visualize, 
-                                                                           train_iter=train_iter)
+                                                                           train_iter=train_iter,
+                                                                           round_num=i)
+            
+            if visualize:
+                # segmentation mask from prediction logits
+                processed_results, round_iou = self.process_results(data, images, outputs, len(num_clicks_per_object[0]), num_queries_per_object, visualize, train_iter, i)
+                iou_tracking.append(round_iou)
+                torch.save(iou_tracking, os.path.join(visualize_dir_curr_iter, f"round_ious.pth"))
             
             return outputs, num_queries_per_object, None
         
@@ -320,7 +333,8 @@ class DynamiteInteractiveTransformer(nn.Module):
             self, 
             output, 
             mask_features, 
-            attn_mask_target_size
+            attn_mask_target_size,
+            orig_clicks=None
     ):
         """
         Obtain predicted mask from decoder output and mask features.
@@ -340,9 +354,19 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         attn_mask = F.interpolate(outputs_mask, size=attn_mask_target_size, mode="bilinear", align_corners=False)   # TxQxhxw
 
-        # boolean attention mask - (T*num_heads)xQx(hw)
-        attn_mask = (attn_mask.sigmoid() < 0.5).repeat(self.num_heads,1,1,1).flatten(2).detach()
-
+        # boolean attention mask
+        attn_mask = (attn_mask.sigmoid() < 0.5)
+        
+        if orig_clicks is not None:
+            # do not mask for the learnable queries
+            T,Q,H,W = outputs_mask.shape
+            for fr_idx in range(T):
+                for i in range(Q):
+                    if i < len(orig_clicks) and fr_idx != orig_clicks[i][3]:
+                        attn_mask[fr_idx][i] = False
+        
+        # (T*num_heads)xQx(hw)
+        attn_mask = attn_mask.repeat(self.num_heads,1,1,1).flatten(2).detach()
         return outputs_mask, attn_mask
       
     
@@ -358,17 +382,18 @@ class DynamiteInteractiveTransformer(nn.Module):
             num_clicks_per_object, 
             max_timestamp,
             visualize=None,
-            train_iter=None
+            train_iter=None,
+            round_num=None
     ):
         """
         Prepare query descriptors and forward pass through Transformer
         """
         
-        _, T, _ = memory[0].shape           # hw, T, D
-        _, C, H, W = mask_features.shape
+        T, C, H, W = mask_features.shape
         device = multi_scale_features[0][0].device
         height = 4*H
         width = 4*W
+        
         visualize_dir_curr_iter = os.path.join(self.output_dir, str(train_iter))
         
         # generate query descriptors for input clicks
@@ -390,15 +415,6 @@ class DynamiteInteractiveTransformer(nn.Module):
             pos_coord_embed = self.ca_qpos_sine_proj(pos_coord_embed.to(query_embed.dtype)) # QxTxD
             query_embed = query_embed + pos_coord_embed                                     # QxTxD
 
-        if visualize:
-            visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_query")
-            os.makedirs(visualize_dir, exist_ok=True)
-            torch.save(descriptors, os.path.join(visualize_dir, f"descriptors_raw_iter_{train_iter}.pth"))
-            torch.save(query_embed, os.path.join(visualize_dir, f"query_embed_raw_iter_{train_iter}.pth"))
-            torch.save(num_queries_per_object, os.path.join(visualize_dir, f"num_queries_per_object_raw_iter_{train_iter}.pth"))
-            torch.save(normalized_clicks, os.path.join(visualize_dir, f"normalized_click_raw_iter_{train_iter}.pth"))
-
-        
         # static background queries
         if self.use_static_bg_queries:
             static_bg_queries = repeat(self.static_bg_query, "Bg C -> T Bg C", T=T)
@@ -409,22 +425,18 @@ class DynamiteInteractiveTransformer(nn.Module):
             num_queries_per_object[-1] += static_bg_queries.shape[1]
             # add proxy bg clicks to the click
             normalized_clicks = torch.cat([normalized_clicks, torch.full((T, self.num_static_bg_queries, 5), -1.0, device=normalized_clicks.device, dtype=normalized_clicks.dtype)], dim=1)
-
-            if visualize:
-                torch.save(descriptors, os.path.join(visualize_dir, f"descriptors_w_static_bg_iter_{train_iter}.pth"))
-                torch.save(query_embed, os.path.join(visualize_dir, f"query_embed_w_static_bg_iter_{train_iter}.pth"))
-                torch.save(num_queries_per_object, os.path.join(visualize_dir, f"num_queries_per_object_w_static_bg_iter_{train_iter}.pth"))
-                torch.save(normalized_clicks, os.path.join(visualize_dir, f"normalized_click_w_static_bg_iter_{train_iter}.pth"))
         
         # if there's no bg query, remove from record
         if num_queries_per_object[-1] == 0:
             num_queries_per_object = num_queries_per_object[:-1]
 
         if visualize:
-            torch.save(descriptors, os.path.join(visualize_dir, f"descriptors_iter_{train_iter}.pth"))
-            torch.save(query_embed, os.path.join(visualize_dir, f"query_embed_iter_{train_iter}.pth"))
-            torch.save(num_queries_per_object, os.path.join(visualize_dir, f"num_queries_per_object_iter_{train_iter}.pth"))
-            torch.save(normalized_clicks, os.path.join(visualize_dir, f"normalized_click_iter_{train_iter}.pth"))
+            visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_query")
+            os.makedirs(visualize_dir, exist_ok=True)
+            torch.save(descriptors, os.path.join(visualize_dir, f"descriptors_round_{round_num}_iter_{train_iter}.pth"))
+            torch.save(query_embed, os.path.join(visualize_dir, f"query_embed_round_{round_num}_iter_{train_iter}.pth"))
+            torch.save(num_queries_per_object, os.path.join(visualize_dir, f"num_queries_per_object_round_{round_num}_iter_{train_iter}.pth"))
+            torch.save(normalized_clicks, os.path.join(visualize_dir, f"normalized_click_round_{round_num}_iter_{train_iter}.pth"))
         
         
         # total num queries per object across T frames
@@ -437,8 +449,8 @@ class DynamiteInteractiveTransformer(nn.Module):
             inst_batched_clicks = self.get_object_batched_clicks(normalized_clicks.permute(1,0,2), num_queries_per_object)
             
             if visualize:
-                torch.save(inst_batched_clicks, os.path.join(visualize_dir, f"inst_batched_clicks_iter_{train_iter}.pth"))
-                torch.save(inst_batched_query_embed, os.path.join(visualize_dir, f"inst_batched_query_embed_raw_iter_{train_iter}.pth"))
+                torch.save(inst_batched_clicks, os.path.join(visualize_dir, f"inst_batched_clicks_round_{round_num}_iter_{train_iter}.pth"))
+                torch.save(inst_batched_query_embed, os.path.join(visualize_dir, f"inst_batched_query_embed_raw_round_{round_num}_iter_{train_iter}.pth"))
             
             pos_coord_embed = get_spatiotemporal_embeddings(inst_batched_clicks[:,:,[0,1,3]],
                                                             self.positional_embeddings,
@@ -447,20 +459,22 @@ class DynamiteInteractiveTransformer(nn.Module):
             inst_batched_query_embed = inst_batched_query_embed + pos_coord_embed                        # Q'xNxD
 
             if visualize:
-                torch.save(inst_batched_query_embed, os.path.join(visualize_dir, f"inst_batched_query_embed_iter_{train_iter}.pth"))
+                torch.save(inst_batched_query_embed, os.path.join(visualize_dir, f"inst_batched_query_embed_round_{round_num}_iter_{train_iter}.pth"))
 
         
         # pre-encoder prediction
         output = self.queries_nonlinear_projection(descriptors).permute(1,0,2)
         outputs_mask, attn_mask = self.forward_prediction_heads(output, 
                                                                 mask_features, 
-                                                                attn_mask_target_size=size_list[0])
+                                                                attn_mask_target_size=size_list[0],
+                                                                orig_clicks=fg_coords+bg_coords)
+        
         if visualize:
             visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_pre_encoder")
             os.makedirs(visualize_dir, exist_ok=True)
-            torch.save(output,          os.path.join(visualize_dir, f"input_query_pre_enc_iter_{train_iter}.pth"))
-            torch.save(outputs_mask,    os.path.join(visualize_dir, f"output_pred_pre_enc_iter_{train_iter}.pth"))
-            torch.save(attn_mask,       os.path.join(visualize_dir, f"attn_mask_pre_enc_iter_{train_iter}.pth"))
+            torch.save(output,          os.path.join(visualize_dir, f"input_query_pre_enc_round_{round_num}_iter_{train_iter}.pth"))
+            torch.save(outputs_mask,    os.path.join(visualize_dir, f"output_pred_pre_enc_round_{round_num}_iter_{train_iter}.pth"))
+            torch.save(attn_mask,       os.path.join(visualize_dir, f"attn_mask_pre_enc_round_{round_num}_iter_{train_iter}.pth"))
         
         # store predicted mask after each layer, used in auxiliary loss
         predictions_mask = []
@@ -471,16 +485,12 @@ class DynamiteInteractiveTransformer(nn.Module):
             level_index = i % self.num_feature_levels
             attn_mask[torch.where(attn_mask.sum(-1) == attn_mask.shape[-1])] = False
             
-            
             #### CROSS-ATTENTION       
             if visualize:
                 visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_encoder_iqca")
                 os.makedirs(visualize_dir, exist_ok=True)
-                torch.save(output,                  os.path.join(visualize_dir, f"input_query_enc_layer_{i}_iter_{train_iter}.pth"))
-                torch.save(query_embed,             os.path.join(visualize_dir, f"input_query_pe_enc_layer_{i}_iter_{train_iter}.pth"))
-                torch.save(memory[level_index],     os.path.join(visualize_dir, f"input_memory_enc_layer_{i}_iter_{train_iter}.pth"))
-                torch.save(memory_pe[level_index],  os.path.join(visualize_dir, f"input_memory_pe_enc_layer_{i}_iter_{train_iter}.pth"))
-                torch.save(attn_mask,               os.path.join(visualize_dir, f"input_attn_mask_enc_layer_{i}_iter_{train_iter}.pth"))            
+                torch.save(output,                  os.path.join(visualize_dir, f"input_query_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
+                torch.save(attn_mask,               os.path.join(visualize_dir, f"input_attn_mask_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))            
             # cross-attention between image features and queries in each frame
             output, weights = self.encoder.cross_attention_layers[i](tgt=output,            # QxTxD
                                                             memory=memory[level_index],     # (hw)xTxD
@@ -490,18 +500,15 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                             query_pos=query_embed           # QxTxD pos emb for query
                                                         )
             if visualize:
-                visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_encoder_iqca")
-                torch.save(output,      os.path.join(visualize_dir, f"output_query_enc_layer_{i}_iter_{train_iter}.pth"))
-                torch.save(weights,     os.path.join(visualize_dir, f"attn_weights_enc_layer_{i}_iter_{train_iter}.pth"))
-                
+                torch.save(output,      os.path.join(visualize_dir, f"output_query_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
+                torch.save(weights,     os.path.join(visualize_dir, f"attn_weights_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
                 with torch.no_grad():
                     outputs_mask_inspection, _ = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
-                torch.save(outputs_mask_inspection, os.path.join(visualize_dir, f"mask_inspection_enc_layer_{i}_iter_{train_iter}.pth"))
+                torch.save(outputs_mask_inspection, os.path.join(visualize_dir, f"mask_inspection_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
         
 
             
             #### VANILLA QQCA
-            
             # query-query cross-attention
             if self.use_qqca == "vanilla":
                 Q,T,D = output.shape
@@ -513,13 +520,11 @@ class DynamiteInteractiveTransformer(nn.Module):
                 if visualize:
                     visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_encoder_vanilla_qqca")
                     os.makedirs(visualize_dir, exist_ok=True)
-                    torch.save(output,               os.path.join(visualize_dir, f"output_query_enc_layer_{i}_iter_{train_iter}.pth"))
-                    torch.save(weights,              os.path.join(visualize_dir, f"attn_weights_enc_layer_{i}_iter_{train_iter}.pth"))
+                    torch.save(output,               os.path.join(visualize_dir, f"output_query_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
+                    torch.save(weights,              os.path.join(visualize_dir, f"attn_weights_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
                     with torch.no_grad():
                         outputs_mask_inspection, _ = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
-                    torch.save(outputs_mask_inspection, os.path.join(visualize_dir, f"mask_inspection_enc_layer_{i}_iter_{train_iter}.pth"))
-            
-            
+                    torch.save(outputs_mask_inspection, os.path.join(visualize_dir, f"mask_inspection_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
             
             #### MASKED QQCA
             if self.use_qqca == "masked":
@@ -528,9 +533,9 @@ class DynamiteInteractiveTransformer(nn.Module):
                 if visualize:
                     visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_encoder_masked_qqca")
                     os.makedirs(visualize_dir, exist_ok=True)
-                    torch.save(inst_batched_query,               os.path.join(visualize_dir, f"inst_batched_query_enc_layer_{i}_iter_{train_iter}.pth"))
-                    torch.save(inst_batched_query_embed,         os.path.join(visualize_dir, f"inst_batched_query_embed_enc_layer_{i}_iter_{train_iter}.pth"))
-                    torch.save(qqca_mask,                        os.path.join(visualize_dir, f"qqca_mask_enc_layer_{i}_iter_{train_iter}.pth"))
+                    torch.save(inst_batched_query,               os.path.join(visualize_dir, f"inst_batched_query_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
+                    torch.save(inst_batched_query_embed,         os.path.join(visualize_dir, f"inst_batched_query_embed_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
+                    torch.save(qqca_mask,                        os.path.join(visualize_dir, f"qqca_mask_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
                 
                 padded_output, weights = self.encoder.query_query_cross_attention_layers[i](inst_batched_query,
                                                                                         tgt_mask=None,
@@ -539,36 +544,32 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                                     )
                 output = self.get_frame_batched_query(output, padded_output, num_queries_per_object)
                 if visualize:
-                    torch.save(padded_output,        os.path.join(visualize_dir, f"inst_batched_query_output_enc_layer_{i}_iter_{train_iter}.pth"))
-                    torch.save(weights,              os.path.join(visualize_dir, f"attn_weights_enc_layer_{i}_iter_{train_iter}.pth"))
-                    torch.save(output,               os.path.join(visualize_dir, f"output_query_enc_layer_{i}_iter_{train_iter}.pth"))
+                    torch.save(padded_output,        os.path.join(visualize_dir, f"inst_batched_query_output_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
+                    torch.save(weights,              os.path.join(visualize_dir, f"attn_weights_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
+                    torch.save(output,               os.path.join(visualize_dir, f"output_query_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
                     with torch.no_grad():
                         outputs_mask_inspection, _ = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
-                    torch.save(outputs_mask_inspection, os.path.join(visualize_dir, f"mask_inspection_qqca_enc_layer_{i}_iter_{train_iter}.pth"))
+                    torch.save(outputs_mask_inspection, os.path.join(visualize_dir, f"mask_inspection_qqca_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
             
 
-            #### SELF-ATTENTION
-            if visualize:
-                visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_encoder_self_attn")
-                os.makedirs(visualize_dir, exist_ok=True)
-                torch.save(output,                  os.path.join(visualize_dir, f"input_query_enc_layer_{i}_iter_{train_iter}.pth"))
-                torch.save(query_embed,             os.path.join(visualize_dir, f"input_query_pe_enc_layer_{i}_iter_{train_iter}.pth"))
             
+            #### SELF-ATTENTION
             # self-attention between queries within frame
             output, weights = self.encoder.self_attention_layers[i](output, 
                                                            tgt_mask=None, 
                                                            tgt_key_padding_mask=None,
                                                            query_pos=query_embed)
             if visualize:
-                torch.save(output,  os.path.join(visualize_dir, f"output_query_enc_layer_{i}_iter_{train_iter}.pth"))
-                torch.save(weights, os.path.join(visualize_dir, f"attn_weights_enc_layer_{i}_iter_{train_iter}.pth"))
+                visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_encoder_self_attn")
+                os.makedirs(visualize_dir, exist_ok=True)
+                torch.save(output,  os.path.join(visualize_dir, f"output_query_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
+                torch.save(weights, os.path.join(visualize_dir, f"attn_weights_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
                 with torch.no_grad():
                     outputs_mask_inspection, _ = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
-                torch.save(outputs_mask_inspection, os.path.join(visualize_dir, f"mask_inspection_sa_enc_layer_{i}_iter_{train_iter}.pth"))
+                torch.save(outputs_mask_inspection, os.path.join(visualize_dir, f"mask_inspection_sa_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
             
             
             #### FFN
-            
             output = self.encoder.ffn_layers[i](output)
 
             outputs_mask, attn_mask = self.forward_prediction_heads(output, 
@@ -577,15 +578,14 @@ class DynamiteInteractiveTransformer(nn.Module):
             if visualize:
                 visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_encoder_ffn")
                 os.makedirs(visualize_dir, exist_ok=True)
-                torch.save(output,                  os.path.join(visualize_dir, f"output_query_enc_layer_{i}_iter_{train_iter}.pth"))
-                torch.save(outputs_mask,            os.path.join(visualize_dir, f"outputs_mask_enc_layer_{i}_iter_{train_iter}.pth"))
-                torch.save(attn_mask,               os.path.join(visualize_dir, f"attn_mask_enc_layer_{i}_{train_iter}.pth"))
+                torch.save(output,                  os.path.join(visualize_dir, f"output_query_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
+                torch.save(outputs_mask,            os.path.join(visualize_dir, f"outputs_mask_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
+                torch.save(attn_mask,               os.path.join(visualize_dir, f"attn_mask_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
 
             predictions_mask.append(outputs_mask)
 
         
         ### DECODER
-        
         if self.use_decoder:
             if self.dec_scale_factor > 1:
                 scale_factor = self.dec_scale_factor
@@ -599,11 +599,9 @@ class DynamiteInteractiveTransformer(nn.Module):
             if visualize:
                 visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_decoder")
                 os.makedirs(visualize_dir, exist_ok=True)
-                torch.save(output,          os.path.join(visualize_dir, f"query_decoder_iter_{train_iter}.pth"))
-                torch.save(mask_features,   os.path.join(visualize_dir, f"mask_features_decoder_iter_{train_iter}.pth"))
-                torch.save(weights,         os.path.join(visualize_dir, f"attn_weights_decoder_iter_{train_iter}.pth"))
-                torch.save(outputs_mask,    os.path.join(visualize_dir, f"outputs_mask_decoder_iter_{train_iter}.pth"))
-                torch.save(attn_mask,       os.path.join(visualize_dir, f"attn_mask_decoder_{train_iter}.pth"))
+                torch.save(mask_features,   os.path.join(visualize_dir, f"mask_features_decoder_round_{round_num}_iter_{train_iter}.pth"))
+                torch.save(weights,         os.path.join(visualize_dir, f"attn_weights_decoder_round_{round_num}_iter_{train_iter}.pth"))
+                torch.save(outputs_mask,    os.path.join(visualize_dir, f"outputs_mask_decoder_round_{round_num}_iter_{train_iter}.pth"))
             
             predictions_mask.append(outputs_mask)
 
@@ -766,30 +764,31 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         # padding mask
         padding_mask = torch.logical_not(data["padding_mask"]).to(mask_pred_results.device)
-        ignore_masks = torch.logical_not(torch.asarray(data["ignore_masks"])).to(torch.uint8).to(mask_pred_results.device)
-
-
+        
         processed_results = []
-        for mask_pred_per_image, fr_ignore_mask in zip(mask_pred_results, ignore_masks):
+        for mask_pred_per_image in mask_pred_results:
             
-            processed_r = retry_if_cuda_oom(self.interactive_object_inference)(mask_pred_per_image * padding_mask * fr_ignore_mask,
+            processed_r = retry_if_cuda_oom(self.interactive_object_inference)(mask_pred_per_image * padding_mask,
                                                                                num_targets,
                                                                                num_queries_per_object)
             
-            processed_results.append(processed_r * padding_mask * fr_ignore_mask)
+            processed_results.append(processed_r * padding_mask)
 
         
         visualize_dir_curr_iter = os.path.join(self.output_dir, str(train_iter))
+        
         if visualize:
             visualize_dir = os.path.join(visualize_dir_curr_iter, "process_results")
             os.makedirs(visualize_dir, exist_ok=True)
             torch.save(mask_pred_results,       os.path.join(visualize_dir, f"upsampled_predictions_round_{round_num}_iter_{train_iter}.pth"))
             torch.save(padding_mask,            os.path.join(visualize_dir, f"padding_mask_round_{round_num}_iter_{train_iter}.pth"))
-            torch.save(ignore_masks,            os.path.join(visualize_dir, f"ignore_masks_round_{round_num}_iter_{train_iter}.pth"))
-            torch.save(num_queries_per_object,  os.path.join(visualize_dir, f"num_queries_per_object_round_{round_num}_iter_{train_iter}.pth"))
             torch.save(processed_results,       os.path.join(visualize_dir, f"processed_results_round_{round_num}_iter_{train_iter}.pth"))
-        
-        return processed_results
+
+            # save results
+            round_ious = self.save_results(data, processed_results, train_iter, round_num)
+            return processed_results, round_ious
+    
+        return processed_results, None
 
     
     def interactive_object_inference(
@@ -815,23 +814,6 @@ class DynamiteInteractiveTransformer(nn.Module):
                 temp_out.append(torch.max(m, dim=0).values)
         
         mask_pred = torch.stack(temp_out)       # (N+1)xHxW
-        
-        # soft-aggregation
-        # prob = torch.cat([torch.prod(1-mask_pred, dim=0, keepdim=True), mask_pred], 0).clamp(1e-7, 1-1e-7)
-        # logits = torch.log((prob /(1-prob)))
-        # logits = F.softmax(logits, dim=0)[1:]
-        # binary = (logits > 0.5).to(torch.uint8)
-        
-        # binary_masks = torch.zeros((len(queries_per_object),H,W), dtype=torch.uint8)
-        # c = 0
-        # for i, q in enumerate(queries_per_object):
-        #     if q>0:
-        #         binary_masks[i][torch.where(binary[c]==1)] = 1
-        #         c += 1
-            
-        # return binary_masks.to(mask_pred.device)
-        
-        # mask_pred = torch.argmax(mask_pred,0)
 
         mask_pred = torch.argmax(mask_pred,0)
 
@@ -841,3 +823,71 @@ class DynamiteInteractiveTransformer(nn.Module):
         mask_pred = torch.stack(m)
      
         return mask_pred
+    
+
+    
+    # debug
+    def save_results(self, data, processed_results, train_iter, round_num):
+
+        visualize_dir = os.path.join(self.output_dir, str(train_iter), "training_predictions")
+        os.makedirs(visualize_dir, exist_ok=True)
+
+        # gt
+        gt = data["binary_masks"].detach().cpu()
+        T,N,H,W = gt.shape
+        # save gt only once
+        if round_num == 0:
+            fig, ax = plt.subplots(N+1,T,figsize=(T*7, N*3))
+            for t in range(T):
+                pano = torch.zeros((H,W), dtype=torch.uint8)
+                for n in range(N):
+                    ax[n,t].imshow(gt[t][n], cmap='gray')
+                    ax[n,t].axis("off")
+                    ax[n,t].set_title(f"GT Frame {t}, Obj {n+1}")
+                    pano[torch.where(gt[t][n]==1)] = n+1
+                
+                pano = Image.fromarray(pano.numpy())
+                pano.putpalette(color_map)
+                ax[-1,t].imshow(pano)
+                ax[-1,t].axis("off")
+                ax[-1,t].set_title("GT panoptic map")
+            plt.savefig(os.path.join(visualize_dir, f"gt_mask_round_{round_num}_iter_{train_iter}.png"), bbox_inches='tight', pad_inches=0.2)
+            plt.close()
+        
+        # save pred
+        round_ious = []
+        pred = torch.stack(processed_results).detach().cpu()
+        fig, ax = plt.subplots(N+1,T,figsize=(T*7, N*3))
+        for t in range(T):
+            pano = torch.zeros((H,W), dtype=torch.uint8)
+            fr_iou = []
+            for n in range(N):
+                g = gt[t][n]
+                p = pred[t][n].detach().cpu()
+                ax[n,t].imshow(p, cmap='gray')
+                ax[n,t].axis("off")
+
+                iou = compute_iou(g,p)
+                fr_iou.append(iou)
+                ax[n,t].set_title(f"Pred Frame {t}, Obj {n+1}, IoU: {iou}")
+                pano[torch.where(p==1)] = n+1
+            
+            pano = Image.fromarray(pano.numpy())
+            pano.putpalette(color_map)
+            ax[-1,t].imshow(pano)
+            ax[-1,t].axis("off")
+            avg_iou = np.asarray(fr_iou).mean()
+            ax[-1,t].set_title(f"Predicted panoptic map, IoU: {avg_iou}")
+            round_ious.append(avg_iou)
+        plt.savefig(os.path.join(visualize_dir, f"pred_mask_round_{round_num}_iter_{train_iter}.png"), bbox_inches='tight', pad_inches=0.2)
+        plt.close()
+
+        return round_ious
+
+def compute_iou(mask1, mask2, binary=True):
+    if binary:
+        intersection = np.logical_and(mask1, mask2).sum()
+        union = np.logical_or(mask1, mask2).sum()
+        if union == 0:
+            return 1.
+        return round(float(intersection/union),3)

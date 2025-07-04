@@ -128,9 +128,10 @@ class DynamiteModel(nn.Module):
 
         assert len(inputs) == 1, "Don't try more than one clip in a batch"
 
-        visualize_dir_curr_iter = os.path.join(self.output_dir, str(train_iter))
-        os.makedirs(visualize_dir_curr_iter)
-        
+        visualize_dir_curr_iter = None
+        if visualize:
+            visualize_dir_curr_iter = os.path.join(self.output_dir, str(train_iter))
+            os.makedirs(visualize_dir_curr_iter, exist_ok=True)        
         
         # extract resources from batch
         (images, 
@@ -152,8 +153,8 @@ class DynamiteModel(nn.Module):
                 visualize_dir = os.path.join(visualize_dir_curr_iter, "dynamite_model_forward")
                 os.makedirs(visualize_dir, exist_ok=True)
                 torch.save(inputs, os.path.join(visualize_dir, f"inputs_iter_{train_iter}.pth"))
-                torch.save(targets, os.path.join(visualize_dir, f"targets_iter_{train_iter}.pth"))
-                torch.save(features, os.path.join(visualize_dir, f"features_iter_{train_iter}.pth"))
+                # torch.save(targets, os.path.join(visualize_dir, f"targets_iter_{train_iter}.pth"))
+                # torch.save(features, os.path.join(visualize_dir, f"features_iter_{train_iter}.pth"))
             
             # forward to pixel decoder and interactive transformer
             outputs, num_queries_per_object, _ = self.sem_seg_head(inputs[0], 
@@ -168,7 +169,8 @@ class DynamiteModel(nn.Module):
                                                             )
             
             # loss computation
-            losses = self.criterion(outputs, targets, num_queries_per_object, visualize=visualize, train_iter=train_iter)
+            losses = self.criterion(outputs, targets, num_queries_per_object, 
+                                    visualize=visualize, visualize_dir=visualize_dir_curr_iter, train_iter=train_iter)
             for k in list(losses.keys()):
                 if k in self.criterion.weight_dict:
                     losses[k] *= self.criterion.weight_dict[k]

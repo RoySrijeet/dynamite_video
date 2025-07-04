@@ -49,7 +49,7 @@ class SetFinalCriterion(nn.Module):
             targets,
             num_masks, 
             num_queries_per_object,
-            visualize=False, train_iter=None,
+            visualize=False, visualize_dir=None, train_iter=None,
     ):
         """
         Compute the losses related to the masks: the focal loss and the dice loss.
@@ -63,16 +63,7 @@ class SetFinalCriterion(nn.Module):
 
         # ground truth binary masks
         gt_masks = [t["binary_masks"] for t in targets]
-        gt_masks = torch.stack(gt_masks).to(dtype=torch.float16)  # T,N,H,W
-
-        # ignore masks
-        ignore_masks = [t["ignore_masks"] for t in targets]
-        ignore_masks = torch.stack(ignore_masks).to(dtype=torch.float16)
-        ignore_masks = ignore_masks[:, None]                      # T,1,H,W
-        
-        # downsample ignore masks to match the resolution of predicted masks
-        ignore_masks_ds = F.interpolate(ignore_masks, scale_factor=0.25, mode='bilinear', align_corners=False)
-        ignore_masks_ds = (ignore_masks_ds > 0.5).detach()        # T,1,H,W  
+        gt_masks = torch.cat(gt_masks, dim=0).to(dtype=torch.float16).unsqueeze(1)  # T*N,1,H,W
 
         # Accumulate mask for each object (as there might be multiple clicks per object) and background
         new_outputs = []
@@ -85,43 +76,37 @@ class SetFinalCriterion(nn.Module):
             new_outputs.append(torch.stack(temp_out))
         
         # predicted masks at 1/4th resolution
-        pred_masks = torch.stack(new_outputs)    # T,N,h,w
-
-        if visualize:
-            import os
-            visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/loss"
-            torch.save(pred_masks, os.path.join(visualize_dir, f"pred_masks_iter_{train_iter}.pth"))
-            torch.save(gt_masks, os.path.join(visualize_dir, f"gt_masks_iter_{train_iter}.pth"))
-            torch.save(ignore_masks, os.path.join(visualize_dir, f"ignore_masks_iter_{train_iter}.pth"))
-            torch.save(ignore_masks_ds, os.path.join(visualize_dir, f"ignore_masks_ds_iter_{train_iter}.pth"))
+        pred_masks = torch.cat(new_outputs, dim=0).unsqueeze(1)    # T*N,1,h,w
 
         with torch.no_grad():
             
-            # concatenate ignore mask to predicted masks - T,(N+1),h,w
-            concat_src_w_ignore = torch.cat((pred_masks, ignore_masks_ds), dim=1)
-            
-            # sample PointRend points from predicted masks
-            # Behind the scenes:
+            # sample PointRend points from predicted masks. Behind the scenes:
             # 1. Sample P points from the input [T,(N+1),h,w] mask logits. This produces a (T,P,2) tensor, 
             # where P = num_points * oversample_ratio
             # 2. Find the predicted logits at these locations. This produces a [T,(N+1),P] tensor of pred logits
             # 3. Compute uncertainty of the sampled predicted logits. Uncertainty is measured by the L1 distance 
             # between 0.0 and the logit (if raw prediction is 0.75, uncertainty = -0.75)
-            # 4. Points sampled from ignore mask are used as a filter on the sampled prediction logits and ignored
-            # points are assigned very low uncertainty
-            # 5. Out of the P points, most uncertain (ß * p) points are considered, where ß = importance sampling 
+            # 4. Out of the P points, most uncertain (ß * p) points are considered, where ß = importance sampling 
             # ratio and p = num_points
-            # 6. (1 - ß) * p points are randomly sampled additionally
-            point_coords = get_uncertain_point_coords_with_randomness(concat_src_w_ignore,
+            # 5. (1 - ß) * p points are randomly sampled additionally
+            point_coords = get_uncertain_point_coords_with_randomness(pred_masks,
                                                                     lambda logits: calculate_uncertainty(logits),
                                                                     self.num_points,
                                                                     self.oversample_ratio,
                                                                     self.importance_sample_ratio,
                                                                 )   # T,num_points,2
             # get gt labels at the sampled locations
-            point_labels = point_sample(gt_masks, point_coords, align_corners=False)    # T,N,num_points
+            point_labels = point_sample(gt_masks, point_coords, align_corners=False).squeeze(1)    # T*N,num_points
 
-        point_logits = point_sample(pred_masks, point_coords, align_corners=False)      # T,N,num_points
+        if visualize:
+            import os
+            visualize_dir = os.path.join(visualize_dir, "loss")
+            os.makedirs(visualize_dir, exist_ok=True)
+            torch.save(pred_masks, os.path.join(visualize_dir, f"pred_masks_iter_{train_iter}.pth"))
+            torch.save(gt_masks, os.path.join(visualize_dir, f"gt_masks_iter_{train_iter}.pth"))
+            torch.save(point_coords, os.path.join(visualize_dir, f"pointrend_points_iter_{train_iter}.pth"))
+        
+        point_logits = point_sample(pred_masks, point_coords, align_corners=False).squeeze(1)      # T*N,num_points
 
         losses = {
             "loss_mask": sigmoid_ce_loss_jit(point_logits, point_labels, num_masks),
@@ -139,13 +124,14 @@ class SetFinalCriterion(nn.Module):
             targets, 
             num_masks, 
             num_queries_per_object, 
-            visualize=False, train_iter=None,
+            visualize=False, visualize_dir=None, train_iter=None,
     ):
         loss_map = {
             'masks': self.loss_masks,
         }
         assert loss in loss_map, f"do you really want to compute {loss} loss?"
-        return loss_map[loss](outputs, targets, num_masks, num_queries_per_object, visualize, train_iter)
+        return loss_map[loss](outputs, targets, num_masks, num_queries_per_object, 
+                              visualize, visualize_dir, train_iter)
 
     
     def forward(
@@ -153,7 +139,7 @@ class SetFinalCriterion(nn.Module):
             outputs, 
             targets,
             num_queries_per_object, 
-            visualize=False, train_iter=None,
+            visualize=False, visualize_dir=None, train_iter=None,
     ):
         """This performs the loss computation.
         Parameters:
@@ -164,7 +150,7 @@ class SetFinalCriterion(nn.Module):
              num_queries_per_object: num of queries per object, np.ndarray [T, N]
         """
         # Stack object binary masks and background masks and 
-        # Compute number of target boxes accross all nodes, for normalization purposes
+        # Compute number of target boxes accross all nodes for normalization purposes
         num_masks = 0
         for i,t in enumerate(targets):
             target_bg_mask = t['bg_masks']
@@ -180,7 +166,8 @@ class SetFinalCriterion(nn.Module):
         # Compute all the requested losses
         losses = {}
         for loss in self.losses:
-            losses.update(self.get_loss(loss, outputs, targets, num_masks, num_queries_per_object, visualize, train_iter))
+            losses.update(self.get_loss(loss, outputs, targets, num_masks, num_queries_per_object, 
+                                        visualize, visualize_dir, train_iter))
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
         if "aux_outputs" in outputs:

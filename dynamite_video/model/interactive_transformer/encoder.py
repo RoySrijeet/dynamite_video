@@ -15,7 +15,7 @@ class Encoder(nn.Module):
         self.self_attention_layers = nn.ModuleList()
         self.cross_attention_layers = nn.ModuleList()
         self.use_qqca = use_qqca
-        if self.use_qqca:
+        if self.use_qqca != "none":
             self.query_query_cross_attention_layers = nn.ModuleList()
         self.ffn_layers = nn.ModuleList()
 
@@ -38,7 +38,7 @@ class Encoder(nn.Module):
                 )
             )
             
-            if self.use_qqca:
+            if self.use_qqca != "none":
                 self.query_query_cross_attention_layers.append(
                     SelfAttentionLayer(
                         d_model=self.hidden_dim,

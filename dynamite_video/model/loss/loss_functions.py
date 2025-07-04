@@ -9,15 +9,13 @@ def dice_loss(
     """
     Compute the DICE loss, similar to generalized IOU for masks
     Args:
-        inputs: A float tensor of shape T,N,P with prediction logits
+        inputs: A float tensor of shape T*N,P with prediction logits
         targets: A float tensor with the same shape as inputs. Stores the binary
                  classification label for each element in inputs
                 (0 for the negative class and 1 for the positive class).
     """
-    T,N,P = inputs.shape 
-    inputs = inputs.reshape((T*N),P)
-    targets = targets.reshape((T*N),P)
     inputs = inputs.sigmoid()
+    inputs = inputs.flatten(1)
     numerator = 2 * (inputs * targets).sum(-1)
     denominator = inputs.sum(-1) + targets.sum(-1)
     loss = 1 - (numerator + 1) / (denominator + 1)
@@ -36,7 +34,7 @@ def sigmoid_ce_loss(
     ):
     """
     Args:
-        inputs: A float tensor of shape T,N,P with prediction logits
+        inputs: A float tensor of shape T*N,P with prediction logits
         targets: A float tensor with the same shape as inputs. Stores the binary
                  classification label for each element in inputs
                 (0 for the negative class and 1 for the positive class).
@@ -44,11 +42,10 @@ def sigmoid_ce_loss(
         Loss tensor
     """
     loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")    # T,N,P
-    # mean loss over all points in each binary mask
-    # sum over all masks in each frame
+    # mean loss over all points in each frame
     # sum over all frames
     # normalized by total num of frames
-    ret = loss.mean(2).sum(1).sum() / num_masks
+    return loss.mean(1).sum() / num_masks
     return ret
 
 
@@ -73,12 +70,12 @@ def calculate_uncertainty(logits):
         logits: tensor of shape T,(N+1),H,W where the last channel in second dimension is
                 the ignore mask
     """
-    logits, ignore_mask = logits.split((logits.size(1)-1, 1), 1)    # T,N,P & T,1,P
-    ignore_mask = ignore_mask.bool()                                # T,1,P
+    # logits, ignore_mask = logits.split((logits.size(1)-1, 1), 1)    # T,N,P & T,1,P
+    # ignore_mask = ignore_mask.bool()                                # T,1,P
 
     gt_class_logits = logits.clone()
     uncertainty = -(torch.abs(gt_class_logits))                     # T,1,P
 
     # ignore regions get low uncertainty
-    uncertainty = torch.where(ignore_mask, torch.full_like(uncertainty, -1e3), uncertainty)
+    # uncertainty = torch.where(ignore_mask, torch.full_like(uncertainty, -1e3), uncertainty)
     return uncertainty

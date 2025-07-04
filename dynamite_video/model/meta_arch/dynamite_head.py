@@ -99,17 +99,9 @@ class DynamiteHead(nn.Module):
             bg_coords: list of bg clicks in each video frame
             max_timestamp: list of max timestamp of clicks in each video frame
         """
-        
-        visualize_dir_curr_iter = os.path.join(self.output_dir, str(train_iter))
 
         # multi-scale features
         mask_features, _, multi_scale_features = self.pixel_decoder.forward_features(features)
-
-        if visualize:
-            visualize_dir = os.path.join(visualize_dir_curr_iter, "pixel_decoder")
-            os.makedirs(visualize_dir, exist_ok=True)
-            torch.save(mask_features, os.path.join(visualize_dir, f"mask_features_iter_{train_iter}.pth"))
-            torch.save(multi_scale_features, os.path.join(visualize_dir, f"multi_scale_features_iter_{train_iter}.pth"))
 
         # forward to interactive transformer
         predictions, num_queries_per_object, queries = self.interactive_transformer(data, 

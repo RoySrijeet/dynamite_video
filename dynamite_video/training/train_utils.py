@@ -12,7 +12,7 @@ def compute_iou(
     pred_masks,
     strategy,
     max_objects_to_refine=15,
-    iou_thres=0.90
+    iou_thres=0.95
 ):
     """
     Given the ground truth masks and prediction masks, compute object-wise IoU and return the 
@@ -92,24 +92,30 @@ def get_next_clicks(
 
     assert max_objects_to_refine >= 1
     # max_objects_to_refine = np.random.randint(1, max_objects_to_refine+1)
-    refine_objects, refine_frames = compute_iou(data["binary_masks"].detach().cpu(), torch.stack(pred_output).detach().cpu(), 
+    
+    clip_gt_masks = data["binary_masks"].detach().cpu()
+    clip_pred_masks = torch.stack(pred_output).detach().cpu()
+
+    refine_objects, refine_frames = compute_iou(clip_gt_masks, clip_pred_masks, 
                                 strategy=refine_strategy, max_objects_to_refine=max_objects_to_refine, iou_thres=iou_threshold)
     
     if refine_objects is None:
         return num_clicks_per_object, fg_coords, bg_coords, max_timestamp
     
-    # directly take data as input as they are already on the device
-    gt_masks_clip = [x.cpu().numpy() for x in data["binary_masks"]]        # [T,N,H,W]
-    pred_masks_clip = [x.cpu().numpy() for x in pred_output]               # [T,N,H,W]
-    panoptic_maps_clip = [x.cpu().numpy() for x in data['panoptic_masks']] # [T,H,W]
-    ignore_mask_clip = [x.cpu().numpy() for x in data['ignore_masks']]     # [T,H,W]
-    padding_mask_clip = data['padding_mask'].cpu().numpy()
+    clip_gt_masks = clip_gt_masks.numpy()
+    clip_pred_masks = clip_pred_masks.numpy()
+    clip_panoptic_masks = data['panoptic_masks'].detach().cpu().numpy()
+    padding_mask = np.logical_not(data['padding_mask'].cpu().numpy())
+
+    if visualize_dir:
+        torch.save(refine_objects, os.path.join(visualize_dir, f"refine_objects_round_{round_num}.pth"))
+        torch.save(refine_frames, os.path.join(visualize_dir, f"refine_frames_round_{round_num}.pth"))
 
     count = 0
     for obj_id, fr_idx in zip(refine_objects, refine_frames):
-        gt_masks = gt_masks_clip[fr_idx] * ignore_mask_clip[fr_idx] * padding_mask_clip
-        pred_masks = pred_masks_clip[fr_idx]
-        panoptic_map = panoptic_maps_clip[fr_idx]
+        gt_masks = clip_gt_masks[fr_idx] * padding_mask
+        pred_masks = clip_pred_masks[fr_idx]
+        panoptic_map = clip_panoptic_masks[fr_idx]
 
         # timestamp of the latest click so far
         timestamp = max(max_timestamp)
@@ -188,21 +194,13 @@ def _get_corrective_clicks(
     """
     gt_mask = np.asarray(gt_mask, dtype = np.bool_)
     pred_mask = np.asarray(pred_mask, dtype = np.bool_)
-
-    if visualize:
-        np.save(os.path.join(visualize_dir, f"gt_mask_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), gt_mask)
-        np.save(os.path.join(visualize_dir, f"pred_mask_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), pred_mask)
     
-    # negative error map - g.t. foreground missed by the prediction
+    # false negative error map - should have been part of the prediction, but is not
     fn_mask =  np.logical_and(gt_mask, np.logical_not(pred_mask))
     
-    # positive error map - g.t. background covered by the prediction
+    # false positive error map - should not have been part of the prediction, but is
     fp_mask =  np.logical_and(np.logical_not(gt_mask), pred_mask)
 
-    if visualize:
-        np.save(os.path.join(visualize_dir, f"fn_mask_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), fn_mask)
-        np.save(os.path.join(visualize_dir, f"fp_mask_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), fp_mask)
-    
     # distance transform to find the center of the error region
     fn_mask = np.pad(fn_mask, ((1, 1), (1, 1)), 'constant')
     fp_mask = np.pad(fp_mask, ((1, 1), (1, 1)), 'constant')
@@ -244,7 +242,52 @@ def _get_corrective_clicks(
             timestamp+=1
 
     if visualize:
-        np.save(os.path.join(visualize_dir, f"inner_mask_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), inner_mask)
+        np.save(os.path.join(visualize_dir, f"gt_mask_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), gt_mask)
+        np.save(os.path.join(visualize_dir, f"pred_mask_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), pred_mask)
         np.save(os.path.join(visualize_dir, f"points_coords_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), points_coords)
     
     return points_coords
+
+
+# from torch.nn import functional as F
+
+# def compute_dilated_attention_mask(outputs_mask, attn_mask_target_size):
+    
+#     # for learnable queries, initially there is no masking
+#     mask_logits = F.interpolate(outputs_mask, size=attn_mask_target_size, mode="bilinear", align_corners=False)   # TxQxhxw
+    
+#     kernels = []
+#     dilation_kernel_size = 7
+#     kernel_size = []
+#     kernels = []
+#     for i in range(1, T):
+#         ks = dilation_kernel_size + 4**i
+#         kernels.append(torch.ones((1, 1, ks, ks), dtype=torch.float32))
+#         kernel_size.append(ks)
+
+#     T, Q, H, W = mask_logits.shape 
+
+#     mask_logits = mask_logits.detach()
+
+#     max_probs = mask_logits.sigmoid().view(T,Q, -1).max(dim=-1).values
+#     strongest_frames = max_probs.argmax(dim=0)
+
+#     attention_mask = torch.zeros_like(mask_logits, dtype=torch.bool)    # T,Q,H,W
+
+#     for q in range(Q):
+#         t_star = strongest_frames[q].item()
+#         mask_logit = mask_logits[t_star, q]  # [H, W]
+
+#         q_mask = (mask_logit.sigmoid() > 0.5).float().unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
+
+#         for t in range(T):
+#             t_dist = abs(t_star - t)
+#             if t_dist > 0:
+#                 dilated = F.conv2d(q_mask, kernels[t_dist - 1], padding=kernel_size[t_dist-1]//2)
+#                 dilated = (dilated > 0).squeeze(0).squeeze(0)  # [H, W], bool
+#             else:
+#                 dilated = q_mask.squeeze(0).squeeze(0)  # [H, W], bool
+
+#             attention_mask[t,q] = ~dilated.bool()
+    
+#     return attention_mask
