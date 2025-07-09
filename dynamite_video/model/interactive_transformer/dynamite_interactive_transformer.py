@@ -360,17 +360,24 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         # static background queries
         if self.use_static_bg_queries:
-            if self.training or query_init is None:
+            if self.training or query_init["queries"] is None:
                 static_bg_queries = repeat(self.static_bg_query, "Bg C -> T Bg C", T=T)
-                descriptors = torch.cat((descriptors, static_bg_queries), dim=1)   # TxQxD
-                static_bg_pe = repeat(self.static_bg_pe, "Bg C -> Bg T C", T=T)
-                query_embed = torch.cat((query_embed, static_bg_pe), dim=0)        # QxTxD
-                # add bg queries to the count
-                num_queries_per_target[-1] += static_bg_queries.shape[1]
-                # add proxy bg clicks to the click
-                normalized_clicks = torch.cat([normalized_clicks, torch.full((T, self.num_static_bg_queries, 5), -1.0, device=normalized_clicks.device, dtype=normalized_clicks.dtype)], dim=1)
             else:
-                ...
+                static_bg_queries = []
+                for fr_idx in range(T):
+                    if fr_idx in query_init["frames"]:
+                        static_bg_queries.append(query_init["queries"][2][fr_idx].unsqueeze(0))
+                    else:
+                        static_bg_queries.append(repeat(self.static_bg_query, "Bg C -> 1 Bg C"))
+                static_bg_queries = torch.cat(static_bg_queries, dim=0)
+            
+            descriptors = torch.cat((descriptors, static_bg_queries), dim=1)   # TxQxD
+            static_bg_pe = repeat(self.static_bg_pe, "Bg C -> Bg T C", T=T)
+            query_embed = torch.cat((query_embed, static_bg_pe), dim=0)        # QxTxD
+            # add bg queries to the count
+            num_queries_per_target[-1] += self.num_static_bg_queries
+            # add proxy bg clicks to the click
+            normalized_clicks = torch.cat([normalized_clicks, torch.full((T, self.num_static_bg_queries, 5), -1.0, device=normalized_clicks.device, dtype=normalized_clicks.dtype)], dim=1)
 
         
         # if there's no bg query, remove from record

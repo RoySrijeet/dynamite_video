@@ -206,7 +206,6 @@ class AvgClicksPoolingInitializer(nn.Module):
 
         descriptors = [[] for _ in range(T)]
         normalized_clicks = [[] for _ in range(T)]
-        num_queries_per_target = [0 for _ in range(N)]
 
         # overlapping frames
         overlapping_frames = query_init.get("frames", None)
@@ -236,7 +235,6 @@ class AvgClicksPoolingInitializer(nn.Module):
                 if fr==fr_idx:
                     # normalize the click
                     clks.append(torch.tensor([y/norm_h, x/norm_w, obj_id, fr/T, t/norm_t]))
-                    num_queries_per_target[obj_id-1] += 1
 
                     # extract query descriptor
                     clicks = torch.tensor([fg_coords], dtype=torch.float, device=device)
@@ -284,7 +282,6 @@ class AvgClicksPoolingInitializer(nn.Module):
             for fr, desc, clks in zip(range(T), descriptors, normalized_clicks):
                 if fr==fr_idx:
                     clks.append(torch.tensor([y/norm_h, x/norm_w, obj_id, fr/T, t/norm_t]))
-                    num_queries_per_target[-1] += 1
         
                     clicks = torch.tensor([bg_coords], dtype=torch.float, device=device)
                     # extract and scale spatial coordinates
@@ -318,6 +315,15 @@ class AvgClicksPoolingInitializer(nn.Module):
         
         normalized_clicks = [torch.stack(clks).unsqueeze(0) for clks in normalized_clicks]
         normalized_clicks = torch.cat(normalized_clicks, dim=0).to(device)
+
+        # update the number of queries per object
+        num_queries_per_target = [0 for _ in range(N)]
+        obj_ids_in_queries = normalized_clicks[0][:,2].to(torch.int)
+        for obj_id in obj_ids_in_queries:
+            if obj_id > 0:
+                num_queries_per_target[obj_id - 1] += 1
+            else:
+                num_queries_per_target[-1] += 1
         
         return descriptors, normalized_clicks, num_queries_per_target
 
