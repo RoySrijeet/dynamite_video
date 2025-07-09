@@ -14,6 +14,7 @@ from detectron2.utils.logger import setup_logger
 
 from dynamite_video.evaluation.manager import SequenceManager
 from dynamite_video.evaluation.metrics.metrics import compute_j_and_f, compute_stq
+from dynamite_video.evaluation.predictor import Predictor
 
 
 def evaluate(cfg, 
@@ -52,9 +53,17 @@ def evaluate(cfg,
         vis_path = os.path.join(cfg.OUTPUT_DIR, "vis")
         os.makedirs(vis_path, exist_ok=True)
     dataset_meta["vis_path"] = vis_path
+
+    # debug
+    debug_vis_path = os.path.join(cfg.OUTPUT_DIR, "eval_debug")
+    os.makedirs(debug_vis_path, exist_ok=True)
     
     logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="Multi Instance Evaluation")
     logger.info(f"Starting inference on {len(dataset)} sequences...")
+
+    num_static_bg_queries = 0
+    if cfg.ITERATIVE.TRAIN.USE_STATIC_BG_QUERIES:
+        num_static_bg_queries = cfg.ITERATIVE.TRAIN.NUM_STATIC_BG_QUERIES
     
     with ExitStack() as stack:
         if isinstance(model, nn.Module):
@@ -68,7 +77,7 @@ def evaluate(cfg,
             logger.info(f"\nSequence {video.id} [{i+1}/{len(dataset)}]...")
 
             # a fresh model for each sequence
-            predictor = Predictor(model, len(video))
+            predictor = Predictor(model, dataset_meta["num_overlapping_frames"], num_static_bg_queries)
             
             # sequence manager for current sequence
             manager = SequenceManager(video, dataset_meta, cfg.INPUT)
@@ -92,21 +101,20 @@ def evaluate(cfg,
                 clip_indices = manager.generate_clip_indices(start=lowest_frame_index)
 
                 ## PROPAGATION ##
-                visualize_dir = "/home/roy/REPOS/dynamite_video/visualization/evaluation"
                 logger.info(f"Predicting {manager.N} masklets in {manager.T} frames...")
 
-                for num, indices in enumerate(tqdm(clip_indices, leave=False, desc="Clip")):
+                for indices in tqdm(clip_indices, leave=False, desc="Clip"):
                     propagation_start_time = time.perf_counter()
                     
-                    clip_inputs = manager.extract_clip(indices)
-                    torch.save(clip_inputs, os.path.join(visualize_dir, f"clip_inputs_{indices}.pth"))
+                    inputs = manager.extract_clip(indices)
+                    # torch.save(inputs, os.path.join(debug_vis_path, f"inputs_{indices}.pth"))
                     
-                    binary_pred_masks, queries, num_queries_per_object = predictor.get_prediction([clip_inputs], indices)    # T,N,H,W
-                    torch.save(binary_pred_masks, os.path.join(visualize_dir, f"binary_pred_masks_{indices}.pth"))
+                    binary_pred_masks, query_init = predictor.get_prediction([inputs], indices)    # T,N,H,W
+                    # torch.save(binary_pred_masks, os.path.join(debug_vis_path, f"binary_pred_masks_{indices}.pth"))
                     
                     propagation_end_time = time.perf_counter()
-                    panoptic_pred_masks = manager.store_prediction(binary_pred_masks, queries)
-                    torch.save(panoptic_pred_masks, os.path.join(visualize_dir, f"panoptic_pred_masks_{indices}.pth"))
+                    panoptic_pred_masks = manager.store_prediction(binary_pred_masks, query_init)
+                    # torch.save(panoptic_pred_masks, os.path.join(debug_vis_path, f"panoptic_pred_masks_{indices}.pth"))
                     
                     prop_time+= (propagation_end_time - propagation_start_time)
                 propagation_time.append(prop_time)
@@ -174,28 +182,3 @@ def inference_context(model):
     model.eval()
     yield
     model.train(training_mode)
-
-
-class Predictor:
-    """
-    A wrapper around DynamiteModel interactive evaluation forward pass
-    """
-
-
-    def __init__(self, model, length):
-        self.model = model
-        self.images = [[] * length]
-        self.features = [[] * length]
-        self.mask_features = [[] * length]
-        self.multi_scale_features = [[] * length]
-        self.initialized = False
-    
-    def get_prediction(self, inputs, indices):
-        """
-        Args:
-            inputs: batched input. Batch size is restricted to 1
-        """
-        
-        pred_masks, queries, num_queries_per_object = self.model(inputs)
-
-        return torch.stack([x.to('cpu',dtype=torch.uint8) for x in pred_masks]), queries.to('cpu'), num_queries_per_object

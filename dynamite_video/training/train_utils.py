@@ -68,11 +68,7 @@ def get_next_clicks(
     max_timestamp,
     max_objects_to_refine,
     iou_threshold,
-    refine_strategy,
-    visualize=False,
-    visualize_dir=None,
-    train_iter=None,
-    round_num=None
+    refine_strategy
 ):
     """
     Given the predicted masks of current round, sample corrective clicks
@@ -107,10 +103,6 @@ def get_next_clicks(
     clip_panoptic_masks = data['panoptic_masks'].detach().cpu().numpy()
     padding_mask = np.logical_not(data['padding_mask'].cpu().numpy())
 
-    if visualize_dir:
-        torch.save(refine_objects, os.path.join(visualize_dir, f"refine_objects_round_{round_num}.pth"))
-        torch.save(refine_frames, os.path.join(visualize_dir, f"refine_frames_round_{round_num}.pth"))
-
     count = 0
     for obj_id, fr_idx in zip(refine_objects, refine_frames):
         gt_masks = clip_gt_masks[fr_idx] * padding_mask
@@ -120,9 +112,7 @@ def get_next_clicks(
         # timestamp of the latest click so far
         timestamp = max(max_timestamp)
         sampled_clicks = _get_corrective_clicks(pred_masks[obj_id], gt_masks[obj_id], panoptic_map,
-                                                    timestamp+1, max_num_points=1,
-                                                    visualize=visualize,visualize_dir=visualize_dir,
-                                                    train_iter=train_iter,round_num=round_num, count=count)
+                                                    timestamp+1, max_num_points=1)
         
         if sampled_clicks is not None:
             for click in sampled_clicks:
@@ -171,15 +161,8 @@ def _get_corrective_clicks(
     pred_mask,
     gt_mask,
     panoptic_map,
-    # ignore_mask,
-    # padding_mask,
     timestamp,
-    max_num_points=2,
-    visualize=False,
-    visualize_dir=None,
-    train_iter=None,
-    round_num=None,
-    count=None
+    max_num_points=2
 ):
     """
     Sample corrective click on an object, in a frame
@@ -240,12 +223,7 @@ def _get_corrective_clicks(
             obj_indx = panoptic_map[coords[0]][coords[1]] - 1
             points_coords.append([coords[0], coords[1], obj_indx, timestamp])   # [y,x,i,t]
             timestamp+=1
-
-    if visualize:
-        np.save(os.path.join(visualize_dir, f"gt_mask_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), gt_mask)
-        np.save(os.path.join(visualize_dir, f"pred_mask_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), pred_mask)
-        np.save(os.path.join(visualize_dir, f"points_coords_to_refine_{count}_round_{round_num}_iter_{train_iter}.npy"), points_coords)
-    
+            
     return points_coords
 
 

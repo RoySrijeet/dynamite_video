@@ -48,8 +48,7 @@ class SetFinalCriterion(nn.Module):
             outputs, 
             targets,
             num_masks, 
-            num_queries_per_object,
-            visualize=False, visualize_dir=None, train_iter=None,
+            num_queries_per_object
     ):
         """
         Compute the losses related to the masks: the focal loss and the dice loss.
@@ -97,14 +96,6 @@ class SetFinalCriterion(nn.Module):
                                                                 )   # T,num_points,2
             # get gt labels at the sampled locations
             point_labels = point_sample(gt_masks, point_coords, align_corners=False).squeeze(1)    # T*N,num_points
-
-        if visualize:
-            import os
-            visualize_dir = os.path.join(visualize_dir, "loss")
-            os.makedirs(visualize_dir, exist_ok=True)
-            torch.save(pred_masks, os.path.join(visualize_dir, f"pred_masks_iter_{train_iter}.pth"))
-            torch.save(gt_masks, os.path.join(visualize_dir, f"gt_masks_iter_{train_iter}.pth"))
-            torch.save(point_coords, os.path.join(visualize_dir, f"pointrend_points_iter_{train_iter}.pth"))
         
         point_logits = point_sample(pred_masks, point_coords, align_corners=False).squeeze(1)      # T*N,num_points
 
@@ -123,23 +114,20 @@ class SetFinalCriterion(nn.Module):
             outputs, 
             targets, 
             num_masks, 
-            num_queries_per_object, 
-            visualize=False, visualize_dir=None, train_iter=None,
+            num_queries_per_object
     ):
         loss_map = {
             'masks': self.loss_masks,
         }
         assert loss in loss_map, f"do you really want to compute {loss} loss?"
-        return loss_map[loss](outputs, targets, num_masks, num_queries_per_object, 
-                              visualize, visualize_dir, train_iter)
+        return loss_map[loss](outputs, targets, num_masks, num_queries_per_object)
 
     
     def forward(
             self, 
             outputs, 
             targets,
-            num_queries_per_object, 
-            visualize=False, visualize_dir=None, train_iter=None,
+            num_queries_per_object
     ):
         """This performs the loss computation.
         Parameters:
@@ -166,8 +154,7 @@ class SetFinalCriterion(nn.Module):
         # Compute all the requested losses
         losses = {}
         for loss in self.losses:
-            losses.update(self.get_loss(loss, outputs, targets, num_masks, num_queries_per_object, 
-                                        visualize, visualize_dir, train_iter))
+            losses.update(self.get_loss(loss, outputs, targets, num_masks, num_queries_per_object))
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
         if "aux_outputs" in outputs:

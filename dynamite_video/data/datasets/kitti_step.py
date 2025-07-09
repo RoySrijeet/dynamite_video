@@ -194,15 +194,7 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
                 assert os.path.exists(self.path_to_images), f"Directory not found: {self.path_to_images}"
             
             # get annotations
-            train_annotations_json = Paths.to_kitti_step_train_annotations()
-            with open(train_annotations_json, "rb") as f:
-                train_annotations = json.load(f)
-            f.close()
-            train_ids = []
-            for i in range(len(train_annotations["sequences"])):
-                train_ids.append(train_annotations["sequences"][i]["id"])
-            del train_annotations
-
+            TRAIN_IDS = ['0000', '0001', '0003', '0004', '0005', '0009', '0011', '0012', '0015', '0017', '0019', '0020']
             trainval_annotations_json = Paths.to_kitti_step_trainval_annotations()
             with open(trainval_annotations_json, "rb") as f:
                 trainval_annotations = json.load(f)
@@ -210,7 +202,7 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
             val_anno = {"sequences": []}
             for i in range(len(trainval_annotations["sequences"])):
                 seq_id = trainval_annotations["sequences"][i]["id"]
-                if seq_id in train_ids:
+                if seq_id in TRAIN_IDS:
                     continue
                 val_anno["sequences"].append(trainval_annotations["sequences"][i])
             val_anno["meta"] = trainval_annotations["meta"]

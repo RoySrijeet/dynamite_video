@@ -50,11 +50,9 @@ class DynamiteInteractiveTransformer(nn.Module):
         mask_dim: int,
         enforce_input_project: bool,
         positional_embeddings: str,
-        max_objects_to_refine: int,
+        max_targets_to_refine: int,
         iou_threshold: float,
-        refine_strategy:str,
-        # debug
-        output_dir:str,
+        refine_strategy:str
     ):
         """
         Args:
@@ -73,7 +71,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             enforce_input_project: add input project 1x1 conv even if input
                 channels and hidden dim is identical
             positional_embeddings: type of positonal embeddings for clicks coordinates 
-            max_objects_to_refine: num of objects to refine in each corrective round
+            max_targets_to_refine: num of targets to refine in each corrective round
         """
         super().__init__()
 
@@ -84,7 +82,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         self.positional_embeddings = positional_embeddings
          # iterative
         self.max_num_rounds = max_num_rounds
-        self.max_objects_to_refine = max_objects_to_refine
+        self.max_targets_to_refine = max_targets_to_refine
         self.iou_threshold = iou_threshold
         self.refine_strategy = refine_strategy
 
@@ -140,9 +138,6 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         self.mask_embed = MLP(hidden_dim, hidden_dim, mask_dim, 3)
         self._reset_parameters()
-
-        self.output_dir = os.path.join(output_dir, "vis")
-
     
     def _reset_parameters(self):
         nn.init.normal_(self.query_embed)
@@ -184,12 +179,10 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         ret["mask_dim"] = cfg.MODEL.SEM_SEG_HEAD.MASK_DIM
 
-        ret["max_objects_to_refine"] = cfg.CLICKER.TRAINING.MAX_NUM_INSTANCES_REFINED_PER_ROUND
+        ret["max_targets_to_refine"] = cfg.CLICKER.TRAINING.MAX_NUM_INSTANCES_REFINED_PER_ROUND
         ret["iou_threshold"] = cfg.CLICKER.TRAINING.IOU_THRESHOLD
         ret["refine_strategy"] = cfg.CLICKER.TRAINING.REFINEMENT_STRATEGY
 
-        # debug
-        ret["output_dir"] = cfg.OUTPUT_DIR
         return ret
 
 
@@ -199,12 +192,10 @@ class DynamiteInteractiveTransformer(nn.Module):
             images, 
             multi_scale_features, 
             mask_features, 
-            num_clicks_per_object,
+            num_clicks_per_target,
             fg_coords, 
             bg_coords, 
-            max_timestamp,
-            visualize=None,
-            train_iter=None,
+            max_timestamp
     ):
         """
         Forward pass of one video clip through the interactive transformer
@@ -214,15 +205,13 @@ class DynamiteInteractiveTransformer(nn.Module):
             images: [T, 3, H, W] tensors of the images in the clip (d2 ImageList)
             multi_scale_features: list of frame features (T,C,H,W) extracted at different scale
             mask_features: mask features of the frames in the clip (T,C,H,W)
-            num_clicks_per_object: list of click counts on each object, in each frame of the clip
+            num_clicks_per_target: list of click counts on each target, in each frame of the clip
             fg_coords: list of fg clicks on the frames of the clip
             bg_coords: list bg clicks on the frames of the clip
             max_timestamp: list of timestamps of the last clip on each frame of the clip
         """
 
         assert len(multi_scale_features) == self.num_feature_levels
-
-        visualize_dir_curr_iter = os.path.join(self.output_dir, str(train_iter))
 
         # extract memory features for Transformer (cross-)attention
         memory = []
@@ -240,93 +229,50 @@ class DynamiteInteractiveTransformer(nn.Module):
             # flatten NxCxHxW to HWxNxC
             memory_pe[-1] = memory_pe[-1].permute(2, 0, 1)  # TxDxhw -> hwxTxD
             memory[-1] = memory[-1].permute(2, 0, 1)        # TxDxhw -> hwxTxD
-
-        # if visualize:
-        #     visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_memory")
-        #     os.makedirs(visualize_dir, exist_ok=True)
-        #     torch.save(memory,      os.path.join(visualize_dir, f"memory_iter_{train_iter}.pth"))
-        #     torch.save(memory_pe,   os.path.join(visualize_dir, f"memory_pe_iter_{train_iter}.pth"))
         
-        # iterative training routine
+        
         if self.training:
-
-            iou_tracking = []
+            
             # number of corrective iterations
             num_rounds = self.max_num_rounds    # TODO: #random.randint(0, self.max_num_rounds)
-
-            i = 0
             for i in range(num_rounds):
 
                 # generate current queries, transformer forward pass
-                prev_output, num_queries_per_object = self.iterative_batch_forward(multi_scale_features, 
-                                                                                   memory, 
-                                                                                   memory_pe, 
-                                                                                   size_list, 
-                                                                                   mask_features, 
-                                                                                   fg_coords, 
-                                                                                   bg_coords, 
-                                                                                   num_clicks_per_object,
-                                                                                   max_timestamp,
-                                                                                   visualize=visualize, 
-                                                                                   train_iter=train_iter,
-                                                                                   round_num=i)
+                prev_output, num_queries_per_target = self.iterative_batch_forward(multi_scale_features, mask_features, 
+                                                                                   memory, memory_pe, size_list, 
+                                                                                   num_clicks_per_target,
+                                                                                   fg_coords, bg_coords, max_timestamp)
                 
                 # segmentation mask from prediction logits
-                processed_results, round_iou = self.process_results(data, images, prev_output, len(num_clicks_per_object[0]), num_queries_per_object, visualize, train_iter, i)
+                processed_results = self.process_results(data, images, prev_output, len(num_clicks_per_target[0]), num_queries_per_target)
 
-                if visualize:
-                    iou_tracking.append(round_iou)
-                    visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_clicker")
-                    os.makedirs(visualize_dir, exist_ok=True)
-                
                 # sample corrective clicks
-                num_clicks_per_object, fg_coords, bg_coords, max_timestamp = get_next_clicks(data, 
-                                                                                             processed_results, 
-                                                                                             num_clicks_per_object,
-                                                                                             fg_coords, bg_coords, 
-                                                                                             max_timestamp, 
-                                                                                             max_objects_to_refine=self.max_objects_to_refine,
+                num_clicks_per_target, fg_coords, bg_coords, max_timestamp = get_next_clicks(data, processed_results, 
+                                                                                             num_clicks_per_target,
+                                                                                             fg_coords, bg_coords, max_timestamp, 
+                                                                                             max_objects_to_refine=self.max_targets_to_refine,
                                                                                              iou_threshold=self.iou_threshold,
-                                                                                             refine_strategy=self.refine_strategy,
-                                                                                             visualize=visualize, 
-                                                                                             visualize_dir=visualize_dir if visualize else None,
-                                                                                             train_iter=train_iter, round_num=i)
+                                                                                             refine_strategy=self.refine_strategy)
             
             # generate current queries, transformer forward pass
-            outputs, num_queries_per_object = self.iterative_batch_forward(multi_scale_features, 
-                                                                           memory,
-                                                                           memory_pe, 
-                                                                           size_list, 
-                                                                           mask_features, 
-                                                                           fg_coords, 
-                                                                           bg_coords, 
-                                                                           num_clicks_per_object, 
-                                                                           max_timestamp,
-                                                                           visualize=visualize, 
-                                                                           train_iter=train_iter,
-                                                                           round_num=i)
-            
-            if visualize:
-                # segmentation mask from prediction logits
-                processed_results, round_iou = self.process_results(data, images, outputs, len(num_clicks_per_object[0]), num_queries_per_object, visualize, train_iter, i)
-                iou_tracking.append(round_iou)
-                torch.save(iou_tracking, os.path.join(visualize_dir_curr_iter, f"round_ious.pth"))
-            
-            return outputs, num_queries_per_object, None
+            outputs, num_queries_per_target = self.iterative_batch_forward(multi_scale_features, mask_features, 
+                                                                           memory, memory_pe, size_list, 
+                                                                           num_clicks_per_target,
+                                                                           fg_coords, bg_coords, max_timestamp)
+            return outputs, num_queries_per_target
         
-        else:
-            # evaluation
-            outputs, num_queries_per_object, queries = self.iterative_batch_forward(multi_scale_features, 
-                                                                                    memory, 
-                                                                                    memory_pe, 
-                                                                                    size_list, 
-                                                                                    mask_features, 
-                                                                                    fg_coords, 
-                                                                                    bg_coords, 
-                                                                                    num_clicks_per_object, 
-                                                                                    max_timestamp)
-        
-            return outputs, num_queries_per_object, queries
+        else: # evaluation
+            # returns:
+            # outputs: dict with key "pred_masks" of shape T,Q,H,W
+            # num_queries_per_target: list of integers, length N+1; summing up to Q
+            # queries: T,Q,D
+            # normalized_clicks: T,Q,5
+            outputs, num_queries_per_target, queries, normalized_clicks = self.iterative_batch_forward(multi_scale_features, mask_features, 
+                                                                                    memory, memory_pe, size_list, 
+                                                                                    num_clicks_per_target, 
+                                                                                    fg_coords, bg_coords, max_timestamp,
+                                                                                    query_init=data.get("query_init", None))
+            return outputs, num_queries_per_target, queries, normalized_clicks
 
     
     def forward_prediction_heads(
@@ -337,7 +283,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             orig_clicks=None
     ):
         """
-        Obtain predicted mask from decoder output and mask features.
+        Obtain predicted mask from queries and mask features.
         Use predicted mask to generate attention mask for next feature scale.
         
         Args:
@@ -349,17 +295,18 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         decoder_output = self.layer_norm(output).transpose(0,1)
         mask_embed = self.mask_embed(decoder_output)
-      
+        
+        # mask prediction
         outputs_mask = torch.einsum("bqc,bchw->bqhw", mask_embed, mask_features) # TxQxHxW
 
+        # attention mask
         attn_mask = F.interpolate(outputs_mask, size=attn_mask_target_size, mode="bilinear", align_corners=False)   # TxQxhxw
-
         # boolean attention mask
         attn_mask = (attn_mask.sigmoid() < 0.5)
         
         if orig_clicks is not None:
             # do not mask for the learnable queries
-            T,Q,H,W = outputs_mask.shape
+            T,Q,_,_ = outputs_mask.shape
             for fr_idx in range(T):
                 for i in range(Q):
                     if i < len(orig_clicks) and fr_idx != orig_clicks[i][3]:
@@ -373,37 +320,33 @@ class DynamiteInteractiveTransformer(nn.Module):
     def iterative_batch_forward(
             self, 
             multi_scale_features, 
+            mask_features,
             memory, 
             memory_pe, 
             size_list, 
-            mask_features,
+            num_clicks_per_target,
             fg_coords,
             bg_coords, 
-            num_clicks_per_object, 
             max_timestamp,
-            visualize=None,
-            train_iter=None,
-            round_num=None
+            query_init=None
     ):
         """
         Prepare query descriptors and forward pass through Transformer
         """
         
-        T, C, H, W = mask_features.shape
-        device = multi_scale_features[0][0].device
+        T, _, H, W = mask_features.shape
         height = 4*H
         width = 4*W
-        
-        visualize_dir_curr_iter = os.path.join(self.output_dir, str(train_iter))
         
         # generate query descriptors for input clicks
         (descriptors,                       # TxQxD
          normalized_clicks,                 # TxQxD
-         num_queries_per_object) = self.query_descriptors_initializer(features=multi_scale_features,
+         num_queries_per_target) = self.query_descriptors_initializer(features=multi_scale_features,
                                                                     batched_fg_coords_list=fg_coords, 
                                                                     batched_bg_coords_list=bg_coords,
-                                                                    num_clicks_per_object=num_clicks_per_object, 
+                                                                    num_clicks_per_target=num_clicks_per_target, 
                                                                     norms=(height, width, max(max_timestamp)),
+                                                                    query_init=query_init,
                                                                 )
         
         # positional embedding for queries
@@ -417,51 +360,38 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         # static background queries
         if self.use_static_bg_queries:
-            static_bg_queries = repeat(self.static_bg_query, "Bg C -> T Bg C", T=T)
-            descriptors = torch.cat((descriptors, static_bg_queries), dim=1)   # TxQxD
-            static_bg_pe = repeat(self.static_bg_pe, "Bg C -> Bg T C", T=T)
-            query_embed = torch.cat((query_embed, static_bg_pe), dim=0)        # QxTxD
-            # add bg queries to the count
-            num_queries_per_object[-1] += static_bg_queries.shape[1]
-            # add proxy bg clicks to the click
-            normalized_clicks = torch.cat([normalized_clicks, torch.full((T, self.num_static_bg_queries, 5), -1.0, device=normalized_clicks.device, dtype=normalized_clicks.dtype)], dim=1)
+            if self.training or query_init is None:
+                static_bg_queries = repeat(self.static_bg_query, "Bg C -> T Bg C", T=T)
+                descriptors = torch.cat((descriptors, static_bg_queries), dim=1)   # TxQxD
+                static_bg_pe = repeat(self.static_bg_pe, "Bg C -> Bg T C", T=T)
+                query_embed = torch.cat((query_embed, static_bg_pe), dim=0)        # QxTxD
+                # add bg queries to the count
+                num_queries_per_target[-1] += static_bg_queries.shape[1]
+                # add proxy bg clicks to the click
+                normalized_clicks = torch.cat([normalized_clicks, torch.full((T, self.num_static_bg_queries, 5), -1.0, device=normalized_clicks.device, dtype=normalized_clicks.dtype)], dim=1)
+            else:
+                ...
+
         
         # if there's no bg query, remove from record
-        if num_queries_per_object[-1] == 0:
-            num_queries_per_object = num_queries_per_object[:-1]
-
-        if visualize:
-            visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_query")
-            os.makedirs(visualize_dir, exist_ok=True)
-            torch.save(descriptors, os.path.join(visualize_dir, f"descriptors_round_{round_num}_iter_{train_iter}.pth"))
-            torch.save(query_embed, os.path.join(visualize_dir, f"query_embed_round_{round_num}_iter_{train_iter}.pth"))
-            torch.save(num_queries_per_object, os.path.join(visualize_dir, f"num_queries_per_object_round_{round_num}_iter_{train_iter}.pth"))
-            torch.save(normalized_clicks, os.path.join(visualize_dir, f"normalized_click_round_{round_num}_iter_{train_iter}.pth"))
+        if num_queries_per_target[-1] == 0:
+            num_queries_per_target = num_queries_per_target[:-1]
         
         
-        # total num queries per object across T frames
+        # total num queries per target across T frames
         if self.use_qqca == "masked":
-            # if queries are batched instance-wise, consider the frame positions of the queries in the temporal domain
-            inst_batched_query_embed = repeat(self.query_embed, "C -> Q N C", 
-                                              Q=max(num_queries_per_object) * T, 
-                                              N=len(num_queries_per_object))  # Q'xNxD
+            # if queries are batched target-wise, consider the frame positions of the queries in the temporal domain
+            tgt_batched_query_embed = repeat(self.query_embed, "C -> Q N C", 
+                                              Q=max(num_queries_per_target) * T, 
+                                              N=len(num_queries_per_target))  # Q'xNxD
             # convert QxTx5 clicks to Q'xNx5
-            inst_batched_clicks = self.get_object_batched_clicks(normalized_clicks.permute(1,0,2), num_queries_per_object)
-            
-            if visualize:
-                torch.save(inst_batched_clicks, os.path.join(visualize_dir, f"inst_batched_clicks_round_{round_num}_iter_{train_iter}.pth"))
-                torch.save(inst_batched_query_embed, os.path.join(visualize_dir, f"inst_batched_query_embed_raw_round_{round_num}_iter_{train_iter}.pth"))
-            
-            pos_coord_embed = get_spatiotemporal_embeddings(inst_batched_clicks[:,:,[0,1,3]],
+            tgt_batched_clicks = self.get_target_batched_clicks(normalized_clicks.permute(1,0,2), num_queries_per_target)
+            pos_coord_embed = get_spatiotemporal_embeddings(tgt_batched_clicks[:,:,[0,1,3]],
                                                             self.positional_embeddings,
                                                             descriptors.shape[2])                        # Q'xNxD
-            pos_coord_embed = self.ca_qpos_sine_proj(pos_coord_embed.to(inst_batched_query_embed.dtype)) # Q'xNxD
-            inst_batched_query_embed = inst_batched_query_embed + pos_coord_embed                        # Q'xNxD
+            pos_coord_embed = self.ca_qpos_sine_proj(pos_coord_embed.to(tgt_batched_query_embed.dtype)) # Q'xNxD
+            tgt_batched_query_embed = tgt_batched_query_embed + pos_coord_embed                        # Q'xNxD
 
-            if visualize:
-                torch.save(inst_batched_query_embed, os.path.join(visualize_dir, f"inst_batched_query_embed_round_{round_num}_iter_{train_iter}.pth"))
-
-        
         # pre-encoder prediction
         output = self.queries_nonlinear_projection(descriptors).permute(1,0,2)
         outputs_mask, attn_mask = self.forward_prediction_heads(output, 
@@ -469,14 +399,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                 attn_mask_target_size=size_list[0],
                                                                 orig_clicks=fg_coords+bg_coords)
         
-        if visualize:
-            visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_pre_encoder")
-            os.makedirs(visualize_dir, exist_ok=True)
-            torch.save(output,          os.path.join(visualize_dir, f"input_query_pre_enc_round_{round_num}_iter_{train_iter}.pth"))
-            torch.save(outputs_mask,    os.path.join(visualize_dir, f"output_pred_pre_enc_round_{round_num}_iter_{train_iter}.pth"))
-            torch.save(attn_mask,       os.path.join(visualize_dir, f"attn_mask_pre_enc_round_{round_num}_iter_{train_iter}.pth"))
-        
-        # store predicted mask after each layer, used in auxiliary loss
+        # store predicted mask after each layer, later used in auxiliary loss
         predictions_mask = []
         predictions_mask.append(outputs_mask)
         
@@ -485,107 +408,46 @@ class DynamiteInteractiveTransformer(nn.Module):
             level_index = i % self.num_feature_levels
             attn_mask[torch.where(attn_mask.sum(-1) == attn_mask.shape[-1])] = False
             
-            #### CROSS-ATTENTION       
-            if visualize:
-                visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_encoder_iqca")
-                os.makedirs(visualize_dir, exist_ok=True)
-                torch.save(output,                  os.path.join(visualize_dir, f"input_query_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-                torch.save(attn_mask,               os.path.join(visualize_dir, f"input_attn_mask_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))            
             # cross-attention between image features and queries in each frame
             output, weights = self.encoder.cross_attention_layers[i](tgt=output,            # QxTxD
                                                             memory=memory[level_index],     # (hw)xTxD
                                                             memory_mask=attn_mask,          # (T*#attn_heads)xQx(hw)
                                                             memory_key_padding_mask=None,   # here we do not apply masking on padded region
                                                             pos=memory_pe[level_index],     # (hw)xTxD pos emb for memory
-                                                            query_pos=query_embed           # QxTxD pos emb for query
-                                                        )
-            if visualize:
-                torch.save(output,      os.path.join(visualize_dir, f"output_query_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-                torch.save(weights,     os.path.join(visualize_dir, f"attn_weights_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-                with torch.no_grad():
-                    outputs_mask_inspection, _ = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
-                torch.save(outputs_mask_inspection, os.path.join(visualize_dir, f"mask_inspection_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-        
-
+                                                            query_pos=query_embed)           # QxTxD pos emb for query
             
-            #### VANILLA QQCA
             # query-query cross-attention
             if self.use_qqca == "vanilla":
                 Q,T,D = output.shape
                 output, weights = self.encoder.query_query_cross_attention_layers[i](output.view(Q*T, 1, D),
-                                                                            tgt_mask=None,
-                                                                            tgt_key_padding_mask=None,
-                                                                            query_pos=query_embed.view(Q*T, 1, D))
+                                                                                    tgt_mask=None,
+                                                                                    tgt_key_padding_mask=None,
+                                                                                    query_pos=query_embed.view(Q*T, 1, D))
                 output = output.view(Q,T,D)
-                if visualize:
-                    visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_encoder_vanilla_qqca")
-                    os.makedirs(visualize_dir, exist_ok=True)
-                    torch.save(output,               os.path.join(visualize_dir, f"output_query_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-                    torch.save(weights,              os.path.join(visualize_dir, f"attn_weights_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-                    with torch.no_grad():
-                        outputs_mask_inspection, _ = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
-                    torch.save(outputs_mask_inspection, os.path.join(visualize_dir, f"mask_inspection_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
             
-            #### MASKED QQCA
             if self.use_qqca == "masked":
-                # cross-attention between object-specific queries of different frames
-                inst_batched_query, qqca_mask = self.get_object_batched_query(output, num_queries_per_object)
-                if visualize:
-                    visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_encoder_masked_qqca")
-                    os.makedirs(visualize_dir, exist_ok=True)
-                    torch.save(inst_batched_query,               os.path.join(visualize_dir, f"inst_batched_query_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-                    torch.save(inst_batched_query_embed,         os.path.join(visualize_dir, f"inst_batched_query_embed_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-                    torch.save(qqca_mask,                        os.path.join(visualize_dir, f"qqca_mask_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-                
-                padded_output, weights = self.encoder.query_query_cross_attention_layers[i](inst_batched_query,
+                # cross-attention between target-specific queries of different frames
+                tgt_batched_query, qqca_mask = self.get_target_batched_query(output, num_queries_per_target)
+                padded_output, weights = self.encoder.query_query_cross_attention_layers[i](tgt_batched_query,
                                                                                         tgt_mask=None,
                                                                                         tgt_key_padding_mask=qqca_mask.to(output.device),
-                                                                                        query_pos=inst_batched_query_embed,
-                                                                                    )
-                output = self.get_frame_batched_query(output, padded_output, num_queries_per_object)
-                if visualize:
-                    torch.save(padded_output,        os.path.join(visualize_dir, f"inst_batched_query_output_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-                    torch.save(weights,              os.path.join(visualize_dir, f"attn_weights_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-                    torch.save(output,               os.path.join(visualize_dir, f"output_query_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-                    with torch.no_grad():
-                        outputs_mask_inspection, _ = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
-                    torch.save(outputs_mask_inspection, os.path.join(visualize_dir, f"mask_inspection_qqca_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
+                                                                                        query_pos=tgt_batched_query_embed)
+                output = self.get_frame_batched_query(output, padded_output, num_queries_per_target)
             
-
-            
-            #### SELF-ATTENTION
             # self-attention between queries within frame
             output, weights = self.encoder.self_attention_layers[i](output, 
-                                                           tgt_mask=None, 
-                                                           tgt_key_padding_mask=None,
-                                                           query_pos=query_embed)
-            if visualize:
-                visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_encoder_self_attn")
-                os.makedirs(visualize_dir, exist_ok=True)
-                torch.save(output,  os.path.join(visualize_dir, f"output_query_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-                torch.save(weights, os.path.join(visualize_dir, f"attn_weights_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-                with torch.no_grad():
-                    outputs_mask_inspection, _ = self.forward_prediction_heads(output, mask_features, attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
-                torch.save(outputs_mask_inspection, os.path.join(visualize_dir, f"mask_inspection_sa_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
+                                                                tgt_mask=None, 
+                                                                tgt_key_padding_mask=None,
+                                                                query_pos=query_embed)
             
-            
-            #### FFN
+            # ffn
             output = self.encoder.ffn_layers[i](output)
-
             outputs_mask, attn_mask = self.forward_prediction_heads(output, 
                                                                     mask_features, 
                                                                     attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
-            if visualize:
-                visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_encoder_ffn")
-                os.makedirs(visualize_dir, exist_ok=True)
-                torch.save(output,                  os.path.join(visualize_dir, f"output_query_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-                torch.save(outputs_mask,            os.path.join(visualize_dir, f"outputs_mask_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-                torch.save(attn_mask,               os.path.join(visualize_dir, f"attn_mask_enc_layer_{i}_round_{round_num}_iter_{train_iter}.pth"))
-
             predictions_mask.append(outputs_mask)
 
-        
-        ### DECODER
+        # decoder
         if self.use_decoder:
             if self.dec_scale_factor > 1:
                 scale_factor = self.dec_scale_factor
@@ -596,13 +458,6 @@ class DynamiteInteractiveTransformer(nn.Module):
             outputs_mask, attn_mask = self.forward_prediction_heads(output, 
                                                                     mask_features, 
                                                                     attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
-            if visualize:
-                visualize_dir = os.path.join(visualize_dir_curr_iter, "interactive_transformer_decoder")
-                os.makedirs(visualize_dir, exist_ok=True)
-                torch.save(mask_features,   os.path.join(visualize_dir, f"mask_features_decoder_round_{round_num}_iter_{train_iter}.pth"))
-                torch.save(weights,         os.path.join(visualize_dir, f"attn_weights_decoder_round_{round_num}_iter_{train_iter}.pth"))
-                torch.save(outputs_mask,    os.path.join(visualize_dir, f"outputs_mask_decoder_round_{round_num}_iter_{train_iter}.pth"))
-            
             predictions_mask.append(outputs_mask)
 
         out = {
@@ -611,10 +466,10 @@ class DynamiteInteractiveTransformer(nn.Module):
         }
         
         if self.training:
-            return out, num_queries_per_object
+            return out, num_queries_per_target
         
         Q,T,D = output.shape
-        return out, num_queries_per_object, output.reshape(T,Q,D)
+        return out, num_queries_per_target, output.reshape(T,Q,D), normalized_clicks
 
 
     @torch.jit.unused
@@ -625,10 +480,10 @@ class DynamiteInteractiveTransformer(nn.Module):
         return [{"pred_masks": b} for b in outputs_seg_masks[:-1]]
     
     
-    def get_object_batched_clicks(
+    def get_target_batched_clicks(
             self, 
             clicks, 
-            num_queries_per_object
+            num_queries_per_target
     ):
         """
         Convert Q,5 clicks into Q',N,5
@@ -637,79 +492,79 @@ class DynamiteInteractiveTransformer(nn.Module):
             clicks: click information
         """
         Q,T,D = clicks.shape
-        # max num queries per object (across all frames)
-        max_num_queries = max(num_queries_per_object) * T
+        # max num queries per target (across all frames)
+        max_num_queries = max(num_queries_per_target) * T
 
-        # split frame-wise clicks into object-wise queries
-        object_wise_splits = torch.split(clicks, num_queries_per_object, dim=0)   # list of T,q_i,5
-        object_wise_splits = [part.reshape(-1, D) for part in object_wise_splits]       # list of T*q_i,5
+        # split frame-wise clicks into target-wise queries
+        target_wise_splits = torch.split(clicks, num_queries_per_target, dim=0)   # list of T,q_i,5
+        target_wise_splits = [part.reshape(-1, D) for part in target_wise_splits]       # list of T*q_i,5
 
         # apply padding for batching
         pad = torch.tensor([-1.0, -1.0, -1.0, -1.0, -1.0]).to(clicks.device)
-        inst_batched_clicks = []
-        for split_clicks in object_wise_splits:
+        tgt_batched_clicks = []
+        for split_clicks in target_wise_splits:
             pad_len = max_num_queries - split_clicks.shape[0]
             if pad_len > 0:
                 padding = pad.expand(pad_len, -1)
                 padded_r = torch.cat([split_clicks, padding], dim=0)
             else:
                 padded_r = split_clicks
-            inst_batched_clicks.append(padded_r)
+            tgt_batched_clicks.append(padded_r)
 
-        inst_batched_clicks = torch.stack(inst_batched_clicks).transpose(0,1)
+        tgt_batched_clicks = torch.stack(tgt_batched_clicks).transpose(0,1)
 
-        return inst_batched_clicks
+        return tgt_batched_clicks
 
     
-    def get_object_batched_query(
+    def get_target_batched_query(
             self, 
             output, 
-            num_queries_per_object
+            num_queries_per_target
     ):
         """
         Convert Q,T,D query into Q',N,D query where:
         T: num of frames
-        N: num of target objects + 1 BG
+        N: num of target targets + 1 BG
         Q: num of queries per frame = sum(q_1, q_2, ..., q_N)
         Q': max(q_i)
         """
         Q,T,D = output.shape
         
-        # max num queries per object (across all frames)
-        max_num_queries = max(num_queries_per_object) * T
+        # max num queries per target (across all frames)
+        max_num_queries = max(num_queries_per_target) * T
         
-        # split frame-wise queries into object-wise queries
-        object_wise_splits = torch.split(output, num_queries_per_object, dim=0)   # list of T,q_i,D
-        object_wise_splits = [part.reshape(-1, D) for part in object_wise_splits]       # list of T*q_i,D
+        # split frame-wise queries into target-wise queries
+        target_wise_splits = torch.split(output, num_queries_per_target, dim=0)   # list of T,q_i,D
+        target_wise_splits = [part.reshape(-1, D) for part in target_wise_splits]       # list of T*q_i,D
         
-        # keep a record of how many queries there were for each object
+        # keep a record of how many queries there were for each target
         # this will be used to create an attention mask
-        orig_lengths = [r.shape[0] for r in object_wise_splits]
+        orig_lengths = [r.shape[0] for r in target_wise_splits]
         
         # apply padding for batching
-        inst_batched_query = []
-        for split_query in object_wise_splits:
+        tgt_batched_query = []
+        for split_query in target_wise_splits:
             pad_len = max_num_queries - split_query.shape[0]
             if pad_len > 0:
                 padding = self.bg_query.expand(pad_len, -1)
                 padded_r = torch.cat([split_query, padding], dim=0)
             else:
                 padded_r = split_query
-            inst_batched_query.append(padded_r)
+            tgt_batched_query.append(padded_r)
 
-        inst_batched_query = torch.stack(inst_batched_query).transpose(0,1)
+        tgt_batched_query = torch.stack(tgt_batched_query).transpose(0,1)
 
         # attention mask
         qqca_mask = torch.arange(max_num_queries).expand(len(orig_lengths), max_num_queries) >= torch.tensor(orig_lengths).unsqueeze(1)
 
-        return inst_batched_query, qqca_mask
+        return tgt_batched_query, qqca_mask
 
     
     def get_frame_batched_query(
             self, 
             output, 
             padded_output, 
-            num_queries_per_object
+            num_queries_per_target
     ):
         """
         Convert Q',N,D query into Q,T,D
@@ -718,10 +573,10 @@ class DynamiteInteractiveTransformer(nn.Module):
         padded_output = padded_output.permute(1, 0, 2)  # N,Q',D
         
         unpadded_chunks = []
-        for i, q_size in enumerate(num_queries_per_object):
+        for i, q_size in enumerate(num_queries_per_target):
             q_len = T * q_size
 
-            # i-th object, upto q_len tensors (rest were padding)
+            # i-th target, upto q_len tensors (rest were padding)
             if q_size > 0:
                 block = padded_output[i, :q_len]            # T*q_i,D
                 block = block.reshape(q_size, T, -1)        # q_i,T,D
@@ -738,83 +593,55 @@ class DynamiteInteractiveTransformer(nn.Module):
             images, 
             outputs, 
             num_targets,
-            num_queries_per_object,
-            visualize=None,
-            train_iter=None,
-            round_num=None
+            num_queries_per_target
     ):
         """
         Args:
             data: dataloader input
             images: [T, 3, H, W] tensors of the images in the clip (d2 ImageList)
             outputs: prediction 
-            objects_per_frame: List of object IDs in the i-th frame
-            num_queries_per_object: count of queries on each object in each frame
+            num_targets: num of targets present in the clip
+            num_queries_per_target: count of queries on each target in each frame
         """
         
         mask_pred_results = outputs["pred_masks"]   # [T,Q,H,W]
-        # upsample masks
-        mask_pred_results = F.interpolate(
-            mask_pred_results,
-            size=(images.tensor.shape[-2], images.tensor.shape[-1]),
-            mode="bilinear",
-            align_corners=False,
-        )
+        # upsample to original resolution
+        mask_pred_results = F.interpolate(mask_pred_results, size=(images.tensor.shape[-2], images.tensor.shape[-1]), mode="bilinear", align_corners=False,)
         del outputs
 
         # padding mask
         padding_mask = torch.logical_not(data["padding_mask"]).to(mask_pred_results.device)
-        
         processed_results = []
         for mask_pred_per_image in mask_pred_results:
-            
-            processed_r = retry_if_cuda_oom(self.interactive_object_inference)(mask_pred_per_image * padding_mask,
-                                                                               num_targets,
-                                                                               num_queries_per_object)
-            
+            processed_r = retry_if_cuda_oom(self.interactive_mask_inference)(mask_pred_per_image * padding_mask,
+                                                                               num_targets, num_queries_per_target)
             processed_results.append(processed_r * padding_mask)
-
-        
-        visualize_dir_curr_iter = os.path.join(self.output_dir, str(train_iter))
-        
-        if visualize:
-            visualize_dir = os.path.join(visualize_dir_curr_iter, "process_results")
-            os.makedirs(visualize_dir, exist_ok=True)
-            torch.save(mask_pred_results,       os.path.join(visualize_dir, f"upsampled_predictions_round_{round_num}_iter_{train_iter}.pth"))
-            torch.save(padding_mask,            os.path.join(visualize_dir, f"padding_mask_round_{round_num}_iter_{train_iter}.pth"))
-            torch.save(processed_results,       os.path.join(visualize_dir, f"processed_results_round_{round_num}_iter_{train_iter}.pth"))
-
-            # save results
-            round_ious = self.save_results(data, processed_results, train_iter, round_num)
-            return processed_results, round_ious
     
-        return processed_results, None
+        return processed_results
 
     
-    def interactive_object_inference(
+    def interactive_mask_inference(
             self, 
             mask_pred, 
             num_targets,
-            queries_per_object
+            num_queries_per_target
     ):
         """
         Given the raw predictions from Transformer, obtain binary segmentation masks
 
         Args:
-            mask_pred: raw prediction from Transformer, TxQxHxW
-            objects_per_image: list of object IDs in current frame
-            queries_per_objects: count of queries on each object in current frame
-            seq_objects: all objects present in the clip
+            mask_pred: raw prediction from Transformer, QxHxW
+            num_targets: num of targets present in the clip
+            num_queries_per_target: count of queries on each target in current frame
         """
 
         temp_out = []
-        splited_masks = torch.split(mask_pred, queries_per_object, dim=0)
+        splited_masks = torch.split(mask_pred, num_queries_per_target, dim=0)
         for m in splited_masks:
             if len(m)>0:
                 temp_out.append(torch.max(m, dim=0).values)
         
         mask_pred = torch.stack(temp_out)       # (N+1)xHxW
-
         mask_pred = torch.argmax(mask_pred,0)
 
         m = []
@@ -823,71 +650,3 @@ class DynamiteInteractiveTransformer(nn.Module):
         mask_pred = torch.stack(m)
      
         return mask_pred
-    
-
-    
-    # debug
-    def save_results(self, data, processed_results, train_iter, round_num):
-
-        visualize_dir = os.path.join(self.output_dir, str(train_iter), "training_predictions")
-        os.makedirs(visualize_dir, exist_ok=True)
-
-        # gt
-        gt = data["binary_masks"].detach().cpu()
-        T,N,H,W = gt.shape
-        # save gt only once
-        if round_num == 0:
-            fig, ax = plt.subplots(N+1,T,figsize=(T*7, N*3))
-            for t in range(T):
-                pano = torch.zeros((H,W), dtype=torch.uint8)
-                for n in range(N):
-                    ax[n,t].imshow(gt[t][n], cmap='gray')
-                    ax[n,t].axis("off")
-                    ax[n,t].set_title(f"GT Frame {t}, Obj {n+1}")
-                    pano[torch.where(gt[t][n]==1)] = n+1
-                
-                pano = Image.fromarray(pano.numpy())
-                pano.putpalette(color_map)
-                ax[-1,t].imshow(pano)
-                ax[-1,t].axis("off")
-                ax[-1,t].set_title("GT panoptic map")
-            plt.savefig(os.path.join(visualize_dir, f"gt_mask_round_{round_num}_iter_{train_iter}.png"), bbox_inches='tight', pad_inches=0.2)
-            plt.close()
-        
-        # save pred
-        round_ious = []
-        pred = torch.stack(processed_results).detach().cpu()
-        fig, ax = plt.subplots(N+1,T,figsize=(T*7, N*3))
-        for t in range(T):
-            pano = torch.zeros((H,W), dtype=torch.uint8)
-            fr_iou = []
-            for n in range(N):
-                g = gt[t][n]
-                p = pred[t][n].detach().cpu()
-                ax[n,t].imshow(p, cmap='gray')
-                ax[n,t].axis("off")
-
-                iou = compute_iou(g,p)
-                fr_iou.append(iou)
-                ax[n,t].set_title(f"Pred Frame {t}, Obj {n+1}, IoU: {iou}")
-                pano[torch.where(p==1)] = n+1
-            
-            pano = Image.fromarray(pano.numpy())
-            pano.putpalette(color_map)
-            ax[-1,t].imshow(pano)
-            ax[-1,t].axis("off")
-            avg_iou = np.asarray(fr_iou).mean()
-            ax[-1,t].set_title(f"Predicted panoptic map, IoU: {avg_iou}")
-            round_ious.append(avg_iou)
-        plt.savefig(os.path.join(visualize_dir, f"pred_mask_round_{round_num}_iter_{train_iter}.png"), bbox_inches='tight', pad_inches=0.2)
-        plt.close()
-
-        return round_ious
-
-def compute_iou(mask1, mask2, binary=True):
-    if binary:
-        intersection = np.logical_and(mask1, mask2).sum()
-        union = np.logical_or(mask1, mask2).sum()
-        if union == 0:
-            return 1.
-        return round(float(intersection/union),3)

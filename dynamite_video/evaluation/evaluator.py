@@ -33,7 +33,7 @@ class Evaluator(DefaultTrainer):
         logger.info("Initiating interactive evaluation with following setup:")
         logger.info(f"Evaluation datasets: {eval_datasets}")
         logger.info(f"IoU threshold: {iou_threshold}")
-        logger.info(f"Max #interactions: {max_interactions}")
+        logger.info(f"Max #interactions per target: {max_interactions}")
         logger.info(f"Max corrective rounds: {max_rounds}")
         logger.info(f"Evaluation strategy: {eval_strategy}")
         logger.info(f"Random seed: {seed_id}")
@@ -45,6 +45,7 @@ class Evaluator(DefaultTrainer):
         for dataset_name in eval_datasets:
             
             # load sequence info from disc into `GenericVideoSequence` format
+            logger.info(f"Building evaluation dataset from {dataset_name}...")
             dataset, dataset_meta = build_evaluation_dataset(cfg, dataset_name)
             
             from dynamite_video.evaluation.multi_instance_evaluation import evaluate

@@ -26,9 +26,7 @@ class DynamiteHead(nn.Module):
         pixel_decoder: nn.Module,
         # extra parameters
         interactive_transformer: nn.Module,
-        transformer_in_feature: str,
-        # debug
-        output_dir: str,
+        transformer_in_feature: str
     ):
         """
         Args:
@@ -48,9 +46,6 @@ class DynamiteHead(nn.Module):
 
         self.transformer_in_feature = transformer_in_feature
 
-        # debug
-        self.output_dir = os.path.join(output_dir, "vis")
-
 
     @classmethod
     def from_config(cls, cfg, input_shape: Dict[str, ShapeSpec]):
@@ -67,10 +62,7 @@ class DynamiteHead(nn.Module):
             "interactive_transformer": build_interactive_transformer(
                 cfg,
                 interactive_transformer_in_channels,
-            ),
-
-            # debug
-            "output_dir": cfg.OUTPUT_DIR,
+            )
         }
 
 
@@ -82,9 +74,7 @@ class DynamiteHead(nn.Module):
             num_clicks_per_object,
             fg_coords, 
             bg_coords, 
-            max_timestamp,
-            visualize=None,
-            train_iter=None,
+            max_timestamp
     ):
         """
         Forward pass through DynaMITe segmentation head
@@ -104,15 +94,20 @@ class DynamiteHead(nn.Module):
         mask_features, _, multi_scale_features = self.pixel_decoder.forward_features(features)
 
         # forward to interactive transformer
-        predictions, num_queries_per_object, queries = self.interactive_transformer(data, 
-                                                                        images,
-                                                                        multi_scale_features,
-                                                                        mask_features,
-                                                                        num_clicks_per_object,
-                                                                        fg_coords, 
-                                                                        bg_coords, 
-                                                                        max_timestamp,
-                                                                        visualize=visualize,
-                                                                        train_iter=train_iter,
-                                                                    )
-        return predictions, num_queries_per_object, queries
+        if self.training:
+            predictions, num_queries_per_object, queries = self.interactive_transformer(data, 
+                                                                            images,
+                                                                            multi_scale_features, mask_features,
+                                                                            num_clicks_per_object,
+                                                                            fg_coords, bg_coords, max_timestamp
+                                                                        )
+            return predictions, num_queries_per_object, queries
+    
+        else:   # evaluation
+            predictions, num_queries_per_object, queries, normalized_clicks = self.interactive_transformer(data, 
+                                                                            images,
+                                                                            multi_scale_features, mask_features,
+                                                                            num_clicks_per_object,
+                                                                            fg_coords, bg_coords, max_timestamp
+                                                                        )
+            return predictions, num_queries_per_object, queries, normalized_clicks

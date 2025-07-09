@@ -252,7 +252,7 @@ class GenericVideoSequence(object):
         return binary_masks, objects_per_frame, ignore_masks
 
     
-    def prepare_eval_masks(self, fill_value):
+    def prepare_eval_masks(self, orig_to_serial_id, fill_value=0):
         """
         Prepare ground truth panoptic masks for evaluation. NOTE: `thing` classes are
         already excluded
@@ -262,24 +262,37 @@ class GenericVideoSequence(object):
         Args:
             fill_value: any region not covered by the binary RLEs is assigned the `fill_value`
         """
+        # store where each target appears for the first time
         object_appearance = defaultdict(list)
+        # store which targets have already been discovered
         object_discovery = set()
-        semantic_masks = np.full((len(self), self.height, self.width), fill_value=fill_value, dtype=np.uint32)
+        
+        # read the panoptic masks with serial IDs of the targets
+        panoptic_masks = np.full((len(self), self.height, self.width), fill_value=fill_value, dtype=np.uint8)
         for fr_idx, fr_rles in enumerate(self.segmentations):
             for obj_id in fr_rles:
                 # decode RLE
                 img_dims = None if isinstance(fr_rles[obj_id], dict) else self.image_dims
                 _m = decode_mask(fr_rles[obj_id], img_dims)
-                semantic_masks[fr_idx][np.where(_m==1)] = obj_id
+                
+                serial_id = orig_to_serial_id[obj_id]
+                panoptic_masks[fr_idx][np.where(_m==1)] = serial_id
                 
                 # store which frame an object first appears
-                if obj_id not in object_discovery:
-                    object_appearance[fr_idx].append(obj_id)
+                if serial_id not in object_discovery:
+                    object_appearance[fr_idx].append(serial_id)
 
                 # mark the object discovered
-                object_discovery.add(obj_id)
+                object_discovery.add(serial_id)
+        
+        ignore_masks = np.zeros_like(panoptic_masks, dtype=np.bool_)
+        for fr_idx, ign_rles in enumerate(self.ignore_masks):
+            # decode RLE
+            img_dims = None if isinstance(ign_rles, dict) else self.image_dims
+            _m = decode_mask(ign_rles, img_dims)
+            ignore_masks[fr_idx][np.where(_m==1)] = True
 
-        return semantic_masks, object_appearance
+        return panoptic_masks, ignore_masks, object_appearance
 
     
     def extract_subsequence(self, frame_idxes: List[int], object_ids_to_keep: List[int]=None, new_id: str=""):

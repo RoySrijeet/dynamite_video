@@ -65,9 +65,6 @@ def build_evaluation_dataset(cfg, dataset_name):
     """
     Load evaluation dataset in clips
     """
-    logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name=__name__)
-    logger.info(f"Building evaluation dataset from {dataset_name}...")
-    
     eval_ds = EVALUATION_DATASET_BUILDERS[dataset_name](cfg)
     
     return eval_ds.videos, eval_ds.meta
