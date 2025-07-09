@@ -198,6 +198,114 @@ class SequenceManager:
         return indices
 
     
+    def extract_clip_2(self, _indices):
+        """
+        """
+        indices = _indices
+        if len(indices) >= 2 and indices[1] < indices[0]:
+            indices = _indices[::-1]
+
+        clip_object_ids = []
+        clip_gt_masks = self.gt_masks[indices[0]:indices[-1]+1]
+        
+        # predicted objects in the overlapping frames
+        overlapping_objects = []
+        if self.num_overlapping_frames > 0:
+            overlapping_frame_indices = sorted(_indices[:self.num_overlapping_frames])
+            overlapping_frame_preds = np.stack(self.pred_masks[overlapping_frame_indices])
+
+            if overlapping_frame_preds.any():
+                overlapping_objects = list(np.unique(overlapping_frame_preds))
+                if self.bg_id in overlapping_objects:
+                    overlapping_objects.remove(self.bg_id)
+        
+        # new objects appearing in the clip
+        new_objects = []
+        new_object_frames = []
+        for fr_idx in indices:
+            new_appearances = self.object_appearance.get(fr_idx, [])
+            for obj_id in new_appearances:
+                if obj_id not in self.object_discovery:
+                    new_objects.append(obj_id)
+                    new_object_frames.append(fr_idx)
+                    self.object_discovery.add(obj_id)
+
+        all_orig_objects = overlapping_objects + new_objects
+
+        if self.num_overlapping_frames == 0:
+            new_objects = np.unique(clip_gt_masks).tolist()
+            if self.bg_id in new_objects:
+                new_objects.remove(self.bg_id)
+            all_orig_objects = new_objects
+            new_object_frames = []
+            for obj_id in all_orig_objects:
+                obj_masks = (clip_gt_masks==obj_id).astype(np.uint8)
+                non_zero_per_frame = (obj_masks != 0).reshape(obj_masks.shape[0], -1).any(axis=1)
+                global_fr_idx = indices[np.argmax(non_zero_per_frame)]
+                new_object_frames.append(global_fr_idx)
+        
+        # serialize object IDs
+        clip_orig_to_serial_id, clip_serial_to_orig_id = serialize_object_ids(all_orig_objects)
+
+        # record clicks for the frames
+        clip_T = len(indices)
+        clip_N = len(all_orig_objects)
+        clip_fg_coords_list, clip_bg_coords_list = [], []
+        clip_num_clicks_per_object = np.zeros((clip_T, clip_N), dtype=np.uint16)
+        
+        for global_obj_id, local_obj_id in clip_orig_to_serial_id.items():
+
+            # for existing objects, sample a click from predictions in overlapping frames
+            if global_obj_id in overlapping_objects:
+                # randomly select an overlapping frame where the object appears
+                fr_choices = (overlapping_frame_preds==global_obj_id).astype(np.uint8).sum(axis=(1,2)) > 0
+                fr_idx = np.random.choice(np.where(fr_choices)[0])
+                
+                obj_mask = (overlapping_frame_preds[fr_idx]==global_obj_id).astype('uint8')
+                
+                global_fr_idx = overlapping_frame_indices[fr_idx]
+                local_fr_idx = indices.index(global_fr_idx)
+            
+            # for new objects, sample a click from the gt mask of the frame it first appears
+            else:
+                assert global_obj_id in new_objects
+                # find the frame where the new object first appears
+                global_fr_idx = new_object_frames[new_objects.index(global_obj_id)]
+                local_fr_idx = indices.index(global_fr_idx)
+
+                obj_mask = (self.gt_masks[global_fr_idx]==global_obj_id).astype('uint8')
+
+            # sample at the center of the mask
+            center_coords = get_center_coords(obj_mask * self.not_clicked_map[global_fr_idx])
+            
+            # serialized object ID in the clip
+            clip_fg_coords_list.append([center_coords[0], center_coords[1], local_obj_id, local_fr_idx, self.t])
+            clip_num_clicks_per_object[local_fr_idx][local_obj_id-1] += 1
+
+            self.record_click(global_fr_idx, global_obj_id, center_coords)
+
+        input = {
+            "images": torch.as_tensor(self.images[indices], dtype=torch.uint8),
+            "query_init": {
+                "queries": None,
+                "clicks": None,
+                "frames": None,
+            },
+            "num_clicks_per_object": clip_num_clicks_per_object,
+            "fg_coords_list": clip_fg_coords_list,
+            "bg_coords_list": clip_bg_coords_list,
+            "max_timestamp_list": self.max_timestamps[indices],
+            "indices": _indices,
+            "orig_to_serial_id": clip_orig_to_serial_id,
+            "serial_to_orig_id": clip_serial_to_orig_id,
+            # extras
+            "gt_masks": self.gt_masks[indices]
+        }
+
+        self.prev_clip_input = input
+        return input
+
+    
     def extract_clip(self, _indices):
         """
         Extract a clip from the sequence specified by the indices. The clip could be reversed
@@ -217,7 +325,7 @@ class SequenceManager:
         clip_object_ids = []
         
         # predicted objects from overlapping frames
-        overlapping_objects = self.prev_clip_output.get("overlapping_objects", None)
+        overlapping_objects = self.prev_clip_output.get("overlapping_objects", None)    # original IDs of overlapping objects
         overlapping_queries = self.prev_clip_output.get("overlapping_queries", None)    # fg, bg, static_bg
         overlapping_clicks = self.prev_clip_output.get("overlapping_clicks", None)      # fg, bg, static_bg
         overlapping_frames = self.prev_clip_output.get("overlapping_frames", None)

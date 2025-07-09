@@ -223,8 +223,8 @@ class AvgClicksPoolingInitializer(nn.Module):
                     descriptors[fr_idx] = [q.unsqueeze(0) for q in torch.split(overlapping_queries[0][fr_idx], 1, dim=0)]
                 else:
                     descriptors[fr_idx] = [repeat(self.no_click_query, "1 C -> 1 1 C") for _ in range(overlapping_query_splits[0])]
-                clicks = overlapping_clicks[0]
-                clicks[:,3] = fr_idx
+                clicks = overlapping_clicks[0].clone()
+                clicks[:,3] = fr_idx/T
                 normalized_clicks[fr_idx] = [n.squeeze(0) for n in torch.split(clicks, 1, dim=0)]
 
         # new click queries
@@ -270,8 +270,8 @@ class AvgClicksPoolingInitializer(nn.Module):
                 else:
                     descriptors[fr_idx].extend([repeat(self.no_click_query, "1 C -> 1 1 C") for _ in range(overlapping_query_splits[1])])
                 
-                clicks = overlapping_clicks[1]
-                clicks[:,3] = fr_idx
+                clicks = overlapping_clicks[1].clone()
+                clicks[:,3] = fr_idx/T
                 normalized_clicks[fr_idx].extend([n.squeeze(0) for n in torch.split(clicks, 1, dim=0)])
         
         # background queries
