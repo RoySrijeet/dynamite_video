@@ -74,6 +74,7 @@ def evaluate(cfg,
         dataset_stq = defaultdict(list)
         
         for i, video in enumerate(dataset):
+
             logger.info(f"\nSequence {video.id} [{i+1}/{len(dataset)}]...")
 
             # a fresh model for each sequence
@@ -107,10 +108,9 @@ def evaluate(cfg,
                     propagation_start_time = time.perf_counter()
                     
                     inputs = manager.extract_clip(indices)
-                    # torch.save(inputs, os.path.join(debug_vis_path, f"inputs_{indices}.pth"))
-                    
+
                     binary_pred_masks, query_init = predictor.get_prediction([inputs], indices)    # T,N,H,W
-                    # torch.save(binary_pred_masks, os.path.join(debug_vis_path, f"binary_pred_masks_{indices}.pth"))
+                    # torch.save(binary_pred_masks, os.path.join(debug_vis_path, f"inputs_{indices}.pth"))
                     # torch.save(query_init, os.path.join(debug_vis_path, f"query_init_{indices}.pth"))
                     
                     propagation_end_time = time.perf_counter()

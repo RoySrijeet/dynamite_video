@@ -41,7 +41,7 @@ class Predictor:
         # returns -
         # outputs: dict with key "pred_masks" of shape T,Q,H,W
         # num_queries_per_target: list of integers, length N+1; summing up to Q
-        # queries: queries of shape T,Q,D
+        # queries: queries of shape Q,T,D
         # normalized_clicks: clicks of shape T,Q,5 corresponding to the queries
 
         img_dims = inputs[0]["images"].shape[-2:]
@@ -55,7 +55,7 @@ class Predictor:
 
         # # prepare the queries of the overlapping frames
         # # TODO - fix the forward and backward propagation case
-        # overlapping_queries = queries[-self.num_overlapping_frames:].to('cpu')             # T',Q,D
+        overlapping_queries = queries[:,-self.num_overlapping_frames:].to('cpu')             # T',Q,D
         # overlapping_clicks = normalized_clicks[-self.num_overlapping_frames:].to('cpu')    # T',Q,5
 
         # separate the queries based on fg, bg and static_bg
@@ -64,8 +64,8 @@ class Predictor:
             num_queries_per_target[-1]-self.num_static_bg_queries,      # bg queries
             self.num_static_bg_queries                                  # static bg queries
         ]
-        split_overlapping_queries = torch.split(queries, splits, dim=1)
-        split_overlapping_clicks = torch.split(normalized_clicks[0], splits, dim=0)
+        split_overlapping_queries = torch.split(overlapping_queries, splits, dim=0)
+        split_overlapping_clicks = torch.split(normalized_clicks[0].to('cpu'), splits, dim=0)
 
         query_init = {
             "queries": split_overlapping_queries,

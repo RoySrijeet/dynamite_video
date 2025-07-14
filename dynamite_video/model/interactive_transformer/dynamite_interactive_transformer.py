@@ -265,7 +265,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             # returns:
             # outputs: dict with key "pred_masks" of shape T,Q,H,W
             # num_queries_per_target: list of integers, length N+1; summing up to Q
-            # queries: T,Q,D
+            # queries: Q,T,D
             # normalized_clicks: T,Q,5
             outputs, num_queries_per_target, queries, normalized_clicks = self.iterative_batch_forward(multi_scale_features, mask_features, 
                                                                                     memory, memory_pe, size_list, 
@@ -360,17 +360,7 @@ class DynamiteInteractiveTransformer(nn.Module):
 
         # static background queries
         if self.use_static_bg_queries:
-            if self.training or query_init["queries"] is None:
-                static_bg_queries = repeat(self.static_bg_query, "Bg C -> T Bg C", T=T)
-            else:
-                static_bg_queries = []
-                for fr_idx in range(T):
-                    if fr_idx in query_init["frames"]:
-                        static_bg_queries.append(query_init["queries"][2][fr_idx].unsqueeze(0))
-                    else:
-                        static_bg_queries.append(repeat(self.static_bg_query, "Bg C -> 1 Bg C"))
-                static_bg_queries = torch.cat(static_bg_queries, dim=0)
-            
+            static_bg_queries = repeat(self.static_bg_query, "Bg C -> T Bg C", T=T)
             descriptors = torch.cat((descriptors, static_bg_queries), dim=1)   # TxQxD
             static_bg_pe = repeat(self.static_bg_pe, "Bg C -> Bg T C", T=T)
             query_embed = torch.cat((query_embed, static_bg_pe), dim=0)        # QxTxD
@@ -379,8 +369,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             # add proxy bg clicks to the click
             normalized_clicks = torch.cat([normalized_clicks, torch.full((T, self.num_static_bg_queries, 5), -1.0, device=normalized_clicks.device, dtype=normalized_clicks.dtype)], dim=1)
 
-        
-        # if there's no bg query, remove from record
+        # TODO: jerry-built; if there's no bg query, remove from record
         if num_queries_per_target[-1] == 0:
             num_queries_per_target = num_queries_per_target[:-1]
         
@@ -400,11 +389,35 @@ class DynamiteInteractiveTransformer(nn.Module):
             tgt_batched_query_embed = tgt_batched_query_embed + pos_coord_embed                        # Q'xNxD
 
         # pre-encoder prediction
+        torch.save(descriptors, f"/home/roy/REPOS/dynamite_video/debug/storage/descriptor_init.pth")
+        
+        # if query_init["queries"] is not None:
+        #     output = descriptors.permute(1,0,2)
+        # else:
         output = self.queries_nonlinear_projection(descriptors).permute(1,0,2)
+        torch.save(output, f"/home/roy/REPOS/dynamite_video/debug/storage/raw_query_mlp.pth")
+        
+        # replace overlapping queries
+        overlapping_frames = query_init.get("frames", None) # {0:3, 1:4, 2:5}
+        if overlapping_frames is not None:
+            num_overlapping_frames = len(overlapping_frames)
+            num_overlapping_fg_queries = query_init["queries"][0].shape[0]
+            num_overlapping_bg_queries = query_init["queries"][1].shape[0]
+            
+            # overlapping fg queries
+            output[0:num_overlapping_fg_queries, :num_overlapping_frames] = query_init["queries"][0]
+            idx = num_overlapping_fg_queries + len(fg_coords) + 1
+            output[idx: idx + num_overlapping_bg_queries, :num_overlapping_frames] = query_init["queries"][1]
+            output[-self.num_static_bg_queries:, :num_overlapping_frames] = query_init["queries"][2]
+
+        torch.save(output, f"/home/roy/REPOS/dynamite_video/debug/storage/raw_query_in.pth")
+        
+        
         outputs_mask, attn_mask = self.forward_prediction_heads(output, 
                                                                 mask_features, 
                                                                 attn_mask_target_size=size_list[0],
                                                                 orig_clicks=fg_coords+bg_coords)
+        torch.save(outputs_mask, f"/home/roy/REPOS/dynamite_video/debug/storage/outputs_mask_in.pth")
         
         # store predicted mask after each layer, later used in auxiliary loss
         predictions_mask = []
@@ -467,6 +480,8 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                     attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
             predictions_mask.append(outputs_mask)
 
+        torch.save(outputs_mask, f"/home/roy/REPOS/dynamite_video/debug/storage/outputs_mask_out.pth")
+        torch.save(output, f"/home/roy/REPOS/dynamite_video/debug/storage/raw_query_out.pth")
         out = {
             'pred_masks': predictions_mask[-1],
             'aux_outputs': self._set_aux_loss(predictions_mask)
@@ -475,8 +490,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         if self.training:
             return out, num_queries_per_target
         
-        Q,T,D = output.shape
-        return out, num_queries_per_target, output.reshape(T,Q,D), normalized_clicks
+        return out, num_queries_per_target, output, normalized_clicks
 
 
     @torch.jit.unused

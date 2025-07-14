@@ -228,7 +228,7 @@ class SequenceManager:
                 if obj_id not in self.object_discovery:
                     new_objects.append(obj_id)
                     new_object_frames.append(fr_idx)
-                    self.object_discovery.add(obj_id)
+                    # self.object_discovery.add(obj_id)
 
         all_orig_objects = overlapping_objects + new_objects
 
@@ -331,7 +331,7 @@ class SequenceManager:
         overlapping_frames = self.prev_clip_output.get("overlapping_frames", None)
         if overlapping_objects is not None:
             clip_object_ids.extend(overlapping_objects)
-            overlapping_frames = [indices.index(f) for f in overlapping_frames]
+            overlapping_frames = {indices.index(overlapping_frames[f]):f for f in overlapping_frames}
         
         # any new objects
         frames_to_inspect = []
@@ -464,7 +464,7 @@ class SequenceManager:
             "overlapping_queries": query_init["queries"],
             "overlapping_clicks": query_init["clicks"],
             "overlapping_objects": overlapping_objects,
-            "overlapping_frames": indices[-self.num_overlapping_frames:],
+            "overlapping_frames": {indices.index(f):f for f in indices[-self.num_overlapping_frames:]},
         }
         return panoptic_pred_masks
 

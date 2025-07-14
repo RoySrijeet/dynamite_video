@@ -203,31 +203,27 @@ class AvgClicksPoolingInitializer(nn.Module):
         N = len(num_clicks_per_target[0]) + 1 # add bg
         H = float(h*8)
         W = float(w*8)
-
+        
         descriptors = [[] for _ in range(T)]
         normalized_clicks = [[] for _ in range(T)]
 
-        # overlapping frames
+        # if there are overlapping frames, first add the overlapping queries
+        # corresponding to the queries of the overlapping frames
+        
         overlapping_frames = query_init.get("frames", None)
-        
+        overlapping_clicks = query_init.get("clicks", None)
+
         if overlapping_frames is not None:
-            # overlapping queries
-            overlapping_queries = query_init["queries"]
-            overlapping_clicks = query_init["clicks"]
-            # num of fg, bg, and static bg queries, respectively, in the overlapping queries
-            overlapping_query_splits = [split.shape[1] for split in overlapping_queries]
-        
-            # stack the foreground queries first
+            num_overlapping_fg_queries = query_init["queries"][0].shape[0]
             for fr_idx in range(T):
-                if fr_idx in overlapping_frames:
-                    descriptors[fr_idx] = [q.unsqueeze(0) for q in torch.split(overlapping_queries[0][fr_idx], 1, dim=0)]
-                else:
-                    descriptors[fr_idx] = [repeat(self.no_click_query, "1 C -> 1 1 C") for _ in range(overlapping_query_splits[0])]
+                # for each overlapping query, add a learnable one per frame
+                descriptors[fr_idx] = [repeat(self.no_click_query, "1 C -> 1 1 C") for _ in range(num_overlapping_fg_queries)]
+                # record corresponding clicks
                 clicks = overlapping_clicks[0].clone()
                 clicks[:,3] = fr_idx/T
                 normalized_clicks[fr_idx] = [n.squeeze(0) for n in torch.split(clicks, 1, dim=0)]
 
-        # new click queries
+        # append new clicks
         for fg_coords in batched_fg_coords_list:
             y,x,obj_id,fr_idx,t = fg_coords
 
@@ -262,17 +258,16 @@ class AvgClicksPoolingInitializer(nn.Module):
                     desc.append(repeat(self.no_click_query, "1 C -> 1 1 C"))
                     clks.append(torch.tensor([y/norm_h, x/norm_w, obj_id, fr/T, t/norm_t]))
         
-        if overlapping_frames is not None and len(overlapping_clicks[1]>0):
-            # stack the background queries first
-            for fr_idx in range(T):
-                if fr_idx in overlapping_frames:
-                    descriptors[fr_idx].extend([q.unsqueeze(0) for q in torch.split(overlapping_queries[1][fr_idx], 1, dim=0)])
-                else:
-                    descriptors[fr_idx].extend([repeat(self.no_click_query, "1 C -> 1 1 C") for _ in range(overlapping_query_splits[1])])
-                
-                clicks = overlapping_clicks[1].clone()
-                clicks[:,3] = fr_idx/T
-                normalized_clicks[fr_idx].extend([n.squeeze(0) for n in torch.split(clicks, 1, dim=0)])
+        if overlapping_frames is not None:
+            num_overlapping_bg_queries = query_init["queries"][1].shape[0]
+            if num_overlapping_bg_queries > 0:
+                for fr_idx in range(T):
+                    # for each overlapping bg query, add a learnable one per frame
+                    descriptors[fr_idx].extend([repeat(self.no_click_query, "1 C -> 1 1 C") for _ in range(num_overlapping_bg_queries)])
+                    # record corresponding clicks
+                    clicks = overlapping_clicks[1].clone()
+                    clicks[:,3] = fr_idx/T
+                    normalized_clicks[fr_idx].extend([n.squeeze(0) for n in torch.split(clicks, 1, dim=0)])
         
         # background queries
         for bg_coords in batched_bg_coords_list:
