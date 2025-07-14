@@ -389,13 +389,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             tgt_batched_query_embed = tgt_batched_query_embed + pos_coord_embed                        # Q'xNxD
 
         # pre-encoder prediction
-        torch.save(descriptors, f"/home/roy/REPOS/dynamite_video/debug/storage/descriptor_init.pth")
-        
-        # if query_init["queries"] is not None:
-        #     output = descriptors.permute(1,0,2)
-        # else:
         output = self.queries_nonlinear_projection(descriptors).permute(1,0,2)
-        torch.save(output, f"/home/roy/REPOS/dynamite_video/debug/storage/raw_query_mlp.pth")
         
         # replace overlapping queries
         overlapping_frames = query_init.get("frames", None) # {0:3, 1:4, 2:5}
@@ -410,14 +404,10 @@ class DynamiteInteractiveTransformer(nn.Module):
             output[idx: idx + num_overlapping_bg_queries, :num_overlapping_frames] = query_init["queries"][1]
             output[-self.num_static_bg_queries:, :num_overlapping_frames] = query_init["queries"][2]
 
-        torch.save(output, f"/home/roy/REPOS/dynamite_video/debug/storage/raw_query_in.pth")
-        
-        
         outputs_mask, attn_mask = self.forward_prediction_heads(output, 
                                                                 mask_features, 
                                                                 attn_mask_target_size=size_list[0],
                                                                 orig_clicks=fg_coords+bg_coords)
-        torch.save(outputs_mask, f"/home/roy/REPOS/dynamite_video/debug/storage/outputs_mask_in.pth")
         
         # store predicted mask after each layer, later used in auxiliary loss
         predictions_mask = []
@@ -480,8 +470,6 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                     attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
             predictions_mask.append(outputs_mask)
 
-        torch.save(outputs_mask, f"/home/roy/REPOS/dynamite_video/debug/storage/outputs_mask_out.pth")
-        torch.save(output, f"/home/roy/REPOS/dynamite_video/debug/storage/raw_query_out.pth")
         out = {
             'pred_masks': predictions_mask[-1],
             'aux_outputs': self._set_aux_loss(predictions_mask)
