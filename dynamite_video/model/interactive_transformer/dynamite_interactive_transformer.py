@@ -392,17 +392,18 @@ class DynamiteInteractiveTransformer(nn.Module):
         output = self.queries_nonlinear_projection(descriptors).permute(1,0,2)
         
         # replace overlapping queries
-        overlapping_frames = query_init.get("frames", None) # {0:3, 1:4, 2:5}
-        if overlapping_frames is not None:
-            num_overlapping_frames = len(overlapping_frames)
-            num_overlapping_fg_queries = query_init["queries"][0].shape[0]
-            num_overlapping_bg_queries = query_init["queries"][1].shape[0]
-            
-            # overlapping fg queries
-            output[0:num_overlapping_fg_queries, :num_overlapping_frames] = query_init["queries"][0]
-            idx = num_overlapping_fg_queries + len(fg_coords) + 1
-            output[idx: idx + num_overlapping_bg_queries, :num_overlapping_frames] = query_init["queries"][1]
-            output[-self.num_static_bg_queries:, :num_overlapping_frames] = query_init["queries"][2]
+        if query_init is not None:
+            overlapping_frames = query_init.get("frames", None) # {0:3, 1:4, 2:5}
+            if overlapping_frames is not None:
+                num_overlapping_frames = len(overlapping_frames)
+                num_overlapping_fg_queries = query_init["queries"][0].shape[0]
+                num_overlapping_bg_queries = query_init["queries"][1].shape[0]
+                
+                # overlapping fg queries
+                output[0:num_overlapping_fg_queries, :num_overlapping_frames] = query_init["queries"][0]
+                idx = num_overlapping_fg_queries + len(fg_coords) + 1
+                output[idx: idx + num_overlapping_bg_queries, :num_overlapping_frames] = query_init["queries"][1]
+                output[-self.num_static_bg_queries:, :num_overlapping_frames] = query_init["queries"][2]
 
         outputs_mask, attn_mask = self.forward_prediction_heads(output, 
                                                                 mask_features, 
