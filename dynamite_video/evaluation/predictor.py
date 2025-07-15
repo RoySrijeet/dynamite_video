@@ -37,18 +37,17 @@ class Predictor:
 
         """
         # model forward pass
-        outputs, num_queries_per_target, queries, normalized_clicks  = self.model(inputs)
+        images, outputs, num_queries_per_target, queries, normalized_clicks  = self.model(inputs)
         # returns -
         # outputs: dict with key "pred_masks" of shape T,Q,H,W
         # num_queries_per_target: list of integers, length N+1; summing up to Q
         # queries: queries of shape Q,T,D
         # normalized_clicks: clicks of shape T,Q,5 corresponding to the queries
 
-        img_dims = inputs[0]["images"].shape[-2:]
-        processed_results = self.process_results(outputs,
-                                                len(inputs[0]["num_clicks_per_object"][0]),     # N
-                                                num_queries_per_target,
-                                                img_dims)
+        processed_results = self.process_results(images,
+                                                outputs,     # N
+                                                len(inputs[0]["num_clicks_per_object"][0]),
+                                                num_queries_per_target)
             
         # T,N,H,W binary prediction masks
         pred_masks = torch.stack([x.to('cpu',dtype=torch.uint8) for x in processed_results])
@@ -77,10 +76,10 @@ class Predictor:
     
     def process_results(
             self,
+            images,
             outputs,
             num_targets,
-            num_queries_per_target,
-            img_dims
+            num_queries_per_target
     ):
         """
         Args:
@@ -89,11 +88,15 @@ class Predictor:
             num_queries_per_target: count of queries on each target in each frame
             img_dims: original image dimensions
         """
-        
+
         mask_pred_results = outputs["pred_masks"]   # [T,Q,H,W]
         # upsample masks to original resolution
-        mask_pred_results = F.interpolate(mask_pred_results, size=img_dims, mode="bilinear", align_corners=False)
+        mask_pred_results = F.interpolate(mask_pred_results, 
+                                          size=(images.tensor.shape[-2], images.tensor.shape[-1]), 
+                                          mode="bilinear", align_corners=False)
         del outputs
+
+        img_dims = images.image_sizes[0]
 
         processed_results = []
         for mask_pred_per_image in mask_pred_results:

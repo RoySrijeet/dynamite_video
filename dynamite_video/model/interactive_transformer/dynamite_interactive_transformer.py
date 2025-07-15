@@ -238,7 +238,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             for i in range(num_rounds):
 
                 # generate current queries, transformer forward pass
-                prev_output, num_queries_per_target = self.iterative_batch_forward(multi_scale_features, mask_features, 
+                prev_output, num_queries_per_target = self.iterative_batch_forward(data, multi_scale_features, mask_features, 
                                                                                    memory, memory_pe, size_list, 
                                                                                    num_clicks_per_target,
                                                                                    fg_coords, bg_coords, max_timestamp)
@@ -255,7 +255,7 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                                              refine_strategy=self.refine_strategy)
             
             # generate current queries, transformer forward pass
-            outputs, num_queries_per_target = self.iterative_batch_forward(multi_scale_features, mask_features, 
+            outputs, num_queries_per_target = self.iterative_batch_forward(data, multi_scale_features, mask_features, 
                                                                            memory, memory_pe, size_list, 
                                                                            num_clicks_per_target,
                                                                            fg_coords, bg_coords, max_timestamp)
@@ -267,7 +267,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             # num_queries_per_target: list of integers, length N+1; summing up to Q
             # queries: Q,T,D
             # normalized_clicks: T,Q,5
-            outputs, num_queries_per_target, queries, normalized_clicks = self.iterative_batch_forward(multi_scale_features, mask_features, 
+            outputs, num_queries_per_target, queries, normalized_clicks = self.iterative_batch_forward(data, multi_scale_features, mask_features, 
                                                                                     memory, memory_pe, size_list, 
                                                                                     num_clicks_per_target, 
                                                                                     fg_coords, bg_coords, max_timestamp,
@@ -319,6 +319,7 @@ class DynamiteInteractiveTransformer(nn.Module):
     
     def iterative_batch_forward(
             self, 
+            data,
             multi_scale_features, 
             mask_features,
             memory, 
@@ -335,8 +336,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         """
         
         T, _, H, W = mask_features.shape
-        height = 4*H
-        width = 4*W
+        height,width = data["images"].shape[-2:]
         
         # generate query descriptors for input clicks
         (descriptors,                       # TxQxD

@@ -158,7 +158,7 @@ class DynamiteModel(nn.Module):
                                                                                             fg_coords, 
                                                                                             bg_coords, 
                                                                                             max_timestamp)
-            return outputs, num_queries_per_target, queries, normalized_clicks
+            return images, outputs, num_queries_per_target, queries, normalized_clicks
 
 
     def preprocess_batch_data(self, inputs):
