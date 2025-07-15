@@ -452,8 +452,10 @@ class SequenceManager:
             union = np.logical_or(p,g).sum()
             if union > 0:
                 iou = intersection/union
-
-                self.ious[frame_idx][obj_id-1] = iou
+            else:
+                iou = 1.
+            
+            self.ious[frame_idx][obj_id-1] = iou
 
         frame_iou = self.ious[frame_idx]
         return frame_iou[np.where(frame_iou>=0)].mean()
