@@ -120,26 +120,23 @@ def evaluate(cfg,
                 # metrics
                 logger.info(f"Computing metrics...")
                 metric_compute_start_time = time.perf_counter()
-                video_stq, video_aq, video_iou = compute_stq(y_true=manager.gt_masks, 
+                video_stq, video_aq, video_sq = compute_stq(y_true=manager.gt_masks, 
                                                              y_pred=manager.pred_masks, 
                                                              object_ids=manager.object_ids,
-                                                             ignore_label=manager.bg_id,
-                                                             mapping=manager.serial_to_orig_ids,    # debug
-                                                             dataset_meta=dataset_meta)             # debug
+                                                             ignore_label=manager.bg_id)
                 avg_iou = manager.frame_level_ious.mean()
                 curr_click_count = manager.num_clicks_per_frame.sum()
-
                 metric_compute_end_time = time.perf_counter()
                 metric_compute_time.append(metric_compute_end_time - metric_compute_start_time)
                 
                 dataset_stq[manager.sequence.id].append({
                     "Round": manager.round_num, "#frames": manager.T, "#targets": manager.N, 
                     "#clicks": int(curr_click_count), "IoU": float(avg_iou),
-                    # "STQ": video_stq, "AQ": video_aq, "IoU": video_iou, 
+                    "STQ": video_stq, "AQ": video_aq, "SQ": video_sq, 
                 })
                 logger.info(f"Round {manager.round_num} scores: \n#frames: {manager.T}, \n#targets: {manager.N} \
-                    \nTotal #clicks: {curr_click_count} \nIoU: {avg_iou}")
-                    # \nSTQ: {video_stq} \nAQ: {video_aq} \nIoU: {video_iou}")
+                    \nTotal #clicks: {curr_click_count} \nIoU: {avg_iou} \
+                    \nSTQ: {video_stq} \nAQ: {video_aq} \nSQ: {video_sq}")
 
                 ## WEAKEST PREDICTION ##
                 logger.info(f"Looking for an object/frame to refine...")

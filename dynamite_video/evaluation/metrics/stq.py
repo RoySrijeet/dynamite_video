@@ -170,7 +170,7 @@ class STQuality(object):
       self._intersections[sequence_id] = {}
       self._sequence_length[sequence_id] = 1
 
-    instance_label = y_true % self._max_instances_per_category
+    instance_label = y_true #% self._max_instances_per_category
 
     label_mask = tf.zeros_like(semantic_label, dtype=tf.bool)
     prediction_mask = tf.zeros_like(semantic_prediction, dtype=tf.bool)
