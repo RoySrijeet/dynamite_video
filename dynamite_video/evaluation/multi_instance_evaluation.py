@@ -120,7 +120,12 @@ def evaluate(cfg,
                 # metrics
                 logger.info(f"Computing metrics...")
                 metric_compute_start_time = time.perf_counter()
-                # video_stq, video_aq, video_iou = compute_stq(manager.gt_masks, manager.pred_masks, dataset_meta)
+                video_stq, video_aq, video_iou = compute_stq(y_true=manager.gt_masks, 
+                                                             y_pred=manager.pred_masks, 
+                                                             object_ids=manager.object_ids,
+                                                             ignore_label=manager.bg_id,
+                                                             mapping=manager.serial_to_orig_ids,    # debug
+                                                             dataset_meta=dataset_meta)             # debug
                 avg_iou = manager.frame_level_ious.mean()
                 curr_click_count = manager.num_clicks_per_frame.sum()
 

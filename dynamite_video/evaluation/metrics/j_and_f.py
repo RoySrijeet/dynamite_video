@@ -1,8 +1,7 @@
-# Adapted by Srijeet Roy from davis-interactive framework
+# Adapted by Srijeet Roy from DAVIS Interactive Evaluation Framework: https://github.com/albertomontesg/davis-interactive
 
 from __future__ import absolute_import, division
 
-import os
 import cv2
 import math
 import numpy as np
@@ -15,7 +14,7 @@ def batched_jaccard(
         y_true, 
         y_pred, 
         object_ids, 
-        ign_label=None
+        ignore_label=None
 ):
     """ Batch jaccard similarity for multiple instance segmentation.
 
@@ -23,24 +22,20 @@ def batched_jaccard(
         y_true: ground truth labels, np.ndarray, shape TxHxW and type integer
         y_pred: predicted labels, np.ndarray, shape TxHxW and type integer
         object_ids: list of IDs of objects present in `y_true`
-        ign_label: label of ignore class
+        ignore_label: label of ignore class
     """
-    vis_dir = "/home/roy/REPOS/dynamite_video/debug/visualization/metrics/batched_jaccard"
-    np.save(os.path.join(vis_dir, "y_true.npy"), y_true)
-    np.save(os.path.join(vis_dir, "y_pred.npy"), y_pred)
-    np.save(os.path.join(vis_dir, "object_ids.npy"), np.asarray(object_ids))
     T = len(y_true)
     N = len(object_ids)
 
     # compute J-score for all objects except that of the ignore class
-    if ign_label is not None and ign_label in object_ids:
+    if ignore_label is not None and ignore_label in object_ids:
         N -= 1
     
     jaccard = np.empty((T, N), dtype=np.single)
 
     for i, obj_id in enumerate(object_ids):
         
-        if ign_label is not None and obj_id==ign_label:
+        if ignore_label is not None and obj_id==ignore_label:
             # skip any ignore class
             continue
         
@@ -190,7 +185,7 @@ def batched_f_measure(
         y_true,
         y_pred,
         object_ids,
-        ign_label=None,
+        ignore_label=None,
         bound_th=0.008
 ):
     """ Batch F-measure for multiple instance segmentation.
@@ -199,19 +194,19 @@ def batched_f_measure(
         y_true: ground truth labels, np.ndarray, shape TxHxW and type integer
         y_pred: predicted labels, np.ndarray, shape TxHxW and type integer
         object_ids: list of IDs of objects present in `y_true`
-        ign_label: label of ignore class
+        ignore_label: label of ignore class
     """
     T = len(y_true)
     N = len(object_ids)
 
     # compute F-score for all objects except that of the ignore class
-    if ign_label is not None and ign_label in object_ids:
+    if ignore_label is not None and ignore_label in object_ids:
         N -= 1
     
     f_measure_result = np.empty((T, N), dtype=np.single)
 
     for i, obj_id in enumerate(object_ids):
-        if ign_label is not None and obj_id==ign_label:
+        if ignore_label is not None and obj_id==ignore_label:
             # skip any ignore class
             continue
         
