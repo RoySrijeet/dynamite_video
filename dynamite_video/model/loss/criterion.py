@@ -73,6 +73,7 @@ class SetFinalCriterion(nn.Module):
             for m in splited_masks:
                 temp_out.append(torch.max(m, dim=0).values)
             new_outputs.append(torch.stack(temp_out))
+            # new_outputs.append(torch.stack(temp_out[:-1]))  # excluding bg
         
         # predicted masks at 1/4th resolution
         pred_masks = torch.cat(new_outputs, dim=0).unsqueeze(1)    # T*N,1,h,w
