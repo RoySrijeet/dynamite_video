@@ -197,6 +197,7 @@ ITERATIVE:
     NUM_STATIC_BG_QUERIES: 9
     MAX_NUM_REFINEMENT_ROUNDS: 3
   TEST:
+    MIN_MASK_AREA: 1
     INTERACTIVE_EVALAUTION: True
     # perform evaluation on specified datsets
     DATASETS: [KITTI_STEP]
