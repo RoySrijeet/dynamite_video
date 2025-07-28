@@ -214,7 +214,7 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
             assert self.split == "test"
             raise RuntimeError(f"Annotations for KITTI-STEP test split is not available")
 
-        annotations_content = map_kitti_step_annotations(cfg, json_annotations, MIN_MASK_AREA=1)
+        annotations_content = map_kitti_step_annotations(cfg, json_annotations, MIN_MASK_AREA=cfg.ITERATIVE.TEST.MIN_MASK_AREA)
 
         self.videos, self.meta = parse_generic_video_dataset(self.path_to_images, annotations_content) #, serialize=True)
         del annotations_content
