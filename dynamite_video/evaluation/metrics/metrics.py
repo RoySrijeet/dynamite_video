@@ -20,10 +20,9 @@ def compute_stq(
         object_ids: target IDs
         ignore_label: bg ID
     """
-    stq_metric = STQuality(num_classes=len(object_ids)+1, #dataset_meta["num_classes"],
-                           things_list=object_ids, #dataset_meta["things_list"],
-                           ignore_label=ignore_label, #dataset_meta["ignore_class"],
-                           max_instances_per_category=1, #dataset_meta["max_instances_per_category"],
+    stq_metric = STQuality(num_classes=len(object_ids)+1,
+                           things_list=object_ids,
+                           ignore_label=ignore_label,
                            offset=int(1e6))
 
     for gt_mask, pred_mask in zip(y_true, y_pred):

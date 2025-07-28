@@ -17,14 +17,14 @@ from dynamite_video.evaluation.metrics.metrics import compute_j_and_f, compute_s
 from dynamite_video.evaluation.predictor import Predictor
 
 
-def evaluate(cfg, 
-             model, 
+def evaluate(model, 
              dataset,
              dataset_meta,
-             iou_threshold=0.85,
-             max_interactions=3,
-             max_rounds=3,
-             eval_strategy="random",
+             tfms,
+             iou_threshold,
+             max_interactions,
+             max_rounds,
+             output_dir,
              seed_id=0,
              save_vis=False,
              ):
@@ -50,20 +50,12 @@ def evaluate(cfg,
     """
     vis_path = None
     if save_vis:
-        vis_path = os.path.join(cfg.OUTPUT_DIR, "vis")
+        vis_path = os.path.join(output_dir, "vis")
         os.makedirs(vis_path, exist_ok=True)
     dataset_meta["vis_path"] = vis_path
-
-    # debug
-    debug_vis_path = os.path.join(cfg.OUTPUT_DIR, "eval_debug")
-    os.makedirs(debug_vis_path, exist_ok=True)
     
-    logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="Multi Instance Evaluation")
+    logger = setup_logger(output=output_dir, distributed_rank=comm.get_rank(), name="Multi Instance Evaluation")
     logger.info(f"Starting inference on {len(dataset)} sequences...")
-
-    num_static_bg_queries = 0
-    if cfg.ITERATIVE.TRAIN.USE_STATIC_BG_QUERIES:
-        num_static_bg_queries = cfg.ITERATIVE.TRAIN.NUM_STATIC_BG_QUERIES
     
     with ExitStack() as stack:
         if isinstance(model, nn.Module):
@@ -74,79 +66,63 @@ def evaluate(cfg,
         dataset_stq = defaultdict(list)
         
         for i, video in enumerate(dataset):
-
-            logger.info(f"\nSequence {video.id} [{i+1}/{len(dataset)}]...")
-
-            # a fresh model for each sequence
-            predictor = Predictor(model, dataset_meta["num_overlapping_frames"], num_static_bg_queries)
             
             # sequence manager for current sequence
-            manager = SequenceManager(video, dataset_meta, cfg.INPUT)
+            manager = SequenceManager(video, dataset_meta, tfms)
+            logger.info(f"\nProcessing Sequence {video.id} [{i+1}/{len(dataset)}] \
+                         with {manager.T} frames and {manager.N} targets...")
 
-            # click budget for whole sequence
+            # a fresh model for each sequence
+            predictor = Predictor(model, dataset_meta["num_overlapping_frames"], manager.T)
+
+            # click budget for whole sequence = max #clicks per target * #targets
             click_budget = max_interactions * manager.N
 
-            # rounding starts at first frame
-            lowest_frame_index = 0
-
+            # time-keeping in each round
             propagation_time = []
             metric_compute_time = []
+
+            # first round starts at first frame
+            lowest_frame_index = 0
             
             while lowest_frame_index!=-1:
                 manager.round_num += 1
-                logger.info(f"\nRound {manager.round_num}:")
-
-                prop_time = 0
+                logger.info(f"\nRound {manager.round_num}: \nPropagating...")
 
                 # generate indices of shorter sub-sequences or clips from the whole sequence
                 clip_indices = manager.generate_clip_indices(start=lowest_frame_index)
-
-                ## PROPAGATION ##
-                logger.info(f"Predicting {manager.N} masklets in {manager.T} frames...")
-
+                
+                ### PROPAGATION ###
+                propagation_start_time = time.perf_counter()
                 for indices in tqdm(clip_indices, leave=False, desc="Clip"):
-                    propagation_start_time = time.perf_counter()
                     
+                    # prepare clip input to the model
                     inputs = manager.extract_clip(indices)
+                    # model forward pass
+                    binary_pred_masks, overlap = predictor.get_prediction([inputs], indices)    # T,N,H,W
+                    # store as panoptic prediction
+                    manager.store_prediction(binary_pred_masks, overlap)
 
-                    binary_pred_masks, query_init = predictor.get_prediction([inputs], indices)    # T,N,H,W
-                    
-                    propagation_end_time = time.perf_counter()
-                    panoptic_pred_masks = manager.store_prediction(binary_pred_masks, query_init)
-                    
-                    prop_time+= (propagation_end_time - propagation_start_time)
-                propagation_time.append(prop_time)
-                
-                # metrics
-                logger.info(f"Computing metrics...")
-                metric_compute_start_time = time.perf_counter()
-                video_stq, video_aq, video_sq = compute_stq(y_true=manager.gt_masks, 
-                                                             y_pred=manager.pred_masks, 
-                                                             object_ids=manager.object_ids,
-                                                             ignore_label=manager.bg_id)
-                avg_iou = manager.frame_level_ious.mean()
-                curr_click_count = manager.num_clicks_per_frame.sum()
-                metric_compute_end_time = time.perf_counter()
-                metric_compute_time.append(metric_compute_end_time - metric_compute_start_time)
-                
-                dataset_stq[manager.sequence.id].append({
-                    "Round": manager.round_num, "#frames": manager.T, "#targets": manager.N, 
-                    "#clicks": int(curr_click_count), "IoU": float(avg_iou),
-                    "STQ": video_stq, "AQ": video_aq, "SQ": video_sq, 
-                })
-                logger.info(f"Round {manager.round_num} scores: \n#frames: {manager.T}, \n#targets: {manager.N} \
-                    \nTotal #clicks: {curr_click_count} \nIoU: {avg_iou} \
-                    \nSTQ: {video_stq} \nAQ: {video_aq} \nSQ: {video_sq}")
+                propagation_time.append(time.perf_counter() - propagation_start_time)
 
-                ## WEAKEST PREDICTION ##
-                logger.info(f"Looking for an object/frame to refine...")
+                
+                ### EVALUATION METRICS ###
+                logger.info(f"Calculating evaluation metrics...")
+                scores, compute_time = calculate_score(manager)
+                dataset_stq[manager.sequence.id].append(scores)
+                metric_compute_time.append(compute_time)
+                logger.info(f"Scores: {scores}")
+
+                
+                ### WEAKEST PREDICTION ###
+                logger.info(f"Looking for a target/frame to refine...")
                 # Stopping criterion 1: check whether round budget is over
                 if manager.round_num == max_rounds:
                     logger.info(f'Maximum round limit ({max_rounds}) reached!')
                     lowest_frame_index = -1
 
                 # Stopping criterion 2: check whether click budget is over
-                if click_budget <= curr_click_count:
+                if click_budget <= manager.num_clicks_per_frame.sum():
                     logger.info(f'Click budget ({max_interactions} per frame) over!')
                     lowest_frame_index = -1
 
@@ -168,6 +144,26 @@ def evaluate(cfg,
             
             del manager
         return dataset_stq
+    
+
+def calculate_score(manager: SequenceManager):
+    start_time = time.perf_counter()
+    video_stq, video_aq, video_sq = compute_stq(y_true=manager.gt_masks, 
+                                                    y_pred=manager.pred_masks, 
+                                                    object_ids=manager.object_ids,
+                                                    ignore_label=manager.bg_id)
+    end_time = time.perf_counter()
+    
+    scores = {
+        "Round": manager.round_num, 
+        "#frames": manager.T, 
+        "#targets": manager.N, 
+        "#clicks": int(manager.num_clicks_per_frame.sum()), 
+        "STQ": video_stq, 
+        "AQ": video_aq, 
+        "SQ": video_sq, 
+    }
+    return scores, end_time - start_time
 
 
 @contextmanager

@@ -13,7 +13,7 @@ import numpy as np
 from detectron2.utils import comm
 from detectron2.engine import launch
 from detectron2.utils.logger import setup_logger
-from detectron2.checkpoint import DetectionCheckpointer
+
 
 from dynamite_video.training.trainer import Trainer
 from dynamite_video.evaluation.evaluator import Evaluator
@@ -36,17 +36,9 @@ def evaluation_pipeline(args):
     # setup experiment configuration
     cfg = load_config(args)
     default_setup(cfg, args)
-    
-    logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name=__name__)
-    logger.info("Welcome to DynaMITe-Video Evaluation Pipeline!")
 
-    # load model architecture
-    model = Evaluator.build_model(cfg)
-    # load model weights from cfg.MODEL.WEIGHTS
-    DetectionCheckpointer(model, 
-                          save_dir=cfg.OUTPUT_DIR).resume_or_load(cfg.MODEL.WEIGHTS)
-    
-    Evaluator.interactive_evaluation(cfg, model)
+    evaluator = Evaluator(cfg)
+    evaluator.interactive_evaluation()
 
 
 def training_pipeline(args):
