@@ -151,14 +151,14 @@ class DynamiteModel(nn.Module):
             return losses
            
         else: # evaluation
-            outputs, num_queries_per_target, queries, normalized_clicks = self.sem_seg_head(inputs[0],
-                                                                                            images,
-                                                                                            features,
-                                                                                            num_clicks_per_target,
-                                                                                            fg_coords, 
-                                                                                            bg_coords, 
-                                                                                            max_timestamp)
-            return images, outputs, num_queries_per_target, queries, normalized_clicks
+            outputs, num_queries_per_target = self.sem_seg_head(inputs[0],
+                                                                images,
+                                                                features,
+                                                                num_clicks_per_target,
+                                                                fg_coords, 
+                                                                bg_coords, 
+                                                                max_timestamp)
+            return images, outputs["pred_masks"], num_queries_per_target
 
 
     def preprocess_batch_data(self, inputs):

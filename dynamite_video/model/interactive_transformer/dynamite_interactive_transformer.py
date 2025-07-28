@@ -1,14 +1,6 @@
 import fvcore.nn.weight_init as weight_init
-import numpy as np
-import random
 import torch
-import os
 
-from PIL import Image
-import matplotlib.pyplot as plt
-from dynamite_video.evaluation.eval_utils import color_map
-
-from collections import defaultdict
 from einops import repeat, rearrange
 from torch import nn
 from torch.nn import functional as F
@@ -232,6 +224,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         
         
         if self.training:
+            # iterative refinement in training
             
             # number of corrective iterations
             num_rounds = self.max_num_rounds    # TODO: #random.randint(0, self.max_num_rounds)
@@ -254,25 +247,12 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                                                              iou_threshold=self.iou_threshold,
                                                                                              refine_strategy=self.refine_strategy)
             
-            # generate current queries, transformer forward pass
-            outputs, num_queries_per_target = self.iterative_batch_forward(data, multi_scale_features, mask_features, 
-                                                                           memory, memory_pe, size_list, 
-                                                                           num_clicks_per_target,
-                                                                           fg_coords, bg_coords, max_timestamp)
-            return outputs, num_queries_per_target
-        
-        else: # evaluation
-            # returns:
-            # outputs: dict with key "pred_masks" of shape T,Q,H,W
-            # num_queries_per_target: list of integers, length N+1; summing up to Q
-            # queries: Q,T,D
-            # normalized_clicks: T,Q,5
-            outputs, num_queries_per_target, queries, normalized_clicks = self.iterative_batch_forward(data, multi_scale_features, mask_features, 
-                                                                                    memory, memory_pe, size_list, 
-                                                                                    num_clicks_per_target, 
-                                                                                    fg_coords, bg_coords, max_timestamp,
-                                                                                    query_init=data.get("query_init", None))
-            return outputs, num_queries_per_target, queries, normalized_clicks
+        # generate current queries, transformer forward pass
+        outputs, num_queries_per_target = self.iterative_batch_forward(data, multi_scale_features, mask_features, 
+                                                                        memory, memory_pe, size_list, 
+                                                                        num_clicks_per_target,
+                                                                        fg_coords, bg_coords, max_timestamp)
+        return outputs, num_queries_per_target
 
     
     def forward_prediction_heads(
@@ -328,8 +308,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             num_clicks_per_target,
             fg_coords,
             bg_coords, 
-            max_timestamp,
-            query_init=None
+            max_timestamp
     ):
         """
         Prepare query descriptors and forward pass through Transformer
@@ -338,18 +317,17 @@ class DynamiteInteractiveTransformer(nn.Module):
         T, _, H, W = mask_features.shape
         height,width = data["images"].shape[-2:]
         
-        # generate query descriptors for input clicks
+        # QUERY INITIALIZATION
         (descriptors,                       # TxQxD
          normalized_clicks,                 # TxQxD
          num_queries_per_target) = self.query_descriptors_initializer(features=multi_scale_features,
                                                                     batched_fg_coords_list=fg_coords, 
                                                                     batched_bg_coords_list=bg_coords,
                                                                     num_clicks_per_target=num_clicks_per_target, 
-                                                                    norms=(height, width, max(max_timestamp)),
-                                                                    query_init=query_init,
+                                                                    norms=(height, width, max(max_timestamp))
                                                                 )
         
-        # positional embedding for queries
+        # SPATIO-TEMPORAL EMBEDDING
         query_embed = repeat(self.query_embed, "C -> Q T C", Q=descriptors.shape[1], T=T)   # QxTxD
         if self.positional_embeddings:
             pos_coord_embed = get_spatiotemporal_embeddings(normalized_clicks[:,:,[0,1,-1]].permute(1,0,2),
@@ -358,12 +336,12 @@ class DynamiteInteractiveTransformer(nn.Module):
             pos_coord_embed = self.ca_qpos_sine_proj(pos_coord_embed.to(query_embed.dtype)) # QxTxD
             query_embed = query_embed + pos_coord_embed                                     # QxTxD
 
-        # static background queries
+        # STATIC BG QUERIES
         if self.use_static_bg_queries:
             static_bg_queries = repeat(self.static_bg_query, "Bg C -> T Bg C", T=T)
-            descriptors = torch.cat((descriptors, static_bg_queries), dim=1)   # TxQxD
+            descriptors = torch.cat((descriptors, static_bg_queries), dim=1)                # TxQxD
             static_bg_pe = repeat(self.static_bg_pe, "Bg C -> Bg T C", T=T)
-            query_embed = torch.cat((query_embed, static_bg_pe), dim=0)        # QxTxD
+            query_embed = torch.cat((query_embed, static_bg_pe), dim=0)                     # QxTxD
             # add bg queries to the count
             num_queries_per_target[-1] += self.num_static_bg_queries
             # add proxy bg clicks to the click
@@ -374,7 +352,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             num_queries_per_target = num_queries_per_target[:-1]
         
         
-        # total num queries per target across T frames
+        # SPATIO_TEMPORAL EMBEDDING FOR MASKED QQCA
         if self.use_qqca == "masked":
             # if queries are batched target-wise, consider the frame positions of the queries in the temporal domain
             tgt_batched_query_embed = repeat(self.query_embed, "C -> Q N C", 
@@ -388,83 +366,63 @@ class DynamiteInteractiveTransformer(nn.Module):
             pos_coord_embed = self.ca_qpos_sine_proj(pos_coord_embed.to(tgt_batched_query_embed.dtype)) # Q'xNxD
             tgt_batched_query_embed = tgt_batched_query_embed + pos_coord_embed                        # Q'xNxD
 
-        # pre-encoder prediction
-        output = self.queries_nonlinear_projection(descriptors).permute(1,0,2)
         
-        # replace overlapping queries
-        if query_init is not None:
-            overlapping_frames = query_init.get("frames", None) # {0:3, 1:4, 2:5}
-            if overlapping_frames is not None:
-                num_overlapping_frames = len(overlapping_frames)
-                num_overlapping_fg_queries = query_init["queries"][0].shape[0]
-                num_overlapping_bg_queries = query_init["queries"][1].shape[0]
-                
-                # overlapping fg queries
-                output[0:num_overlapping_fg_queries, :num_overlapping_frames] = query_init["queries"][0]
-                idx = num_overlapping_fg_queries + len(fg_coords) + 1
-                output[idx: idx + num_overlapping_bg_queries, :num_overlapping_frames] = query_init["queries"][1]
-                output[-self.num_static_bg_queries:, :num_overlapping_frames] = query_init["queries"][2]
-
+        # MLP
+        output = self.queries_nonlinear_projection(descriptors).permute(1,0,2)  # QxTxD
+        
+        # PRE-ENCODER PREDICTION
         outputs_mask, attn_mask = self.forward_prediction_heads(output, 
                                                                 mask_features, 
                                                                 attn_mask_target_size=size_list[0],
                                                                 orig_clicks=fg_coords+bg_coords)
-        
         # store predicted mask after each layer, later used in auxiliary loss
         predictions_mask = []
         predictions_mask.append(outputs_mask)
         
-        # encoder
+        # ENCODER
         for i in range(self.enc_layers):
+            # encoder layers alternate between multi-scale features
             level_index = i % self.num_feature_levels
+            
+            # un-mask completely masked attention masks
             attn_mask[torch.where(attn_mask.sum(-1) == attn_mask.shape[-1])] = False
             
-            # cross-attention between image features and queries in each frame
-            output, weights = self.encoder.cross_attention_layers[i](tgt=output,            # QxTxD
-                                                            memory=memory[level_index],     # (hw)xTxD
-                                                            memory_mask=attn_mask,          # (T*#attn_heads)xQx(hw)
-                                                            memory_key_padding_mask=None,   # here we do not apply masking on padded region
-                                                            pos=memory_pe[level_index],     # (hw)xTxD pos emb for memory
-                                                            query_pos=query_embed)           # QxTxD pos emb for query
+            # IMAGE-QUERY CROSS ATTENTION between queries and image features (intra-frame)
+            output = self.encoder.cross_attention_layers[i](tgt=output,             # QxTxD
+                                                    memory=memory[level_index],     # (hw)xTxD
+                                                    memory_mask=attn_mask,          # (T*#attn_heads)xQx(hw)
+                                                    memory_key_padding_mask=None,
+                                                    pos=memory_pe[level_index],
+                                                    query_pos=query_embed)
             
-            # query-query cross-attention
-            if self.use_qqca == "vanilla":
-                Q,T,D = output.shape
-                output, weights = self.encoder.query_query_cross_attention_layers[i](output.view(Q*T, 1, D),
-                                                                                    tgt_mask=None,
-                                                                                    tgt_key_padding_mask=None,
-                                                                                    query_pos=query_embed.view(Q*T, 1, D))
-                output = output.view(Q,T,D)
+            # QUERY-QUERY CROSS ATTENTION between queries (inter-frame)
+            tgt_batched_query, qqca_mask = self.get_target_batched_query(output, num_queries_per_target)
+            padded_output = self.encoder.query_query_cross_attention_layers[i](tgt_batched_query,
+                                                                                tgt_mask=None,
+                                                                                tgt_key_padding_mask=qqca_mask,
+                                                                                query_pos=tgt_batched_query_embed)
+            output = self.get_frame_batched_query(output, padded_output, num_queries_per_target)
             
-            if self.use_qqca == "masked":
-                # cross-attention between target-specific queries of different frames
-                tgt_batched_query, qqca_mask = self.get_target_batched_query(output, num_queries_per_target)
-                padded_output, weights = self.encoder.query_query_cross_attention_layers[i](tgt_batched_query,
-                                                                                        tgt_mask=None,
-                                                                                        tgt_key_padding_mask=qqca_mask.to(output.device),
-                                                                                        query_pos=tgt_batched_query_embed)
-                output = self.get_frame_batched_query(output, padded_output, num_queries_per_target)
-            
-            # self-attention between queries within frame
-            output, weights = self.encoder.self_attention_layers[i](output, 
+            # SELF-ATTENTION between queries of the same frame (intra-frame)
+            output = self.encoder.self_attention_layers[i](output, 
                                                                 tgt_mask=None, 
                                                                 tgt_key_padding_mask=None,
                                                                 query_pos=query_embed)
             
-            # ffn
+            # FFN
             output = self.encoder.ffn_layers[i](output)
             outputs_mask, attn_mask = self.forward_prediction_heads(output, 
                                                                     mask_features, 
                                                                     attn_mask_target_size=size_list[(i + 1) % self.num_feature_levels])
             predictions_mask.append(outputs_mask)
 
-        # decoder
+        # DECODER
         if self.use_decoder:
             if self.dec_scale_factor > 1:
                 scale_factor = self.dec_scale_factor
                 mask_features = F.interpolate(mask_features, scale_factor=scale_factor, mode='bilinear', align_corners=False)
            
-            mask_features, weights = self.decoder((mask_features, output, query_embed))
+            mask_features = self.decoder((mask_features, output, query_embed))
             mask_features = rearrange(mask_features,"(H W) T C -> T C H W", H=H, W=W, T=T).contiguous()
             outputs_mask, attn_mask = self.forward_prediction_heads(output, 
                                                                     mask_features, 
@@ -476,10 +434,7 @@ class DynamiteInteractiveTransformer(nn.Module):
             'aux_outputs': self._set_aux_loss(predictions_mask)
         }
         
-        if self.training:
-            return out, num_queries_per_target
-        
-        return out, num_queries_per_target, output, normalized_clicks
+        return out, num_queries_per_target
 
 
     @torch.jit.unused
@@ -567,7 +522,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         # attention mask
         qqca_mask = torch.arange(max_num_queries).expand(len(orig_lengths), max_num_queries) >= torch.tensor(orig_lengths).unsqueeze(1)
 
-        return tgt_batched_query, qqca_mask
+        return tgt_batched_query, qqca_mask.to(output.device)
 
     
     def get_frame_batched_query(
@@ -655,8 +610,8 @@ class DynamiteInteractiveTransformer(nn.Module):
         mask_pred = torch.argmax(mask_pred,0)
 
         m = []
-        for obj_id in range(num_targets):
-            m.append((mask_pred == obj_id).float())
+        for tgt_id in range(num_targets):
+            m.append((mask_pred == tgt_id).float())
         mask_pred = torch.stack(m)
      
         return mask_pred

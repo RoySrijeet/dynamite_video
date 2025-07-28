@@ -94,20 +94,10 @@ class DynamiteHead(nn.Module):
         mask_features, _, multi_scale_features = self.pixel_decoder.forward_features(features)
 
         # forward to interactive transformer
-        if self.training:
-            predictions, num_queries_per_object = self.interactive_transformer(data, 
-                                                                            images,
-                                                                            multi_scale_features, mask_features,
-                                                                            num_clicks_per_object,
-                                                                            fg_coords, bg_coords, max_timestamp
-                                                                        )
-            return predictions, num_queries_per_object
-    
-        else:   # evaluation
-            predictions, num_queries_per_object, queries, normalized_clicks = self.interactive_transformer(data, 
-                                                                            images,
-                                                                            multi_scale_features, mask_features,
-                                                                            num_clicks_per_object,
-                                                                            fg_coords, bg_coords, max_timestamp
-                                                                        )
-            return predictions, num_queries_per_object, queries, normalized_clicks
+        predictions, num_queries_per_object = self.interactive_transformer(data, 
+                                                                        images,
+                                                                        multi_scale_features, mask_features,
+                                                                        num_clicks_per_object,
+                                                                        fg_coords, bg_coords, max_timestamp
+                                                                    )
+        return predictions, num_queries_per_object

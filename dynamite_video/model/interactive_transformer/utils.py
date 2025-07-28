@@ -1,23 +1,8 @@
-import logging
-import os
-import time as timer
-import random
-import einops
-import numpy as np
-import fvcore.nn.weight_init as weight_init
-from typing import Optional
-import torch
-
-from detectron2.utils.registry import Registry
-import detectron2.utils.comm as comm
 from torch import nn, Tensor
 from torch.nn import functional as F
-from detectron2.utils.memory import retry_if_cuda_oom
-from detectron2.structures import Boxes, ImageList, Instances, BitMasks
-from detectron2.config import configurable
-from detectron2.layers import Conv2d
-from einops import repeat
-from .position_encoding import PositionEmbeddingSine
+from typing import Optional
+
+from detectron2.utils.registry import Registry
 
 INTERACTIVE_TRANSFORMER_REGISTRY = Registry("INTERACTIVE_TRANSFORMER_MODULE")
 INTERACTIVE_TRANSFORMER_REGISTRY.__doc__ = """
@@ -60,12 +45,12 @@ class SelfAttentionLayer(nn.Module):
                      query_pos: Optional[Tensor] = None):
         q = k = self.with_pos_embed(tgt, query_pos)
 
-        tgt2, attn_wts = self.self_attn(q, k, value=tgt, attn_mask=tgt_mask,
-                              key_padding_mask=tgt_key_padding_mask)#[0]
+        tgt2 = self.self_attn(q, k, value=tgt, attn_mask=tgt_mask,
+                              key_padding_mask=tgt_key_padding_mask)[0]
         tgt = tgt + self.dropout(tgt2)
         tgt = self.norm(tgt)
 
-        return tgt, attn_wts
+        return tgt
 
     def forward_pre(self, tgt,
                     tgt_mask: Optional[Tensor] = None,
@@ -73,11 +58,11 @@ class SelfAttentionLayer(nn.Module):
                     query_pos: Optional[Tensor] = None):
         tgt2 = self.norm(tgt)
         q = k = self.with_pos_embed(tgt2, query_pos)
-        tgt2, attn_wts = self.self_attn(q, k, value=tgt2, attn_mask=tgt_mask,
-                              key_padding_mask=tgt_key_padding_mask)#[0]
+        tgt2 = self.self_attn(q, k, value=tgt2, attn_mask=tgt_mask,
+                              key_padding_mask=tgt_key_padding_mask)[0]
         tgt = tgt + self.dropout(tgt2)
 
-        return tgt, attn_wts
+        return tgt
 
     def forward(self, tgt,
                 tgt_mask: Optional[Tensor] = None,
@@ -135,15 +120,15 @@ class CrossAttentionLayer(nn.Module):
             query_pos: positional embedding for query, QxD
         """
         
-        tgt2, attn_wts = self.multihead_attn(query=self.with_pos_embed(tgt, query_pos),
+        tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt, query_pos),
                                    key=self.with_pos_embed(memory, pos),
                                    value=memory, 
                                    attn_mask=memory_mask,
-                                   key_padding_mask=memory_key_padding_mask)#[0]
+                                   key_padding_mask=memory_key_padding_mask)[0]
         tgt = tgt + self.dropout(tgt2)
         tgt = self.norm(tgt)
        
-        return tgt, attn_wts
+        return tgt
 
     def forward_pre(
             self, 
@@ -169,14 +154,14 @@ class CrossAttentionLayer(nn.Module):
 
         tgt2 = self.norm(tgt)
        
-        tgt2, attn_wts = self.multihead_attn(query=self.with_pos_embed(tgt2, query_pos),
+        tgt2 = self.multihead_attn(query=self.with_pos_embed(tgt2, query_pos),
                                    key=self.with_pos_embed(memory, pos),
                                    value=memory, 
                                    attn_mask=memory_mask,
-                                   key_padding_mask=memory_key_padding_mask)#[0]
+                                   key_padding_mask=memory_key_padding_mask)[0]
         tgt = tgt + self.dropout(tgt2)
 
-        return tgt, attn_wts
+        return tgt
 
     
     def forward(
