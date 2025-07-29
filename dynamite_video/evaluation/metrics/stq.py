@@ -146,11 +146,18 @@ class STQuality(object):
     # to compute AQ, save the target masks
 
     # separate thing targets - in this case, everywhere other than area labeled 0
-    label_mask = semantic_label!=0
-    prediction_mask = semantic_label!=0
+    instance_label = tf.identity(y_true)
 
-    # `crowd` region - in this case, area labeled 0; ignored for the tracking term (AQ)
-    is_crowd = semantic_label==0
+    label_mask = tf.zeros_like(semantic_label, dtype=tf.bool)
+    prediction_mask = tf.zeros_like(semantic_prediction, dtype=tf.bool)
+    for things_class_id in self._things_list:
+      label_mask = tf.logical_or(label_mask, tf.equal(semantic_label, things_class_id))
+      prediction_mask = tf.logical_or(prediction_mask, tf.equal(semantic_prediction, things_class_id))
+
+    # Select the `crowd` region of the current class. This region is encoded instance id `0`.
+    is_crowd = tf.logical_and(tf.equal(instance_label, 0), label_mask)
+    # Select the non-crowd region of the corresponding class as the `crowd` region is ignored for the tracking term.
+    label_mask = tf.logical_and(label_mask, tf.logical_not(is_crowd))
     # Do not punish id assignment for regions that are annotated as `crowd` in the ground-truth.
     prediction_mask = tf.logical_and(prediction_mask, tf.logical_not(is_crowd))
 
@@ -162,11 +169,9 @@ class STQuality(object):
     _update_dict_stats(seq_preds, y_pred[prediction_mask], weights[prediction_mask] if weights is not None else None)
     _update_dict_stats(seq_gts, y_true[label_mask],weights[label_mask] if weights is not None else None)
     
-    # store the intersection between every g.t. target and predicted target
-    # the area of intersection between g.t. target w ID g and predicted target 
-    # w ID p, is stored in the dict w key (g * _offset + p) (e.g., if g.t. 
-    # target ID is 9 and the predicted target ID is 5 then, the corresponding 
-    # key in the intersection state dict is 9000005, where offset = 10^6)
+    # store the intersection between every g.t. target and predicted target the area of intersection between g.t. target 
+    # with ID g and predicted target with ID p, is stored in the dict w key (g * _offset + p) (e.g., if g.t. target ID is 
+    # 9 and predicted target ID is 5 then, the corresponding key in the intersection dict is 9000005, where offset = 10^6)
     non_crowd_intersection = tf.logical_and(label_mask, prediction_mask)
     intersection_ids = (y_true[non_crowd_intersection] * self._offset + y_pred[non_crowd_intersection])
     _update_dict_stats(seq_intersects, intersection_ids, weights[non_crowd_intersection] if weights is not None else None)

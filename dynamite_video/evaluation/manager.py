@@ -371,7 +371,7 @@ class SequenceManager:
                     orig_id = self.prev_clip_input["serial_to_orig_id"][obj_id+1]
                     panoptic_pred_masks[fr_idx][np.where(mask==1)] = orig_id
                 
-            panoptic_pred_masks[fr_idx][np.where(clip_ignore_masks[fr_idx])] = self.bg_id
+            # panoptic_pred_masks[fr_idx][np.where(clip_ignore_masks[fr_idx])] = self.bg_id
                 
         # save in buffer
         self.pred_masks[indices] = panoptic_pred_masks
@@ -550,7 +550,7 @@ class SequenceManager:
         
         self.max_timestamps[frame_idx] = timestamp+1
         self.num_clicks_per_frame[frame_idx] += 1
-        return obj_index
+        return obj_index + 1
     
 
     def find_refinement_target(self, iou_threshold):

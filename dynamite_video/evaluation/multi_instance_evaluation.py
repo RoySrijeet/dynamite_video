@@ -13,7 +13,7 @@ from detectron2.utils import comm
 from detectron2.utils.logger import setup_logger
 
 from dynamite_video.evaluation.manager import SequenceManager
-from dynamite_video.evaluation.metrics.metrics import compute_j_and_f, compute_stq
+from dynamite_video.evaluation.metrics.metrics import compute_stq
 from dynamite_video.evaluation.predictor import Predictor
 
 
@@ -21,12 +21,12 @@ def evaluate(model,
              dataset,
              dataset_meta,
              tfms,
-             iou_threshold,
-             max_interactions,
-             max_rounds,
-             output_dir,
-             seed_id=0,
-             save_vis=False,
+             iou_threshold: float,
+             max_interactions: int,
+             max_rounds: int,
+             output_dir: str,
+             seed_id: int=0,
+             save_vis: bool=False,
              ):
     """
     Evaluate model on provided dataset.
@@ -36,13 +36,9 @@ def evaluate(model,
         dataset: pre-processed dataset is a list where each entry corresponds to one
                 sequence in the dataset. Each sequence has been decomposed into a series
                 of (potentially overlapping) clips
-        iou_threshold: desired IoU value for each object mask (float, default: 0.85)
-        max_interactions: max #interactions permitted per object (int, default: 3)
+        iou_threshold: desired IoU value for each target mask (float, default: 0.85)
+        max_interactions: max #interactions permitted per target (int)
         max_rounds: max #corrective rounds (int, default: 3)
-        eval_strategy: strategy to select the instance to add corrective clicks on 
-                "worst": select the instance with worst IoU
-                "random": select an instance randomly (as long as IoU < iou_threshold)
-                "best": select the instance with best IoU
         seed_id: fixed seed during evaluation (int, default 0)
         output_path: path to store frame predictions across iterations
         save_vis: whether to save visualization of masks with corrective clicks. Visualizations
@@ -54,7 +50,7 @@ def evaluate(model,
         os.makedirs(vis_path, exist_ok=True)
     dataset_meta["vis_path"] = vis_path
     
-    logger = setup_logger(output=output_dir, distributed_rank=comm.get_rank(), name="Multi Instance Evaluation")
+    logger = setup_logger(output=output_dir, distributed_rank=comm.get_rank(), name="Interactive Evaluation")
     logger.info(f"Starting inference on {len(dataset)} sequences...")
     
     with ExitStack() as stack:
@@ -69,8 +65,7 @@ def evaluate(model,
             
             # sequence manager for current sequence
             manager = SequenceManager(video, dataset_meta, tfms)
-            logger.info(f"\nProcessing Sequence {video.id} [{i+1}/{len(dataset)}] \
-                         with {manager.T} frames and {manager.N} targets...")
+            logger.info(f"\nProcessing Sequence {video.id} [{i+1}/{len(dataset)}]")
 
             # a fresh model for each sequence
             predictor = Predictor(model, dataset_meta["num_overlapping_frames"], manager.T)
@@ -115,7 +110,6 @@ def evaluate(model,
 
                 
                 ### WEAKEST PREDICTION ###
-                logger.info(f"Looking for a target/frame to refine...")
                 # Stopping criterion 1: check whether round budget is over
                 if manager.round_num == max_rounds:
                     logger.info(f'Maximum round limit ({max_rounds}) reached!')
@@ -127,14 +121,18 @@ def evaluate(model,
                     lowest_frame_index = -1
 
                 if lowest_frame_index != -1:                    
-                    # select the object with weakest mIoU
-                    # also checks stopping criterion 3: check whether all objects meet IoU threshold
-                    lowest_frame_index, lowest_obj_id = manager.find_refinement_target(iou_threshold)
+                    # select the target with weakest mIoU
+                    # also checks stopping criterion 3: check whether all targets meet IoU threshold
+                    if scores["refine_frame"][1] >= iou_threshold:
+                        lowest_frame_index = -1
+                    else:
+                        lowest_frame_index = scores["refine_frame"][0]
+                        lowest_tgt_id = scores["refine_target"][0]
                 
                 if lowest_frame_index != -1:
                     ## CORRECTIVE CLICK ##
-                    refined_obj_index = manager.get_corrective_click(frame_idx=lowest_frame_index, obj_id=lowest_obj_id)
-                    logger.info(f'Sampled a click on instance {refined_obj_index+1} in frame {lowest_frame_index}')
+                    refined_tgt_id = manager.get_corrective_click(frame_idx=lowest_frame_index, obj_id=lowest_tgt_id)
+                    logger.info(f'Sampled a click on target {refined_tgt_id} in frame {lowest_frame_index}')
 
             logger.info(f"{manager.sequence.id}, time analysis: \
                         \nTotal propagation time: {sum(propagation_time)} \
@@ -150,7 +148,7 @@ def calculate_score(manager: SequenceManager):
     start_time = time.perf_counter()
     video_stq, video_aq, video_sq, refine_target, refine_frame = compute_stq(y_true=manager.gt_masks, 
                                                                             y_pred=manager.pred_masks, 
-                                                                            object_ids=manager.object_ids,
+                                                                            target_ids=manager.object_ids,
                                                                             ignore_label=manager.bg_id
                                                                         )
     end_time = time.perf_counter()
