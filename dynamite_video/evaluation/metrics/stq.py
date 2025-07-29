@@ -83,7 +83,7 @@ class STQuality(object):
     self._predictions = None
     self._ground_truth = None
     self._intersections = None
-    self._sequence_length = 0
+    self._ious = []
     
     self._offset = offset
     if offset < num_classes:
@@ -108,10 +108,14 @@ class STQuality(object):
     if weights is not None:
       weights = tf.reshape(weights, y_true.shape)
     
-    # target IDs are the same as the semantic labels
+    # to compute SQ, accumulate the target mask intersections in a confusion matrix
+    
+    # semantic labels are the same as the target IDs
     semantic_label = tf.identity(y_true)
     semantic_prediction = tf.identity(y_pred)
     
+    # confusion matrix computes the area of intersection of each 
+    # target mask in the ground truth and predicted panoptic masks
     cm = tf.math.confusion_matrix(
                 labels=tf.reshape(semantic_label, [-1]),
                 predictions=tf.reshape(semantic_prediction, [-1]),
@@ -120,6 +124,17 @@ class STQuality(object):
                 dtype=tf.float64
             )
     
+    # record frame-level IoUs for each target
+    confusion = cm.numpy()
+    intersections = confusion.diagonal()
+    fps = confusion.sum(axis=0) - intersections
+    fns = confusion.sum(axis=1) - intersections
+    unions = intersections + fps + fns
+    ious = (intersections.astype(np.double) / np.maximum(unions, 1e-15).astype(np.double))
+    ious[np.where(unions==0)] = 2.
+    self._ious.append(ious)
+    
+    # accumulate the confusion matrix scores (area of intersection) across frames
     if self._iou_confusion_matrix is not None:
         self._iou_confusion_matrix += cm
     else:
@@ -128,20 +143,14 @@ class STQuality(object):
         self._ground_truth = {}
         self._intersections = {}
     
-    self._sequence_length += 1
-    
-    instance_label = tf.identity(y_true)
+    # to compute AQ, save the target masks
 
-    label_mask = tf.zeros_like(semantic_label, dtype=tf.bool)
-    prediction_mask = tf.zeros_like(semantic_prediction, dtype=tf.bool)
-    for things_class_id in self._things_list:
-      label_mask = tf.logical_or(label_mask, tf.equal(semantic_label, things_class_id))
-      prediction_mask = tf.logical_or(prediction_mask, tf.equal(semantic_prediction, things_class_id))
+    # separate thing targets - in this case, everywhere other than area labeled 0
+    label_mask = semantic_label!=0
+    prediction_mask = semantic_label!=0
 
-    # Select the `crowd` region of the current class. This region is encoded instance id `0`.
-    is_crowd = tf.logical_and(tf.equal(instance_label, 0), label_mask)
-    # Select the non-crowd region of the corresponding class as the `crowd` region is ignored for the tracking term.
-    label_mask = tf.logical_and(label_mask, tf.logical_not(is_crowd))
+    # `crowd` region - in this case, area labeled 0; ignored for the tracking term (AQ)
+    is_crowd = semantic_label==0
     # Do not punish id assignment for regions that are annotated as `crowd` in the ground-truth.
     prediction_mask = tf.logical_and(prediction_mask, tf.logical_not(is_crowd))
 
@@ -152,7 +161,12 @@ class STQuality(object):
     # Compute and update areas of ground-truth, predictions and intersections.
     _update_dict_stats(seq_preds, y_pred[prediction_mask], weights[prediction_mask] if weights is not None else None)
     _update_dict_stats(seq_gts, y_true[label_mask],weights[label_mask] if weights is not None else None)
-
+    
+    # store the intersection between every g.t. target and predicted target
+    # the area of intersection between g.t. target w ID g and predicted target 
+    # w ID p, is stored in the dict w key (g * _offset + p) (e.g., if g.t. 
+    # target ID is 9 and the predicted target ID is 5 then, the corresponding 
+    # key in the intersection state dict is 9000005, where offset = 10^6)
     non_crowd_intersection = tf.logical_and(label_mask, prediction_mask)
     intersection_ids = (y_true[non_crowd_intersection] * self._offset + y_pred[non_crowd_intersection])
     _update_dict_stats(seq_intersects, intersection_ids, weights[non_crowd_intersection] if weights is not None else None)
@@ -166,22 +180,31 @@ class STQuality(object):
         - 'STQ': The total STQ score.
         - 'AQ': The total association quality (AQ) score.
         - 'IoU': The total mean IoU.
-        - 'Length_per_seq': A list of the length of each sequence.
+        - 'refine_target': ID of the target with the lowest AQ.
+        - 'refine_frame': index of the frame where `refine_target` has lowest IoU
     """
     # Compute association quality (AQ)
-    outer_sum = 0.0
+    aq_per_tgt = []
+    # get AQ for each gt target
     for gt_id, gt_size in self._ground_truth.items():
         inner_sum = 0.0
         for pr_id, pr_size in self._predictions.items():
             tpa_key = self._offset * gt_id + pr_id
             if tpa_key in self._intersections:
+                # how much gt target intersected with certain pred target
                 tpa = self._intersections[tpa_key].numpy()
+                # how much the prediction overflowed
                 fpa = pr_size.numpy() - tpa
+                # how much of the gt was missed
                 fna = gt_size.numpy() - tpa
                 inner_sum += tpa * (tpa / (tpa + fpa + fna))
-        outer_sum += 1.0 / gt_size.numpy() * inner_sum
+        aq_per_tgt.append(1.0 / gt_size.numpy() * inner_sum)
 
-    aq_mean = outer_sum / max(len(self._ground_truth), 1e-15)
+    aq_mean = sum(aq_per_tgt) / max(len(self._ground_truth), 1e-15)
+    # minimum aq score obtained by a target
+    min_aq = min(aq_per_tgt)
+    # the target with the minimum aq score
+    refine_target = aq_per_tgt.index(min_aq)
 
     # Compute IoU scores.
     # The rows correspond to ground-truth and the columns to predictions.
@@ -202,9 +225,15 @@ class STQuality(object):
             np.maximum(unions, 1e-15).astype(np.double))
     iou_mean = np.sum(ious) / num_classes
 
+    # frame where this target has lowest IoU
+    frame_level_ious = np.asarray(self._ious)[:, refine_target]
+    min_iou = np.min(frame_level_ious)
+    refine_frame = np.argmin(frame_level_ious)
+
     st_quality = np.sqrt(aq_mean * iou_mean)
     return {'STQ': st_quality,
             'AQ': aq_mean,
             'IoU': float(iou_mean),
-            'Length_per_seq': self._sequence_length,
+            "refine_target": [refine_target, min_aq],
+            "refine_frame": [refine_frame, min_iou]
             }

@@ -40,7 +40,10 @@ def compute_stq(
 
     return (np_to_native_type(result["STQ"]), 
             np_to_native_type(result["AQ"]), 
-            np_to_native_type(result["IoU"]))
+            np_to_native_type(result["IoU"]),
+            np_to_native_type(result["refine_target"]),
+            np_to_native_type(result["refine_frame"]),
+            )
 
 
 def compute_j_and_f(

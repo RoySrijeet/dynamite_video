@@ -148,10 +148,11 @@ def evaluate(model,
 
 def calculate_score(manager: SequenceManager):
     start_time = time.perf_counter()
-    video_stq, video_aq, video_sq = compute_stq(y_true=manager.gt_masks, 
-                                                    y_pred=manager.pred_masks, 
-                                                    object_ids=manager.object_ids,
-                                                    ignore_label=manager.bg_id)
+    video_stq, video_aq, video_sq, refine_target, refine_frame = compute_stq(y_true=manager.gt_masks, 
+                                                                            y_pred=manager.pred_masks, 
+                                                                            object_ids=manager.object_ids,
+                                                                            ignore_label=manager.bg_id
+                                                                        )
     end_time = time.perf_counter()
     
     scores = {
@@ -162,6 +163,8 @@ def calculate_score(manager: SequenceManager):
         "STQ": video_stq, 
         "AQ": video_aq, 
         "SQ": video_sq, 
+        "refine_target": refine_target,
+        "refine_frame": refine_frame
     }
     return scores, end_time - start_time
 
