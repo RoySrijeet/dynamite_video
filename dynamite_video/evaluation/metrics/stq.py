@@ -208,8 +208,10 @@ class STQuality(object):
     aq_mean = sum(aq_per_tgt) / max(len(self._ground_truth), 1e-15)
     # minimum aq score obtained by a target
     min_aq = min(aq_per_tgt)
+    # print(f"AQ per target: {aq_per_tgt}")
     # the target with the minimum aq score
-    refine_target = aq_per_tgt.index(min_aq)
+    refine_target = list(self._ground_truth.keys())[aq_per_tgt.index(min_aq)]
+    # print(f"Minimum AQ: {min_aq} for target {refine_target}")
 
     # Compute IoU scores.
     # The rows correspond to ground-truth and the columns to predictions.
@@ -232,8 +234,10 @@ class STQuality(object):
 
     # frame where this target has lowest IoU
     frame_level_ious = np.asarray(self._ious)[:, refine_target]
+    # print(f"Frame level IoUs for target {refine_target}: {frame_level_ious}")
     min_iou = np.min(frame_level_ious)
     refine_frame = np.argmin(frame_level_ious)
+    # print(f"Minimum IoU: {min_iou} at frame {refine_frame}")
 
     st_quality = np.sqrt(aq_mean * iou_mean)
     return {'STQ': st_quality,

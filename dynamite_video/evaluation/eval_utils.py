@@ -1,8 +1,10 @@
-import numpy as np
 import cv2
+import numpy as np
+import os
 import torch
 
 from collections import OrderedDict
+from PIL import Image
 
 def create_circular_mask(h, w, centers, radius):
     """
@@ -71,7 +73,12 @@ davis_palette = [0, 0, 0, 128, 0, 0, 0, 128, 0, 128, 128, 0, 0, 0, 128, 128, 0, 
 
 
 def show_points(image, coords, label, marker_size=15):
-    color = (0, 255, 0) if label == 1 else (0, 0, 255)  # green or red (BGR)
+    if label==0:
+        color = (0,0,255)     # red bg
+    elif label==1:
+        color = (0,255,0)     # green fg
+    elif label==2:
+        color = (255,255,0)   # cyan for overlapping/correcting clicks
 
     for (y, x, _, _, _) in coords:
         cv2.drawMarker(
@@ -84,13 +91,13 @@ def show_points(image, coords, label, marker_size=15):
             line_type=cv2.LINE_AA
         )
 
-def serialize_object_ids(orig_ids):
+def serialize_target_ids(orig_ids):
     """
-    Serialize object IDs. IDs are 1-indexed to avoid conflict in semantic mask
+    Serialize target IDs. IDs are 1-indexed to avoid conflict in semantic mask
     with background pixels (0)
 
     Args:
-        orig_ids: original object IDs, potentially non-sequential
+        orig_ids: original target IDs, potentially non-sequential
 
     Returns:
         orig_to_serial_id: mapping from original IDs to sequential IDs
@@ -101,3 +108,13 @@ def serialize_object_ids(orig_ids):
     serial_to_orig_id = OrderedDict(zip(serial_ids, orig_ids))
     orig_to_serial_id = OrderedDict(zip(orig_ids, serial_ids))
     return orig_to_serial_id, serial_to_orig_id
+
+
+# def save_mask_to_disc(masks, binary, mask_names, save_dir):
+#     for msk, fname in zip(masks, mask_names):
+#         if not binary:
+#             msk = Image.fromarray(msk.astype(np.uint8))
+#             msk.putpalette(color_map)
+#         else:
+#             msk = Image.fromarray(msk.astype(np.uint8) * 255)
+#         msk.save(os.path.join(save_dir, fname + ".png"))

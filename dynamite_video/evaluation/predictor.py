@@ -32,14 +32,9 @@ class Predictor:
                 * fg_coords_list: list of foreground clicks
                 * bg_coords_list: list of background clicks
                 * max_timestamp_list: timestamp of latest click in each frame
-                * query_init: dict {
-                            "queries": queries of overlapping frames from prev clip
-                            "clicks": clicks on overlapping frames from the prev clip
-                        }
-
         """
-        # model forward pass
-        # returns -
+        # model forward pass returns -
+        # images: detectron2.ImageList wrapper around input image tensors
         # outputs: prediction logits of shape T,Q,H,W
         # num_queries_per_target: list of integers, length N+1; summing up to Q
         images, outputs, num_queries_per_target  = self.model(inputs)
@@ -49,7 +44,9 @@ class Predictor:
                                                 outputs,     # N
                                                 num_queries_per_target)
 
-        # jerry-built. TODO
+        if self.num_overlapping_frames == 0:
+            return pred_masks, None
+        ## jerry-built. TODO
         if self.sequence_length - 1 in indices:
             return pred_masks, None
         

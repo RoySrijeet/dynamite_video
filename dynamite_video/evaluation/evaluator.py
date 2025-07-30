@@ -34,7 +34,7 @@ class Evaluator:
         self.logger.info(f"Random seed: {self.seed_id}")
         self.logger.info(f"Output path: {self.output_dir}")
         if self.save_vis:
-            self.logger.info(f"Visualizations saved in: {self.output_dir}/vis")
+            self.logger.info(f"Visualizations saved in: {self.output_dir}")
 
         # build model
         model = build_model(cfg)

@@ -44,11 +44,6 @@ def evaluate(model,
         save_vis: whether to save visualization of masks with corrective clicks. Visualizations
                 are saved in `output_path` (bool, default False)
     """
-    vis_path = None
-    if save_vis:
-        vis_path = os.path.join(output_dir, "vis")
-        os.makedirs(vis_path, exist_ok=True)
-    dataset_meta["vis_path"] = vis_path
     
     logger = setup_logger(output=output_dir, distributed_rank=comm.get_rank(), name="Interactive Evaluation")
     logger.info(f"Starting inference on {len(dataset)} sequences...")
@@ -64,8 +59,8 @@ def evaluate(model,
         for i, video in enumerate(dataset):
             
             # sequence manager for current sequence
-            manager = SequenceManager(video, dataset_meta, tfms)
-            logger.info(f"\nProcessing Sequence {video.id} [{i+1}/{len(dataset)}]")
+            manager = SequenceManager(video, dataset_meta, tfms, output_dir, save_vis)
+            logger.info(f"Processing Sequence {video.id} [{i+1}/{len(dataset)}]")
 
             # a fresh model for each sequence
             predictor = Predictor(model, dataset_meta["num_overlapping_frames"], manager.T)
@@ -82,7 +77,7 @@ def evaluate(model,
             
             while lowest_frame_index!=-1:
                 manager.round_num += 1
-                logger.info(f"\nRound {manager.round_num}: \nPropagating...")
+                logger.info(f"Round {manager.round_num}: \nPropagating...")
 
                 # generate indices of shorter sub-sequences or clips from the whole sequence
                 clip_indices = manager.generate_clip_indices(start=lowest_frame_index)
@@ -109,7 +104,7 @@ def evaluate(model,
                 logger.info(f"Scores: {scores}")
 
                 
-                ### WEAKEST PREDICTION ###
+                ### STOPPING CRITERIA ###
                 # Stopping criterion 1: check whether round budget is over
                 if manager.round_num == max_rounds:
                     logger.info(f'Maximum round limit ({max_rounds}) reached!')
@@ -131,7 +126,7 @@ def evaluate(model,
                 
                 if lowest_frame_index != -1:
                     ## CORRECTIVE CLICK ##
-                    refined_tgt_id = manager.get_corrective_click(frame_idx=lowest_frame_index, obj_id=lowest_tgt_id)
+                    refined_tgt_id = manager.get_corrective_click(frame_idx=lowest_frame_index, tgt_id=lowest_tgt_id)
                     logger.info(f'Sampled a click on target {refined_tgt_id} in frame {lowest_frame_index}')
 
             logger.info(f"{manager.sequence.id}, time analysis: \
@@ -148,7 +143,7 @@ def calculate_score(manager: SequenceManager):
     start_time = time.perf_counter()
     video_stq, video_aq, video_sq, refine_target, refine_frame = compute_stq(y_true=manager.gt_masks, 
                                                                             y_pred=manager.pred_masks, 
-                                                                            target_ids=manager.object_ids,
+                                                                            target_ids=manager.target_ids,
                                                                             ignore_label=manager.bg_id
                                                                         )
     end_time = time.perf_counter()
