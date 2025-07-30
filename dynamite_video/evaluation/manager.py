@@ -398,7 +398,10 @@ class SequenceManager:
 
             fr_msk = Image.fromarray(fr_msk.astype(np.uint8))
             fr_msk.putpalette(color_map)
-            fr_msk.save(os.path.join(vis_path, f"mask_{fr_idx}.png"))
+            filename = os.path.join(vis_path, f"mask_{fr_idx}.png")
+            if os.path.exists(filename):
+                filename = os.path.join(vis_path, f"mask_{fr_idx}_overlap.png")
+            fr_msk.save(filename)
             
             # Convert both to BGR (for OpenCV)
             image_bgr = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
@@ -414,7 +417,10 @@ class SequenceManager:
             if len(self.overlap_coords_list[fr_idx]) > 0:
                 show_points(overlaid, self.overlap_coords_list[fr_idx], 2)
             
-            cv2.imwrite(os.path.join(vis_path, f"overlaid_{fr_idx}.png"), overlaid)
+            filename = os.path.join(vis_path, f"overlaid_{fr_idx}.png")
+            if os.path.exists(filename):
+                filename = os.path.join(vis_path, f"overlaid_{fr_idx}_overlap.png")
+            cv2.imwrite(filename, overlaid)
     
     
     def get_corrective_click(self, frame_idx, tgt_id):
