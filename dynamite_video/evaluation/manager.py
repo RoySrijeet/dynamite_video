@@ -132,10 +132,10 @@ class SequenceManager:
         Compute transformed resolution
 
         Args:
-            * tfms: mapping containing transformation info from config, cfg.INPUT
+            tfms: mapping containing transformation info from config, cfg.INPUT
         
         Returns:
-            * new_height, new_width: tuple, transformed height and width
+            new_height, new_width: tuple, transformed height and width
         """
         new_height, new_width = self.orig_H, self.orig_W
         self.resize = False
@@ -162,10 +162,10 @@ class SequenceManager:
         both forward and backward directions.
 
         Args:
-            * start: int, index of the first frame of the first clip
+            start: int, index of the first frame of the first clip
         
         Returns:
-            * indices: List[List[int]], list of frame indices per clip
+            indices: List[List[int]], list of frame indices per clip
         """
         start_copy = start
         indices = []
@@ -208,10 +208,10 @@ class SequenceManager:
         mask of that target in the frame where it first appeared.
 
         Args:
-            * _indices: List[int], frame indices of the clip
+            _indices: List[int], frame indices of the clip
         
         Returns:
-            * inputs: a mapping in the format expected by the model
+            inputs: a mapping in the format expected by the model
         """
 
         indices = _indices
@@ -313,9 +313,9 @@ class SequenceManager:
         Record a click in global buffers
 
         Args:
-            * frame_idx: int, the frame on which the click was sampled
-            * tgt_id: int, the ID of the target on which the click was sampled
-            * coords: list(int), the click location
+            frame_idx: int, the frame on which the click was sampled
+            tgt_id: int, the ID of the target on which the click was sampled
+            coords: list(int), the click location
         """
         if tgt_id == self.bg_id:
             self.gt_bg_coords_list[frame_idx].append(([coords[0], coords[1], -1, frame_idx, self.t]))
@@ -339,8 +339,8 @@ class SequenceManager:
         1: new click avoids all locations upto radius=self.click_radius around all prev sampled clicks
 
         Args:
-            * frame_idx: int, frame index
-            * coords: List[int], click coordinates in the format [y,x]
+            frame_idx: int, frame index
+            coords: List[int], click coordinates in the format [y,x]
         """
         # update not_clicked_map with the sampled click location
         if self.sampling_strategy == 0:
@@ -358,8 +358,8 @@ class SequenceManager:
         Store predicted masks of a clip in the whole sequence
 
         Args:
-            * binary_pred_masks: T,N,H,W torch.Tensor predicted binary masks
-            * overlap: a mapping with info on overlapping frames and predicted targets
+            binary_pred_masks: T,N,H,W torch.Tensor predicted binary masks
+            overlap: a mapping with info on overlapping frames and predicted targets
         """
         indices = self.curr_clip_input["indices"]
         if len(indices) >= 2 and indices[1] < indices[0]:
@@ -407,8 +407,8 @@ class SequenceManager:
         Save predicted mask visualization to the disc
 
         Args:
-            * indices: Optional[List(int)], save visualizations for specified indices
-            * alpha: float, transparency to be applied to visualize mask overlaid on image
+            indices: Optional[List(int)], save visualizations for specified indices
+            alpha: float, transparency to be applied to visualize mask overlaid on image
         """
         
         # visualization path for current round
@@ -461,11 +461,11 @@ class SequenceManager:
         Obtain a corrective click on the specified target in the specified frame
 
         Args:
-            * frame_idx: int, frame to sample the click on
-            * tgt_id: int, ID of the target to sample the click on
+            frame_idx: int, frame to sample the click on
+            tgt_id: int, ID of the target to sample the click on
         
         Returns:
-            * tgt_index: int, ID of the target present at the sampled click location in
+            tgt_index: int, ID of the target present at the sampled click location in
                 the g.t. mask of the frame `frame_idx`
         """
         # visualization path for current round
