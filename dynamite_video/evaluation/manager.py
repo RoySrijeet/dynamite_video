@@ -4,7 +4,9 @@ import os
 import torch
 
 from PIL import Image
+from typing import List, Mapping, Optional, Tuple
 
+from dynamite_video.data.generic_video_parser import GenericVideoSequence
 from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks
 from dynamite_video.evaluation.eval_utils import create_circular_mask, color_map, show_points, get_center_coords, serialize_target_ids
 
@@ -13,11 +15,16 @@ class SequenceManager:
     Sequence manager
     """
 
-    def __init__(self, sequence, dataset_meta, tfms, output_dir, save_vis):
+    def __init__(
+            self, 
+            sequence: GenericVideoSequence, 
+            dataset_meta: Mapping, 
+            tfms: Mapping, 
+            output_dir: str, 
+            save_vis: bool
+    ) -> None:
         """
         Initialize with information on the sequence data, including ground truth masks
-
-        Sequence Manager maintains all target-related info.
 
         Args:
             sequence: `GenericVideoSequence` instance of current video
@@ -25,6 +32,8 @@ class SequenceManager:
                 * clip_length: int, length of each sub-sequence
                 * num_overlapping_frames: int, overlap between consecutive sub-sequences
             tfms: transformation info from config, cfg.INPUT
+            output_dir: str, path to the directory where visualizations are stored
+            save_vis: bool, whether to save visualizations or not
         """
         # sequence level information
         
@@ -118,11 +127,15 @@ class SequenceManager:
         self.prev_clip_output = {}
         
 
-    def compute_tfm_sizes(self, tfms):
+    def compute_tfm_sizes(self, tfms: Mapping) -> Tuple[int, int]:
         """
         Compute transformed resolution
 
-        tfms: transformation info from config, cfg.INPUT
+        Args:
+            * tfms: mapping containing transformation info from config, cfg.INPUT
+        
+        Returns:
+            * new_height, new_width: tuple, transformed height and width
         """
         new_height, new_width = self.orig_H, self.orig_W
         self.resize = False
@@ -142,14 +155,17 @@ class SequenceManager:
         return new_height, new_width
         
 
-    def generate_clip_indices(self, start):
+    def generate_clip_indices(self, start: int) -> List[List[int]]:
         """
         Given a start index, generate list of indices of clips from the sequence.
         If the start index is in the middle of the sequence, it generates clips in
         both forward and backward directions.
 
         Args:
-            start: int, index of the first frame of the first clip
+            * start: int, index of the first frame of the first clip
+        
+        Returns:
+            * indices: List[List[int]], list of frame indices per clip
         """
         start_copy = start
         indices = []
@@ -178,7 +194,7 @@ class SequenceManager:
         return indices
 
     
-    def extract_clip(self, _indices):
+    def extract_clip(self, _indices: List[int]) -> Mapping:
         """
         Prepare an input clip in the format the model forward pass expects
 
@@ -191,6 +207,11 @@ class SequenceManager:
         in the intermediate clips, a click is sampled from the ground truth 
         mask of that target in the frame where it first appeared.
 
+        Args:
+            * _indices: List[int], frame indices of the clip
+        
+        Returns:
+            * inputs: a mapping in the format expected by the model
         """
 
         indices = _indices
@@ -287,10 +308,9 @@ class SequenceManager:
         return inputs
     
 
-    def record_gt_click(self, frame_idx: int, tgt_id: int, coords):
+    def record_gt_click(self, frame_idx: int, tgt_id: int, coords: List[int]) -> None:
         """
-        Record a click in global buffers and update `not_clicked_map` at the clicked location
-        Strategy is specified by `self.sampling_strategy`
+        Record a click in global buffers
 
         Args:
             * frame_idx: int, the frame on which the click was sampled
@@ -310,7 +330,18 @@ class SequenceManager:
         self.update_not_clicked_map(frame_idx, coords)
         
     
-    def update_not_clicked_map(self, frame_idx, coords):
+    def update_not_clicked_map(self, frame_idx: int, coords: List[int]) -> None:
+        """
+        Update the `not_clicked_map` with the sampled click to avoid sampling at or near this 
+        click again. Strategy is specified by `self.sampling_strategy`
+        
+        0: new click avoids all the previously sampled click locations
+        1: new click avoids all locations upto radius=self.click_radius around all prev sampled clicks
+
+        Args:
+            * frame_idx: int, frame index
+            * coords: List[int], click coordinates in the format [y,x]
+        """
         # update not_clicked_map with the sampled click location
         if self.sampling_strategy == 0:
             self.not_clicked_map[frame_idx][coords[0], coords[1]] = False
@@ -322,12 +353,13 @@ class SequenceManager:
                 1: exclude a circular area around click location specified by click_radius]")
         
 
-    def store_prediction(self, binary_pred_masks, overlap):
+    def store_prediction(self, binary_pred_masks: torch.Tensor, overlap: Mapping) -> None:
         """
         Store predicted masks of a clip in the whole sequence
 
         Args:
-            binary_pred_masks: T,N,H,W predicted binary masks
+            * binary_pred_masks: T,N,H,W torch.Tensor predicted binary masks
+            * overlap: a mapping with info on overlapping frames and predicted targets
         """
         indices = self.curr_clip_input["indices"]
         if len(indices) >= 2 and indices[1] < indices[0]:
@@ -367,15 +399,16 @@ class SequenceManager:
                 "frames": frames_to_sample,
                 "masks": overlap["masks"],
             }
-        return panoptic_pred_masks
+        # return panoptic_pred_masks
 
 
-    def save_visualization(self, indices=None, alpha = 0.5):
+    def save_visualization(self, indices: Optional[List[int]]=None, alpha: float=0.5) -> None:
         """
         Save predicted mask visualization to the disc
 
         Args:
-            indices: Optional[List(int)], save visualizations for specified indices
+            * indices: Optional[List(int)], save visualizations for specified indices
+            * alpha: float, transparency to be applied to visualize mask overlaid on image
         """
         
         # visualization path for current round
@@ -423,14 +456,17 @@ class SequenceManager:
             cv2.imwrite(filename, overlaid)
     
     
-    def get_corrective_click(self, frame_idx, tgt_id):
+    def get_corrective_click(self, frame_idx: int, tgt_id: int) -> int:
         """
         Obtain a corrective click on the specified target in the specified frame
 
         Args:
-            frame_idx: int, frame to sample the click on
-            tgt_id: int, ID of the target to sample the click on
-            padding: bool (default: True), whether to apply padding before `cv2.distanceTransform`
+            * frame_idx: int, frame to sample the click on
+            * tgt_id: int, ID of the target to sample the click on
+        
+        Returns:
+            * tgt_index: int, ID of the target present at the sampled click location in
+                the g.t. mask of the frame `frame_idx`
         """
         # visualization path for current round
         vis_path = os.path.join(self.path_to_correction_vis, f"round_{str(self.round_num)}")

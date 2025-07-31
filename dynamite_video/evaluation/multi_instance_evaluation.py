@@ -1,5 +1,3 @@
-import numpy as np
-import os
 import random
 import time
 import torch
@@ -8,19 +6,21 @@ import torch.nn as nn
 from collections import defaultdict
 from contextlib import ExitStack, contextmanager
 from tqdm import tqdm
+from typing import List, Mapping, Tuple
 
 from detectron2.utils import comm
 from detectron2.utils.logger import setup_logger
 
+from dynamite_video.data.generic_video_parser import GenericVideoSequence
 from dynamite_video.evaluation.manager import SequenceManager
 from dynamite_video.evaluation.metrics.metrics import compute_stq
 from dynamite_video.evaluation.predictor import Predictor
 
 
-def evaluate(model, 
-             dataset,
-             dataset_meta,
-             tfms,
+def evaluate(model: nn.Module, 
+             dataset: List[GenericVideoSequence],
+             dataset_meta: Mapping,
+             tfms: Mapping,
              iou_threshold: float,
              max_interactions: int,
              max_rounds: int,
@@ -128,7 +128,7 @@ def evaluate(model,
                     ## CORRECTIVE CLICK ##
                     refined_tgt_id = manager.get_corrective_click(frame_idx=lowest_frame_index, tgt_id=lowest_tgt_id)
                     logger.info(f'Sampled a click on target {refined_tgt_id} in frame {lowest_frame_index}')
-
+                break
             logger.info(f"{manager.sequence.id}, time analysis: \
                         \nTotal propagation time: {sum(propagation_time)} \
                         \nAverage propagation time per round: {sum(propagation_time)/len(propagation_time)} \
@@ -139,12 +139,13 @@ def evaluate(model,
         return dataset_stq
     
 
-def calculate_score(manager: SequenceManager):
+def calculate_score(manager: SequenceManager) -> Tuple[Mapping, float]:
     start_time = time.perf_counter()
     video_stq, video_aq, video_sq, refine_target, refine_frame = compute_stq(y_true=manager.gt_masks, 
                                                                             y_pred=manager.pred_masks, 
                                                                             target_ids=manager.target_ids,
-                                                                            ignore_label=manager.bg_id
+                                                                            ignore_label=manager.bg_id,
+                                                                            pick_lowest_aq=False,
                                                                         )
     end_time = time.perf_counter()
     

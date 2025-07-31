@@ -10,6 +10,7 @@ def compute_stq(
         y_pred: np.ndarray, 
         target_ids: List,
         ignore_label: int,
+        pick_lowest_aq: bool=False
 ) -> Tuple:
     """
     Compute STQ for current sequence
@@ -23,7 +24,8 @@ def compute_stq(
     stq_metric = STQuality(num_classes=len(target_ids)+1,
                            things_list=target_ids,
                            ignore_label=ignore_label,
-                           offset=int(1e6))
+                           offset=int(1e6),
+                           pick_lowest_aq=pick_lowest_aq)
 
     for gt_mask, pred_mask in zip(y_true, y_pred):
         stq_metric.update_state(gt_mask, pred_mask)

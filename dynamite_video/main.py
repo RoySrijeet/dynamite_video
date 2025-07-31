@@ -22,7 +22,7 @@ from dynamite_video.utils.misc import get_cl_arguments, load_config
 from dynamite_video.utils.wandb import wandb_init, wandb_sweep
 
 
-def seed_rngs(seed: int):
+def seed_rngs(seed: int) -> None:
     imgaug.seed(seed)
     np.random.seed(seed)
     random.seed(seed)

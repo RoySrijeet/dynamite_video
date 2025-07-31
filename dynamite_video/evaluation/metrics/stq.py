@@ -59,7 +59,8 @@ class STQuality(object):
                num_classes: int,
                things_list: Sequence[int],
                ignore_label: int,
-               offset: int
+               offset: int,
+               pick_lowest_aq: bool
                ):
     """Initialization of the STQ metric.
 
@@ -70,11 +71,15 @@ class STQuality(object):
         integer tensor.
       offset: The maximum number of unique labels as an integer or integer
         tensor.
-      name: An optional name. (default: 'st_quality')
+      pick_lowest_aq: If true, return the target with the lowest AQ; if false, 
+        return the target with the lowest SQ. In either case, also return the 
+        frame where the target has the lowest IoU
     """
     self._num_classes = num_classes
     self._ignore_label = ignore_label
+    assert ignore_label == 0, f"STQ implemented with background label as 0"
     self._things_list = things_list
+    self._pick_lowest_aq = pick_lowest_aq
 
     self._confusion_matrix_size = num_classes
     self._include_indices = np.array([i for i in range(num_classes) if i != self._ignore_label])
@@ -206,14 +211,9 @@ class STQuality(object):
         aq_per_tgt.append(1.0 / gt_size.numpy() * inner_sum)
 
     aq_mean = sum(aq_per_tgt) / max(len(self._ground_truth), 1e-15)
-    # minimum aq score obtained by a target
-    min_aq = min(aq_per_tgt)
-    # print(f"AQ per target: {aq_per_tgt}")
-    # the target with the minimum aq score
-    refine_target = list(self._ground_truth.keys())[aq_per_tgt.index(min_aq)]
-    # print(f"Minimum AQ: {min_aq} for target {refine_target}")
 
-    # Compute IoU scores.
+    # Compute segmentation quality (SQ)
+    
     # The rows correspond to ground-truth and the columns to predictions.
     # Remove fp from confusion matrix for the void/ignore class.
     confusion = self._iou_confusion_matrix.numpy()
@@ -221,7 +221,7 @@ class STQuality(object):
     removal_matrix[self._include_indices, :] = 1.0
     confusion *= removal_matrix
 
-    # `intersections` corresponds to true positives.
+    # `intersections` corresponds to true positives
     intersections = confusion.diagonal()
     fps = confusion.sum(axis=0) - intersections
     fns = confusion.sum(axis=1) - intersections
@@ -231,18 +231,35 @@ class STQuality(object):
     ious = (intersections.astype(np.double) /
             np.maximum(unions, 1e-15).astype(np.double))
     iou_mean = np.sum(ious) / num_classes
+    
+    if self._pick_lowest_aq:
+      # print(f"AQ per target: {aq_per_tgt}")
+      # minimum aq score obtained by a target
+      min_tgt = min(aq_per_tgt)
+      # the target with the minimum aq score
+      refine_target = list(self._ground_truth.keys())[aq_per_tgt.index(min_tgt)]
+      # print(f"Minimum AQ: {min_aq} for target {refine_target}")
+    else:
+      # print(f"SQ per target: {ious[1:]}")
+      # minimum sq score obtained by a target
+      min_tgt = np.min(ious[1:])
+      # the target with the minimum aq score
+      refine_target = np.argmin(ious[1:]) + 1
+      # print(f"Minimum SQ: {min_tgt_iou} for target {refine_target}")
+    
+    #TODO - find worst K targets, select one randomly
 
     # frame where this target has lowest IoU
     frame_level_ious = np.asarray(self._ious)[:, refine_target]
     # print(f"Frame level IoUs for target {refine_target}: {frame_level_ious}")
-    min_iou = np.min(frame_level_ious)
+    min_frame = np.min(frame_level_ious)
     refine_frame = np.argmin(frame_level_ious)
-    # print(f"Minimum IoU: {min_iou} at frame {refine_frame}")
+    # print(f"Minimum IoU: {min_frame} at frame {refine_frame}")
 
     st_quality = np.sqrt(aq_mean * iou_mean)
     return {'STQ': st_quality,
             'AQ': aq_mean,
             'IoU': float(iou_mean),
-            "refine_target": [refine_target, min_aq],
-            "refine_frame": [refine_frame, min_iou]
+            "refine_target": [refine_target, min_tgt],
+            "refine_frame": [refine_frame, min_frame]
             }
