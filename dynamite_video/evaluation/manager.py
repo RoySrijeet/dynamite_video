@@ -3,6 +3,7 @@ import numpy as np
 import os
 import torch
 
+from collections import defaultdict
 from PIL import Image
 from typing import List, Mapping, Optional, Tuple
 
@@ -69,6 +70,10 @@ class SequenceManager:
         self.H, self.W = self.compute_tfm_sizes(tfms)
         # bg mask - T,H,W; boolean
         self.bg_masks = (self.gt_masks==self.bg_id)
+        self.target_appearance[0] = [1,2,3,8,9]
+        self.target_appearance[1] = [6,7]
+        self.target_appearance[2] = [10,11]
+        self.target_appearance[4] = [14,27,12]
 
         # click level information
         
@@ -99,9 +104,8 @@ class SequenceManager:
         
         # to store predicted masks
         self.pred_masks = np.zeros((self.T, self.H, self.W), dtype=np.uint8)
-        # store IoU
-        self.ious = np.full((self.T, self.N), fill_value=-1., dtype=np.single)
-        # self.frame_level_ious = np.zeros((self.T), dtype=np.single)
+        # to store prediction logits
+        self.pred_logits = [[] for _ in range(self.T)]
 
         # rounding info
         self.round_num = 0
@@ -125,6 +129,7 @@ class SequenceManager:
         # I/O
         self.curr_clip_input = {}
         self.prev_clip_output = {}
+        self.curr_overlapping_frames = None
         
 
     def compute_tfm_sizes(self, tfms: Mapping) -> Tuple[int, int]:
@@ -178,11 +183,12 @@ class SequenceManager:
                 indices.append(list(range(indices[-1][-1] - self.num_overlapping_frames+1, self.T)))
             elif len(indices) == 0:
                 indices.append(list(range(start, self.T)))
+            indices[-1].append('_')
 
         # generate clips that go back in time
         if start_copy>0:
             bwd = []
-            start_copy = min(start_copy+self.num_overlapping_frames-1, self.T-1)
+            start_copy = min(start_copy, self.T-1)
             while start_copy - self.clip_length >= 0:
                 bwd.append(list(range(start_copy, start_copy-self.clip_length, -1)))
                 start_copy -= step
@@ -191,6 +197,8 @@ class SequenceManager:
             elif len(bwd) == 0:
                 bwd.append(list(range(start_copy, -1, -1)))
             indices.extend(bwd)
+            indices[-1].append('_')
+        
         return indices
 
     
@@ -198,14 +206,12 @@ class SequenceManager:
         """
         Prepare an input clip in the format the model forward pass expects
 
-        If there is no overlap between clips, each clip (and targets in it) 
-        is handled independently. For each target in a clip, clicks are 
-        sampled from its ground truth mask in the frame where it first appeared.
+        If there is no overlap between clips, each clip (and targets in it) is handled independently. 
+        For each target, clicks are sampled from its g.t. mask in the frame where it first appeared.
         
-        If there is an overlap, clicks are sampled for each target from its 
-        predicted mask in the overlapping frames. For any new target appearing
-        in the intermediate clips, a click is sampled from the ground truth 
-        mask of that target in the frame where it first appeared.
+        If there is an overlap, clicks are sampled for each target from its predicted mask in the 
+        overlapping frames. For any new target appearing in the intermediate clips, a click is sampled 
+        from the ground truth mask of that target in the frame where it first appeared.
 
         Args:
             _indices: List[int], frame indices of the clip
@@ -214,33 +220,121 @@ class SequenceManager:
             inputs: a mapping in the format expected by the model
         """
 
-        indices = _indices
-        if len(indices) >= 2 and indices[1] < indices[0]:
-            indices = _indices[::-1]
+        indices, last_clip = self.get_serial_indices(_indices)
+        
+        # find targets in the clip
+        clip_target_ids, frames_to_sample = self.find_targets_in_clip(indices)
+        
+        # serialize target IDs
+        clip_orig_to_serial_id, clip_serial_to_orig_id = serialize_target_ids(clip_target_ids)
 
-        # if there are any overlapping frames, find which targets to reconsider in current clip
-        overlapping_frames = self.prev_clip_output.get("frames", None)
+        # click info must be re-adjusted to be consistent with clip level frame indices and target ids
+        clip_fg_coords_list, clip_bg_coords_list = [], []
+        clip_num_clicks_per_target = np.zeros((len(indices), len(clip_target_ids)), dtype=np.uint16)
+        clip_max_timestamps = [0 for _ in indices]
+        t = self.t + 1
+        
+        for fr_idx, fr_targets in frames_to_sample.items():
+            local_fr_idx = indices.index(fr_idx)
+            
+            # already sampled g.t. clicks - update the indices to clip-level values
+            for fg_click in self.gt_fg_coords_list[fr_idx]:
+                clk_y, clk_x, clk_i, clk_f, clk_t = fg_click
+                local_tgt_id = clip_orig_to_serial_id[clk_i]
+                clip_fg_coords_list.append([clk_y, clk_x, local_tgt_id, local_fr_idx, clk_t])
+                clip_num_clicks_per_target[local_fr_idx][local_tgt_id-1] += 1
+                clip_max_timestamps[local_fr_idx] += 1
+            for bg_click in self.gt_bg_coords_list[fr_idx]:
+                clk_y, clk_x, clk_i, clk_f, clk_t = bg_click
+                clip_bg_coords_list.append([clk_y, clk_x, clk_i, local_fr_idx, clk_t])
+                clip_max_timestamps[local_fr_idx] += 1
+            
+            # sample a click on the g.t. mask of the new target
+            for tgt_id in fr_targets["new"]:
+                # get target center coordinates
+                center_coords = get_center_coords((self.gt_masks[fr_idx] == tgt_id).astype(np.uint8) * self.not_clicked_map[fr_idx])
+                # record the click as [y,x,i,f,t]
+                local_tgt_id = clip_orig_to_serial_id[tgt_id]
+                clip_fg_coords_list.append([center_coords[0], center_coords[1], local_tgt_id, local_fr_idx, self.t])
+                clip_num_clicks_per_target[local_fr_idx][local_tgt_id-1] += 1
+                clip_max_timestamps[local_fr_idx] += 1
+                self.record_gt_click(fr_idx, tgt_id, center_coords)
+            
+            # targets in overlapping frames
+            if fr_targets["overlap"]:
+                overlapping_masks = self.pred_logits[fr_idx]
+                for tgt_id in fr_targets["overlap"]:
+                    tgt_msk = overlapping_masks[tgt_id]
+                    center_coords = get_center_coords(tgt_msk)
+                    local_tgt_id = clip_orig_to_serial_id[tgt_id]
+                    clip_fg_coords_list.append([center_coords[0], center_coords[1], local_tgt_id, local_fr_idx, t])
+                    clip_num_clicks_per_target[local_fr_idx][local_tgt_id-1] += 1
+                    clip_max_timestamps[local_fr_idx] += 1
+                    self.overlap_coords_list[fr_idx].append([center_coords[0], center_coords[1], tgt_id, fr_idx, t])
+                    t += 1
+                
+        inputs = {
+            "images": torch.as_tensor(self.images[indices], dtype=torch.uint8),
+            "num_clicks_per_object": clip_num_clicks_per_target,
+            "fg_coords_list": clip_fg_coords_list,
+            "bg_coords_list": clip_bg_coords_list,
+            "max_timestamp_list": clip_max_timestamps,
+            "indices": indices,
+            "orig_to_serial_id": clip_orig_to_serial_id,
+            "serial_to_orig_id": clip_serial_to_orig_id,
+            # extras
+            "panoptic_masks": self.gt_masks[indices]
+        }
 
-        # clip targets and where to find them
+        self.curr_clip_input = inputs
+        if not last_clip:
+            self.curr_overlapping_frames = _indices[-self.num_overlapping_frames:]
+        else:
+            self.curr_overlapping_frames = None
+        return inputs
+    
+    
+    def find_targets_in_clip(self, indices):
+        """
+        clip targets and where to find them
+        """
         frames_to_sample = {}
         clip_target_ids = []
         
-        for fr_idx in indices:
-            frames_to_sample[fr_idx] = {"new": [], "overlap": []}
-            
-            if self.num_overlapping_frames > 0:
-                # look for new targets in the frame
-                new_targets = list(set(self.target_appearance.get(fr_idx, [])) - self.target_discovery)
-                frames_to_sample[fr_idx]["new"] = new_targets
-                clip_target_ids.extend(new_targets)
+        overlapping_frames = sorted(self.curr_overlapping_frames if self.curr_overlapping_frames else [])
 
-                if overlapping_frames:
-                    # look for overlapping targetss in the frame
-                    overlapping_targets = overlapping_frames.get(fr_idx, [])
-                    frames_to_sample[fr_idx]["overlap"] = overlapping_targets
-                    clip_target_ids.extend(overlapping_targets)
+        if self.num_overlapping_frames > 0:
+        
+            # there are 2 types of frames: 
+            # 1. overlapping frames - these frames have already been seen. no new targets 
+            # can be found. however, we'd like to use any g.t. clicks sampled on these 
+            # frames. These targets are the `overlap_gt` targets. Rest of the targets in 
+            # these frames are to be found from the already predicted mask.
+            # 2. non-overlapping frames - these frames may have new targets and we want to
+            # track them as the `new` targets
+            new = []
+            overlap_gt = []
+            overlap_gt_flat = []
+            for fr_idx in indices:
+                if fr_idx in overlapping_frames:
+                    overlap_gt.append([])
+                    for fg_click in self.gt_fg_coords_list[fr_idx]:
+                        overlap_gt[-1].append(fg_click[2])
+                    overlap_gt_flat.extend(overlap_gt[-1])
+                else:
+                    overlap_gt.append([])
+                
+                new.append(list(set(self.target_appearance.get(fr_idx, [])) - self.target_discovery))
             
-            else:
+            for i, fr_idx in enumerate(indices):
+                overlapping_targets = self.prev_clip_output.get(fr_idx, [])
+                overlap = [tgt_id for tgt_id in overlapping_targets if tgt_id not in overlap_gt_flat]
+                frames_to_sample[fr_idx] = {"overlap_gt": overlap_gt[i], "overlap": overlap, "new": new[i]}
+                clip_target_ids.extend(overlap_gt[i] + overlap + new[i])
+
+        else:
+            frames_to_sample = defaultdict(dict)
+            for fr_idx in indices:
                 # no overlap, each clip is independent; so find new targets in each frame
                 new_targets = list(set(np.unique(self.gt_masks[fr_idx])[1:]) - self.target_discovery)
                 frames_to_sample[fr_idx]["new"] = new_targets
@@ -254,58 +348,18 @@ class SequenceManager:
             # reset target discovery for next clip
             self.target_discovery = set()
         
-        # serialize target IDs
-        clip_orig_to_serial_id, clip_serial_to_orig_id = serialize_target_ids(clip_target_ids)
-
-        # click info must be re-adjusted to be consistent with clip level frame indices and target ids
-        clip_fg_coords_list, clip_bg_coords_list = [], []
-        clip_num_clicks_per_target = np.zeros((len(indices), len(clip_target_ids)), dtype=np.uint16)
-        clip_max_timestamps = [0 for _ in indices]
-        
-        for fr_idx, fr_targets in frames_to_sample.items():
-            local_fr_idx = indices.index(fr_idx)
-
-            for tgt_id in fr_targets["new"]:
-                # sample a click on the g.t. mask of the new target
-                tgt_mask = (self.gt_masks[fr_idx] == tgt_id).astype(np.uint8)
-                center_coords = get_center_coords(tgt_mask * self.not_clicked_map[fr_idx])
-                
-                # record the click as [y,x,i,f,t]
-                local_tgt_id = clip_orig_to_serial_id[tgt_id]
-                clip_fg_coords_list.append([center_coords[0], center_coords[1], local_tgt_id, local_fr_idx, self.t])
-                clip_num_clicks_per_target[local_fr_idx][local_tgt_id-1] += 1
-                clip_max_timestamps[local_fr_idx] += 1
-                self.record_gt_click(fr_idx, tgt_id, center_coords)
-
-            if fr_targets["overlap"]:
-                overlapping_masks = self.prev_clip_output["masks"][fr_idx]
-                t = self.t
-                for tgt_id, tgt_msk in zip(fr_targets["overlap"], overlapping_masks):
-                    tgt_msk = tgt_msk.numpy().astype(np.uint8)
-                    center_coords = get_center_coords(tgt_msk)
-                    
-                    local_tgt_id = clip_orig_to_serial_id[tgt_id]
-                    clip_fg_coords_list.append([center_coords[0], center_coords[1], local_tgt_id, local_fr_idx, t+1])
-                    clip_num_clicks_per_target[local_fr_idx][local_tgt_id-1] += 1
-                    clip_max_timestamps[local_fr_idx] += 1
-                    t += 1
-                    self.overlap_coords_list[fr_idx].append([center_coords[0], center_coords[1], tgt_id, fr_idx, t-1])
-                
-        inputs = {
-            "images": torch.as_tensor(self.images[indices], dtype=torch.uint8),
-            "num_clicks_per_object": clip_num_clicks_per_target,
-            "fg_coords_list": clip_fg_coords_list,
-            "bg_coords_list": clip_bg_coords_list,
-            "max_timestamp_list": clip_max_timestamps,
-            "indices": _indices,
-            "orig_to_serial_id": clip_orig_to_serial_id,
-            "serial_to_orig_id": clip_serial_to_orig_id,
-            # extras
-            "panoptic_masks": self.gt_masks[indices]
-        }
-
-        self.curr_clip_input = inputs
-        return inputs
+        return clip_target_ids, frames_to_sample
+    
+    
+    def get_serial_indices(self, indices):
+        last_clip = False
+        if indices[-1] == "_":
+            # last clip in forward/backward propagation
+            indices = indices[:-1]
+            last_clip = True
+        if len(indices) >= 2 and indices[1] < indices[0]:
+            indices = indices[::-1]
+        return indices, last_clip
     
 
     def record_gt_click(self, frame_idx: int, tgt_id: int, coords: List[int]) -> None:
@@ -353,53 +407,56 @@ class SequenceManager:
                 1: exclude a circular area around click location specified by click_radius]")
         
 
-    def store_prediction(self, binary_pred_masks: torch.Tensor, overlap: Mapping) -> None:
+    def store_prediction(self, binary_pred_masks: torch.Tensor, pred_logits: torch.Tensor) -> None:
         """
-        Store predicted masks of a clip in the whole sequence
+        Store predicted masks of a clip
 
         Args:
-            binary_pred_masks: T,N,H,W torch.Tensor predicted binary masks
-            overlap: a mapping with info on overlapping frames and predicted targets
+            binary_pred_masks: T,N,H,W np.ndarray predicted binary masks
+            pred_logits: T,N,H,W np.ndarray predicted mask logits
         """
+        confidence_threshold = 0.8
+        
         indices = self.curr_clip_input["indices"]
-        if len(indices) >= 2 and indices[1] < indices[0]:
-            indices = self.curr_clip_input["indices"][::-1]
         
-        # ignore masks
-        # clip_ignore_masks = self.ignore_masks[indices]
+        if self.curr_overlapping_frames:
+            overlapping_frames = [indices.index(fr_idx) for fr_idx in self.curr_overlapping_frames]
+            overlapping_pred_masks = binary_pred_masks[overlapping_frames]
+            overlapping_pred_proba = pred_logits[overlapping_frames]
+            
+            # find overlapping targets from binary masks (0-indexed)
+            overlapping_targets = overlapping_pred_masks.any(dim=(0, 2, 3)).nonzero(as_tuple=True)[0]
+            # find frames where each target shows max confidence (0-indexed)
+            max_response_frames = overlapping_pred_proba.amax(dim=(2, 3)).argmax(dim=0)
+            # keep only the predicted targets
+            max_response_frames = max_response_frames[overlapping_targets]
+            
+            # for each predicted target, store the original ID and also the corresponding 
+            # channel index in the prediction logits
+            frames_to_sample = defaultdict(list)
+            for fr_idx, tgt_id in zip(max_response_frames, overlapping_targets):
+                frames_to_sample[indices[overlapping_frames[fr_idx.item()]]].append(self.curr_clip_input["serial_to_orig_id"][tgt_id.item()+1])
+            
+            self.prev_clip_output = frames_to_sample
         
+        # predicted panoptic maps
         T,N,H,W = binary_pred_masks.shape
-        
         panoptic_pred_masks = np.full((T,H,W), fill_value=self.bg_id).astype(np.uint8)
-        # compute the panoptic map for each frame
-        for fr_idx in range(T):
+        
+        for fr_idx, global_fr_idx in enumerate(indices):
+            fr_pred_logits = {}
             for tgt_id in range(N):
-                # predicted binary mask of current target
+                orig_id = self.curr_clip_input["serial_to_orig_id"][tgt_id+1]
                 mask = binary_pred_masks[fr_idx][tgt_id]
                 if mask.any():
-                    # original ID of the s in the whole sequence
-                    orig_id = self.curr_clip_input["serial_to_orig_id"][tgt_id+1]
                     panoptic_pred_masks[fr_idx][np.where(mask==1)] = orig_id
-                
-            # panoptic_pred_masks[fr_idx][np.where(clip_ignore_masks[fr_idx])] = self.bg_id
-                
-        # save in buffer
+                fr_pred_logits[orig_id] = (pred_logits[fr_idx][tgt_id] > confidence_threshold).numpy().astype(np.uint8)
+
+            self.pred_logits[global_fr_idx] = fr_pred_logits
         self.pred_masks[indices] = panoptic_pred_masks
 
         if self.save_vis:
             self.save_visualization(indices)
-
-        if self.num_overlapping_frames > 0 and overlap:
-            # store information about the predicted targets in the overlapping frames
-            frames_to_sample = {}
-            for fr_idx, tgt_ids in overlap["frames"].items():
-                frames_to_sample[fr_idx] = [self.curr_clip_input["serial_to_orig_id"][i+1] for i in tgt_ids]
-            
-            self.prev_clip_output = {
-                "frames": frames_to_sample,
-                "masks": overlap["masks"],
-            }
-        # return panoptic_pred_masks
 
 
     def save_visualization(self, indices: Optional[List[int]]=None, alpha: float=0.5) -> None:
@@ -468,11 +525,6 @@ class SequenceManager:
             tgt_index: int, ID of the target present at the sampled click location in
                 the g.t. mask of the frame `frame_idx`
         """
-        # visualization path for current round
-        vis_path = os.path.join(self.path_to_correction_vis, f"round_{str(self.round_num)}")
-        if not os.path.isdir(vis_path):
-            os.makedirs(vis_path)
-        
         gt_instance_mask = np.asarray(self.gt_masks[frame_idx] == tgt_id, dtype=np.bool_)
         pred_instance_mask = np.asarray(self.pred_masks[frame_idx] == tgt_id, dtype=np.bool_)
 
@@ -508,6 +560,10 @@ class SequenceManager:
         tgt_index = self.gt_masks[frame_idx][coords_y[t], coords_x[t]]
 
         if self.save_vis:
+            # visualization path for current round
+            vis_path = os.path.join(self.path_to_correction_vis, f"round_{str(self.round_num)}")
+            if not os.path.isdir(vis_path):
+                os.makedirs(vis_path)
             im = self.images[frame_idx].transpose(1,2,0)
             image_bgr = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
             
@@ -530,4 +586,10 @@ class SequenceManager:
             cv2.imwrite(os.path.join(vis_path, f"correction_click_pred_fr_{frame_idx}_tgt_{tgt_id}.png"), overlaid_pred)
         
         self.record_gt_click(frame_idx, tgt_index, sample_locations)
+
+        # next round will start from frame `frame_idx`, so sample clicks from the prediction
+        overlapping_targets = np.unique(self.pred_masks[frame_idx])    # includes bg
+        self.curr_overlapping_frames = [frame_idx]
+        self.prev_clip_output = {frame_idx: [tgt_id for tgt_id in overlapping_targets if tgt_id!=self.bg_id]}
+        
         return tgt_index

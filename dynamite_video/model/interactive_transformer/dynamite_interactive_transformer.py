@@ -396,12 +396,22 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                     query_pos=query_embed)
             
             # QUERY-QUERY CROSS ATTENTION between queries (inter-frame)
-            tgt_batched_query, qqca_mask = self.get_target_batched_query(output, num_queries_per_target)
-            padded_output = self.encoder.query_query_cross_attention_layers[i](tgt_batched_query,
-                                                                                tgt_mask=None,
-                                                                                tgt_key_padding_mask=qqca_mask,
-                                                                                query_pos=tgt_batched_query_embed)
-            output = self.get_frame_batched_query(output, padded_output, num_queries_per_target)
+            if self.use_qqca == "vanilla":
+                Q,T,D = output.shape
+                output = self.encoder.query_query_cross_attention_layers[i](output.view(Q*T, 1, D),
+                                                                                    tgt_mask=None,
+                                                                                    tgt_key_padding_mask=None,
+                                                                                    query_pos=query_embed.view(Q*T, 1, D))
+                output = output.view(Q,T,D)
+
+
+            if self.use_qqca == "masked":
+                tgt_batched_query, qqca_mask = self.get_target_batched_query(output, num_queries_per_target)
+                padded_output = self.encoder.query_query_cross_attention_layers[i](tgt_batched_query,
+                                                                                    tgt_mask=None,
+                                                                                    tgt_key_padding_mask=qqca_mask,
+                                                                                    query_pos=tgt_batched_query_embed)
+                output = self.get_frame_batched_query(output, padded_output, num_queries_per_target)
             
             # SELF-ATTENTION between queries of the same frame (intra-frame)
             output = self.encoder.self_attention_layers[i](output, 

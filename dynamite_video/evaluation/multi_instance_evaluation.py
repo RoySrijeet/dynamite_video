@@ -14,7 +14,7 @@ from detectron2.utils.logger import setup_logger
 from dynamite_video.data.generic_video_parser import GenericVideoSequence
 from dynamite_video.evaluation.manager import SequenceManager
 from dynamite_video.evaluation.metrics.metrics import compute_stq
-from dynamite_video.evaluation.predictor import Predictor
+from dynamite_video.model.predictor import Predictor
 
 
 def evaluate(model: nn.Module, 
@@ -63,7 +63,7 @@ def evaluate(model: nn.Module,
             logger.info(f"Processing Sequence {video.id} [{i+1}/{len(dataset)}]")
 
             # a fresh model for each sequence
-            predictor = Predictor(model, dataset_meta["num_overlapping_frames"], manager.T)
+            predictor = Predictor(model)
 
             # click budget for whole sequence = max #clicks per target * #targets
             click_budget = max_interactions * manager.N
@@ -89,9 +89,9 @@ def evaluate(model: nn.Module,
                     # prepare clip input to the model
                     inputs = manager.extract_clip(indices)
                     # model forward pass
-                    binary_pred_masks, overlap = predictor.get_prediction([inputs], indices)    # T,N,H,W
+                    binary_pred_masks, pred_logits = predictor.get_prediction([inputs])    # T,N,H,W
                     # store as panoptic prediction
-                    manager.store_prediction(binary_pred_masks, overlap)
+                    manager.store_prediction(binary_pred_masks, pred_logits)
 
                 propagation_time.append(time.perf_counter() - propagation_start_time)
 
@@ -128,7 +128,7 @@ def evaluate(model: nn.Module,
                     ## CORRECTIVE CLICK ##
                     refined_tgt_id = manager.get_corrective_click(frame_idx=lowest_frame_index, tgt_id=lowest_tgt_id)
                     logger.info(f'Sampled a click on target {refined_tgt_id} in frame {lowest_frame_index}')
-                break
+                
             logger.info(f"{manager.sequence.id}, time analysis: \
                         \nTotal propagation time: {sum(propagation_time)} \
                         \nAverage propagation time per round: {sum(propagation_time)/len(propagation_time)} \
@@ -145,7 +145,7 @@ def calculate_score(manager: SequenceManager) -> Tuple[Mapping, float]:
                                                                             y_pred=manager.pred_masks, 
                                                                             target_ids=manager.target_ids,
                                                                             ignore_label=manager.bg_id,
-                                                                            pick_lowest_aq=False,
+                                                                            pick_lowest_aq=True,
                                                                         )
     end_time = time.perf_counter()
     

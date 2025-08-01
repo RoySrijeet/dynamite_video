@@ -1,7 +1,8 @@
 import torch
+import torch.nn as nn
 
-from collections import defaultdict
 from torch.nn import functional as F
+from typing import Mapping, Tuple
 
 from detectron2.modeling.postprocessing import sem_seg_postprocess
 from detectron2.utils.memory import retry_if_cuda_oom
@@ -11,19 +12,11 @@ class Predictor:
     A wrapper around DynamiteModel interactive evaluation forward pass
     """
 
-
-    def __init__(
-            self,
-            model, 
-            num_overlapping_frames,
-            sequence_length,
-    ):
+    def __init__(self, model: nn.Module):
         self.model = model
-        self.num_overlapping_frames = num_overlapping_frames
-        self.sequence_length = sequence_length
     
     
-    def get_prediction(self, inputs, indices):
+    def get_prediction(self, inputs: Mapping) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             inputs: batched input, a dict with the following keys:
@@ -39,43 +32,12 @@ class Predictor:
         # num_queries_per_target: list of integers, length N+1; summing up to Q
         images, outputs, num_queries_per_target  = self.model(inputs)
 
-        # T,N,H,W predictions masks
+        # T,N,H,W predicted binary masks and logits
         pred_masks, pred_proba = self.process_results(images,
                                                 outputs,     # N
                                                 num_queries_per_target)
 
-        if self.num_overlapping_frames == 0:
-            return pred_masks, None
-        ## jerry-built. TODO
-        if self.sequence_length - 1 in indices:
-            return pred_masks, None
-        
-        # overlapping frames
-        overlapping_pred_masks = pred_masks[-self.num_overlapping_frames:]
-        overlapping_pred_proba = pred_proba[-self.num_overlapping_frames:]
-        
-        # find overlapping targets from binary masks
-        overlapping_targets = overlapping_pred_masks.any(dim=(0, 2, 3)).nonzero(as_tuple=True)[0]
-        
-        # find frames where each target shows max confidence
-        max_response_frames = overlapping_pred_proba.amax(dim=(2, 3)).argmax(dim=0)
-        # keep only the predicted targets
-        max_response_frames = max_response_frames[overlapping_targets]
-        
-        # for each predicted target, record high confidence areas
-        overlapping_pred_proba = overlapping_pred_proba > 0.9
-        
-        frames_to_sample = defaultdict(list)
-        overlapping_masks = defaultdict(list)
-        for fr_idx, tgt_id in zip(max_response_frames, overlapping_targets):
-            frames_to_sample[indices[self.num_overlapping_frames + fr_idx.item()]].append(tgt_id.item())
-            overlapping_masks[indices[self.num_overlapping_frames + fr_idx.item()]].append(overlapping_pred_proba[fr_idx][tgt_id])
-
-        overlap = {
-            "frames": frames_to_sample,
-            "masks": overlapping_masks
-        }
-        return pred_masks, overlap
+        return pred_masks, pred_proba
     
     
     def process_results(
