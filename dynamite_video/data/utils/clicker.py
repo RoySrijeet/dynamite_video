@@ -86,7 +86,7 @@ def get_foreground_clicks(
     # randomly select a frame to sample a center click from
     fr_idx = random.choice(available_frames)
 
-    # get center coordinates
+    # get center coordinates (first click)
     center_coords = get_center_coords(obj_mask[fr_idx], k=1.1)
     # record click
     clicks_on_obj.append([center_coords[0], center_coords[1], obj_id, fr_idx, t])

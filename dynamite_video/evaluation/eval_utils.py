@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import os
+import random
 import torch
 
 from collections import OrderedDict
@@ -50,6 +51,31 @@ def get_center_coords(mask, k=1.7):
     t = len(coords_y) // 2
 
     return [coords_y[t],coords_x[t]]
+
+def get_random_coords(mask, n=1):
+    """
+    Sample clicks randomly from binary mask
+
+    Args:
+        mask: binary mask [H, W], np.ndarray
+    """
+    assert mask.ndim==2
+
+    if torch.is_tensor(mask):
+        mask = mask.numpy()
+    mask = mask.astype(np.uint8)
+
+    kernel = np.ones((3,3),np.uint8)
+    _eroded_m = cv2.erode(mask.copy(), kernel, iterations=1)
+    sample_locations = np.argwhere(_eroded_m)
+    
+    # randomly select clicks
+    index = random.sample(range(sample_locations.shape[0]), n)
+    clicks = []
+    for idx in index:
+        extra_coords = sample_locations[idx]
+        clicks.append([extra_coords[0], extra_coords[1]])
+    return clicks
 
 
 def get_palette(num_cls):
