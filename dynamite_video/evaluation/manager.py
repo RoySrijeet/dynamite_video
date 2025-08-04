@@ -9,7 +9,7 @@ from typing import List, Mapping, Optional, Tuple
 
 from dynamite_video.data.generic_video_parser import GenericVideoSequence
 from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks
-from dynamite_video.evaluation.eval_utils import create_circular_mask, color_map, show_points, get_center_coords, serialize_target_ids
+from dynamite_video.evaluation.eval_utils import *
 
 class SequenceManager:
     """
@@ -70,10 +70,6 @@ class SequenceManager:
         self.H, self.W = self.compute_tfm_sizes(tfms)
         # bg mask - T,H,W; boolean
         self.bg_masks = (self.gt_masks==self.bg_id)
-        self.target_appearance[0] = [1,2,3,8,9]
-        self.target_appearance[1] = [6,7]
-        self.target_appearance[2] = [10,11]
-        self.target_appearance[4] = [14,27,12]
 
         # click level information
         
@@ -120,16 +116,14 @@ class SequenceManager:
         self.save_vis = save_vis
         if self.save_vis:
             # path to save predicted masks
-            self.path_to_mask_vis = os.path.join(output_dir, "masks", self.sequence.id)
-            os.makedirs(self.path_to_mask_vis)
-            # path to save corrections
-            self.path_to_correction_vis = os.path.join(output_dir, "corrections", self.sequence.id)
-            os.makedirs(self.path_to_correction_vis)
+            self.path_to_visualization = os.path.join(output_dir, "masks", self.sequence.id)
+            os.makedirs(self.path_to_visualization)
 
         # I/O
         self.curr_clip_input = {}
         self.prev_clip_output = {}
         self.curr_overlapping_frames = None
+        self.refine_frame = None
         
 
     def compute_tfm_sizes(self, tfms: Mapping) -> Tuple[int, int]:
@@ -198,11 +192,11 @@ class SequenceManager:
                 bwd.append(list(range(start_copy, -1, -1)))
             indices.extend(bwd)
             indices[-1].append('_')
-        
+        self.overlap_coords_list = [[] for _ in range(self.T)]
         return indices
 
     
-    def extract_clip(self, _indices: List[int]) -> Mapping:
+    def extract_clip(self, _indices: List[int], clip_idx: int) -> Mapping:
         """
         Prepare an input clip in the format the model forward pass expects
 
@@ -273,6 +267,10 @@ class SequenceManager:
                     self.overlap_coords_list[fr_idx].append([center_coords[0], center_coords[1], tgt_id, fr_idx, t])
                     t += 1
                 
+                if self.save_vis:
+                    self.save_overlapping_frame_w_clicks(fr_idx, clip_idx)
+                
+        clip_fg_coords_list = sorted(clip_fg_coords_list, key=lambda x:x[2])
         inputs = {
             "images": torch.as_tensor(self.images[indices], dtype=torch.uint8),
             "num_clicks_per_object": clip_num_clicks_per_target,
@@ -299,7 +297,7 @@ class SequenceManager:
         clip targets and where to find them
         """
         frames_to_sample = {}
-        clip_target_ids = []
+        clip_target_ids = set()
         
         overlapping_frames = sorted(self.curr_overlapping_frames if self.curr_overlapping_frames else [])
 
@@ -316,21 +314,17 @@ class SequenceManager:
             overlap_gt = []
             overlap_gt_flat = []
             for fr_idx in indices:
-                if fr_idx in overlapping_frames:
-                    overlap_gt.append([])
-                    for fg_click in self.gt_fg_coords_list[fr_idx]:
-                        overlap_gt[-1].append(fg_click[2])
-                    overlap_gt_flat.extend(overlap_gt[-1])
-                else:
-                    overlap_gt.append([])
-                
+                overlap_gt.append([])
+                for fg_click in self.gt_fg_coords_list[fr_idx]:
+                    overlap_gt[-1].append(fg_click[2])
+                overlap_gt_flat.extend(overlap_gt[-1])
                 new.append(list(set(self.target_appearance.get(fr_idx, [])) - self.target_discovery))
             
             for i, fr_idx in enumerate(indices):
                 overlapping_targets = self.prev_clip_output.get(fr_idx, [])
                 overlap = [tgt_id for tgt_id in overlapping_targets if tgt_id not in overlap_gt_flat]
                 frames_to_sample[fr_idx] = {"overlap_gt": overlap_gt[i], "overlap": overlap, "new": new[i]}
-                clip_target_ids.extend(overlap_gt[i] + overlap + new[i])
+                clip_target_ids.update(overlap_gt[i] + overlap + new[i])
 
         else:
             frames_to_sample = defaultdict(dict)
@@ -338,8 +332,10 @@ class SequenceManager:
                 # no overlap, each clip is independent; so find new targets in each frame
                 new_targets = list(set(np.unique(self.gt_masks[fr_idx])[1:]) - self.target_discovery)
                 frames_to_sample[fr_idx]["new"] = new_targets
-                clip_target_ids.extend(new_targets)
+                clip_target_ids.update(new_targets)
                 self.target_discovery.update(new_targets)
+                frames_to_sample[fr_idx]["overlap_gt"] = []
+                frames_to_sample[fr_idx]["overlap"] = []
 
         if self.num_overlapping_frames > 0:
             # maintain target discovery for next clip
@@ -359,6 +355,10 @@ class SequenceManager:
             last_clip = True
         if len(indices) >= 2 and indices[1] < indices[0]:
             indices = indices[::-1]
+            if self.refine_frame:
+                self.curr_overlapping_frames = self.refine_frame
+                self.prev_clip_output = self.refine_frame
+                self.refine_frame = None
         return indices, last_clip
     
 
@@ -407,7 +407,7 @@ class SequenceManager:
                 1: exclude a circular area around click location specified by click_radius]")
         
 
-    def store_prediction(self, binary_pred_masks: torch.Tensor, pred_logits: torch.Tensor) -> None:
+    def store_prediction(self, binary_pred_masks: torch.Tensor, pred_logits: torch.Tensor, clip_idx:int) -> None:
         """
         Store predicted masks of a clip
 
@@ -437,6 +437,11 @@ class SequenceManager:
             for fr_idx, tgt_id in zip(max_response_frames, overlapping_targets):
                 frames_to_sample[indices[overlapping_frames[fr_idx.item()]]].append(self.curr_clip_input["serial_to_orig_id"][tgt_id.item()+1])
             
+            # frames_to_sample = defaultdict(list)
+            # for fr_idx in overlapping_frames:
+            #     pred_targets = binary_pred_masks[fr_idx].any(dim=(1,2)).nonzero(as_tuple=True)[0]
+            #     frames_to_sample[indices[fr_idx]] = [self.curr_clip_input["serial_to_orig_id"][tgt_id.item()+1] for tgt_id in pred_targets]
+
             self.prev_clip_output = frames_to_sample
         
         # predicted panoptic maps
@@ -456,10 +461,10 @@ class SequenceManager:
         self.pred_masks[indices] = panoptic_pred_masks
 
         if self.save_vis:
-            self.save_visualization(indices)
+            self.save_visualization(indices, clip_idx)
 
 
-    def save_visualization(self, indices: Optional[List[int]]=None, alpha: float=0.5) -> None:
+    def save_visualization(self, indices: Optional[List[int]]=None, clip_idx: int=0, alpha: float=0.5) -> None:
         """
         Save predicted mask visualization to the disc
 
@@ -469,48 +474,67 @@ class SequenceManager:
         """
         
         # visualization path for current round
-        vis_path = os.path.join(self.path_to_mask_vis, f"round_{str(self.round_num)}")
+        vis_path = os.path.join(self.path_to_visualization, f"round_{str(self.round_num)}")
+        serial_mask_vis_path = os.path.join(vis_path, "masks")
+        serial_overlaid_vis_path = os.path.join(vis_path, "overlaid")
+        
         if not os.path.isdir(vis_path):
             os.makedirs(vis_path)
-        
-        if not indices:
-            # display all frames
-            indices = np.arange(self.T).tolist()
+            os.makedirs(serial_mask_vis_path)
+            os.makedirs(serial_overlaid_vis_path)
 
+        
+        if not indices: # display all frames
+            indices = np.arange(self.T).tolist()
         save_masks = self.pred_masks[indices].copy()
         
         for fr_idx, fr_msk in zip(indices, save_masks):
             
             im = self.images[fr_idx].transpose(1,2,0)
             if self.resize:
-                im = cv2.resize(im, (self.orig_W, self.orig_H))
-                fr_msk = np.resize(fr_msk, (self.orig_H, self.orig_W))
-
+                im = cv2.resize(im.copy(), (self.orig_W, self.orig_H))
+                fr_msk = np.resize(fr_msk.copy(), (self.orig_H, self.orig_W))
+                # TODO - scale clicks
+            
+            # save mask
             fr_msk = Image.fromarray(fr_msk.astype(np.uint8))
             fr_msk.putpalette(color_map)
-            filename = os.path.join(vis_path, f"mask_{fr_idx}.png")
-            if os.path.exists(filename):
-                filename = os.path.join(vis_path, f"mask_{fr_idx}_overlap.png")
-            fr_msk.save(filename)
+            fr_msk.save(os.path.join(serial_mask_vis_path, f"clip_{clip_idx}_{fr_idx}.png"))
             
-            # Convert both to BGR (for OpenCV)
+            # save mask overlaid on image with clicks
             image_bgr = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
             fr_msk = np.array(fr_msk.convert("RGB"))
             mask_bgr = cv2.cvtColor(fr_msk, cv2.COLOR_RGB2BGR)
             overlaid = cv2.addWeighted(image_bgr, 1 - alpha, mask_bgr, alpha, 0)
-            
-            # display clicks
             if len(self.gt_bg_coords_list[fr_idx]) > 0:
                 show_points(overlaid, self.gt_bg_coords_list[fr_idx], 0)
             if len(self.gt_fg_coords_list[fr_idx]) > 0:
                 show_points(overlaid, self.gt_fg_coords_list[fr_idx], 1)
-            if len(self.overlap_coords_list[fr_idx]) > 0:
-                show_points(overlaid, self.overlap_coords_list[fr_idx], 2)
-            
-            filename = os.path.join(vis_path, f"overlaid_{fr_idx}.png")
-            if os.path.exists(filename):
-                filename = os.path.join(vis_path, f"overlaid_{fr_idx}_overlap.png")
-            cv2.imwrite(filename, overlaid)
+            cv2.imwrite(os.path.join(serial_overlaid_vis_path, f"clip_{clip_idx}_{fr_idx}.png"), overlaid)
+    
+    
+    def save_overlapping_frame_w_clicks(self, frame_idx: int, clip_idx: int, alpha: float=0.5) -> None:
+        
+        vis_path = os.path.join(self.path_to_visualization, f"round_{str(self.round_num)}")
+        clip_vis_path = os.path.join(vis_path, "overlapping_clicks", str(clip_idx))
+        os.makedirs(clip_vis_path, exist_ok=True)
+
+        im = self.images[frame_idx].transpose(1,2,0).copy()
+        fr_msk = self.pred_masks[frame_idx].copy()
+        if self.resize:
+            im = cv2.resize(im, (self.orig_W, self.orig_H))
+            fr_msk = np.resize(fr_msk, (self.orig_H, self.orig_W))
+            # TODO - scale clicks
+        
+        # save mask overlaid on image with clicks
+        image_bgr = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
+        fr_msk = Image.fromarray(fr_msk.astype(np.uint8))
+        fr_msk.putpalette(color_map)
+        fr_msk = np.array(fr_msk.convert("RGB"))
+        mask_bgr = cv2.cvtColor(fr_msk, cv2.COLOR_RGB2BGR)
+        overlaid = cv2.addWeighted(image_bgr, 1 - alpha, mask_bgr, alpha, 0)
+        show_points(overlaid, self.overlap_coords_list[frame_idx], 2)
+        cv2.imwrite(os.path.join(clip_vis_path, f"clip_{clip_idx}_{frame_idx}.png"), overlaid)
     
     
     def get_corrective_click(self, frame_idx: int, tgt_id: int) -> int:
@@ -560,28 +584,22 @@ class SequenceManager:
         tgt_index = self.gt_masks[frame_idx][coords_y[t], coords_x[t]]
 
         if self.save_vis:
-            # visualization path for current round
-            vis_path = os.path.join(self.path_to_correction_vis, f"round_{str(self.round_num)}")
+            vis_path = os.path.join(self.path_to_visualization, f"round_{str(self.round_num)}/corrections")
             if not os.path.isdir(vis_path):
                 os.makedirs(vis_path)
-            im = self.images[frame_idx].transpose(1,2,0)
-            image_bgr = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
             
-            alpha = 0.5
-            
+            image_bgr = cv2.cvtColor(self.images[frame_idx].transpose(1,2,0), cv2.COLOR_RGB2BGR)
             fr_gt_msk = Image.fromarray(self.gt_masks[frame_idx].astype(np.uint8))
             fr_gt_msk.putpalette(color_map)
-            fr_gt_msk = np.array(fr_gt_msk.convert("RGB"))
-            fr_gt_msk = cv2.cvtColor(fr_gt_msk, cv2.COLOR_RGB2BGR)
-            overlaid_gt = cv2.addWeighted(image_bgr, 1 - alpha, fr_gt_msk, alpha, 0)
+            fr_gt_msk = cv2.cvtColor(np.array(fr_gt_msk.convert("RGB")), cv2.COLOR_RGB2BGR)
+            overlaid_gt = cv2.addWeighted(image_bgr, 0.5, fr_gt_msk, 0.5, 0)
             show_points(overlaid_gt, [[sample_locations[0], sample_locations[1], 0,0,0]], 2)
             cv2.imwrite(os.path.join(vis_path, f"correction_click_gt_fr_{frame_idx}_tgt_{tgt_id}.png"), overlaid_gt)
             
             fr_pred_mask = Image.fromarray(self.pred_masks[frame_idx].astype(np.uint8))
             fr_pred_mask.putpalette(color_map)
-            fr_pred_mask = np.array(fr_pred_mask.convert("RGB"))
-            fr_pred_mask = cv2.cvtColor(fr_pred_mask, cv2.COLOR_RGB2BGR)
-            overlaid_pred = cv2.addWeighted(image_bgr, 1 - alpha, fr_pred_mask, alpha, 0)
+            fr_pred_mask = cv2.cvtColor(np.array(fr_pred_mask.convert("RGB")), cv2.COLOR_RGB2BGR)
+            overlaid_pred = cv2.addWeighted(image_bgr, 0.5, fr_pred_mask, 0.5, 0)
             show_points(overlaid_pred, [[sample_locations[0], sample_locations[1], 0,0,0]], 2)
             cv2.imwrite(os.path.join(vis_path, f"correction_click_pred_fr_{frame_idx}_tgt_{tgt_id}.png"), overlaid_pred)
         
@@ -591,5 +609,6 @@ class SequenceManager:
         overlapping_targets = np.unique(self.pred_masks[frame_idx])    # includes bg
         self.curr_overlapping_frames = [frame_idx]
         self.prev_clip_output = {frame_idx: [tgt_id for tgt_id in overlapping_targets if tgt_id!=self.bg_id]}
+        self.refine_frame = self.prev_clip_output
         
         return tgt_index
