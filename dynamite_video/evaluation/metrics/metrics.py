@@ -1,6 +1,6 @@
 import numpy as np
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from dynamite_video.evaluation.metrics import batched_f_measure, batched_jaccard, STQuality
 
@@ -10,7 +10,10 @@ def compute_stq(
         y_pred: np.ndarray, 
         target_ids: List,
         ignore_label: int,
-        pick_lowest_aq: bool=False
+        refine_object_selection: str="worst",        # select from "worst", "topK", "threshold"
+        topK: Optional[int]=None,
+        iou_threshold: Optional[float]=None,
+
 ) -> Tuple:
     """
     Compute STQ for current sequence
@@ -24,28 +27,12 @@ def compute_stq(
     stq_metric = STQuality(num_classes=len(target_ids)+1,
                            things_list=target_ids,
                            ignore_label=ignore_label,
-                           offset=int(1e6),
-                           pick_lowest_aq=pick_lowest_aq)
+                           offset=int(1e6))
 
     for gt_mask, pred_mask in zip(y_true, y_pred):
         stq_metric.update_state(gt_mask, pred_mask)
 
-    result = stq_metric.result()
-
-    def np_to_native_type(x):
-        if isinstance(x, np.ndarray):
-            return x.tolist()
-        elif hasattr(x, "item"):
-            return x.item()
-        else:
-            return x
-
-    return (np_to_native_type(result["STQ"]), 
-            np_to_native_type(result["AQ"]), 
-            np_to_native_type(result["IoU"]),
-            np_to_native_type(result["refine_target"]),
-            np_to_native_type(result["refine_frame"]),
-            )
+    return stq_metric.result()
 
 
 def compute_j_and_f(
