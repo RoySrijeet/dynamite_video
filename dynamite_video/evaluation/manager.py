@@ -247,6 +247,7 @@ class SequenceManager:
             for tgt_id in fr_targets["new"]:
                 # get target center coordinates
                 center_coords = get_center_coords((self.gt_masks[fr_idx] == tgt_id).astype(np.uint8) * self.not_clicked_map[fr_idx])
+                # center_coords = get_random_coords((self.gt_masks[fr_idx] == tgt_id).astype(np.uint8) * self.not_clicked_map[fr_idx], 1)[0]
                 # record the click as [y,x,i,f,t]
                 local_tgt_id = clip_orig_to_serial_id[tgt_id]
                 clip_fg_coords_list.append([center_coords[0], center_coords[1], local_tgt_id, local_fr_idx, self.t])
@@ -266,6 +267,15 @@ class SequenceManager:
                     clip_max_timestamps[local_fr_idx] += 1
                     self.overlap_coords_list[fr_idx].append([center_coords[0], center_coords[1], tgt_id, fr_idx, t])
                     t += 1
+
+                    # random_coords = get_random_coords(tgt_msk, 5)
+                    # for coords in random_coords:
+                    #     clip_fg_coords_list.append([coords[0], coords[1], local_tgt_id, local_fr_idx, t])
+                    #     clip_num_clicks_per_target[local_fr_idx][local_tgt_id-1] += 1
+                    #     clip_max_timestamps[local_fr_idx] += 1
+                    #     self.overlap_coords_list[fr_idx].append([coords[0], coords[1], tgt_id, fr_idx, t])
+                    #     t += 1
+
                 
                 if self.save_vis:
                     self.save_overlapping_frame_w_clicks(fr_idx, clip_idx)

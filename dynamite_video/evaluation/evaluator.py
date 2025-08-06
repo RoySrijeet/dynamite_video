@@ -75,6 +75,43 @@ class Evaluator:
             with open(os.path.join(self.output_dir, f"metrics_{dataset_name}.yaml"), 'w') as f:
                 yaml.dump(dict(dataset_result), f)
         
+            # debug
+            TRAIN_IDS = ['0000', '0001', '0003', '0004', '0005', '0009', '0011', '0012', '0015', '0017', '0019', '0020']
+            avg_stq_training = 0
+            avg_aq_training = 0
+            avg_sq_training = 0
+            avg_stq_val = 0
+            avg_aq_val = 0
+            avg_sq_val = 0
+            avg_stq = 0
+            avg_aq = 0
+            avg_sq = 0
             for vid, res in dataset_result.items():
                 self.logger.info(f"Video: {vid}")
                 self.logger.info(f"Scores: {res}")
+                avg_stq += res[-1]["STQ"]
+                avg_aq += res[-1]["AQ"]
+                avg_sq += res[-1]["SQ"]
+
+                if vid in TRAIN_IDS:
+                    avg_stq_training += res[-1]["STQ"]
+                    avg_aq_training += res[-1]["AQ"]
+                    avg_sq_training += res[-1]["SQ"]
+                else:
+                    avg_stq_val += res[-1]["STQ"]
+                    avg_aq_val += res[-1]["AQ"]
+                    avg_sq_val += res[-1]["SQ"]
+            
+            self.logger.info(f"Training split: ")
+            self.logger.info(f"Average STQ: {avg_stq_training / 12}")
+            self.logger.info(f"Average AQ: {avg_aq_training / 12}")
+            self.logger.info(f"Average SQ: {avg_sq_training / 12}")
+
+            self.logger.info(f"Validation split: ")
+            self.logger.info(f"Average STQ: {avg_stq_val / 9}")
+            self.logger.info(f"Average AQ: {avg_aq_val / 9}")
+            self.logger.info(f"Average SQ: {avg_sq_val / 9}")
+            
+            self.logger.info(f"Average STQ: {avg_stq / 21}")
+            self.logger.info(f"Average AQ: {avg_aq / 21}")
+            self.logger.info(f"Average SQ: {avg_sq / 21}")
