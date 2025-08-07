@@ -86,32 +86,42 @@ class Evaluator:
             avg_stq = 0
             avg_aq = 0
             avg_sq = 0
+            
+            num_vids = 0
+            num_train_vids = 0
+            num_val_vids = 0
             for vid, res in dataset_result.items():
                 self.logger.info(f"Video: {vid}")
                 self.logger.info(f"Scores: {res}")
-                avg_stq += res[-1]["STQ"]
-                avg_aq += res[-1]["AQ"]
-                avg_sq += res[-1]["SQ"]
+                avg_stq += res["STQ"]
+                avg_aq += res["AQ"]
+                avg_sq += res["SQ"]
+                num_vids += 1
 
                 if vid in TRAIN_IDS:
-                    avg_stq_training += res[-1]["STQ"]
-                    avg_aq_training += res[-1]["AQ"]
-                    avg_sq_training += res[-1]["SQ"]
+                    avg_stq_training += res["STQ"]
+                    avg_aq_training += res["AQ"]
+                    avg_sq_training += res["SQ"]
+                    num_train_vids += 1
                 else:
-                    avg_stq_val += res[-1]["STQ"]
-                    avg_aq_val += res[-1]["AQ"]
-                    avg_sq_val += res[-1]["SQ"]
+                    avg_stq_val += res["STQ"]
+                    avg_aq_val += res["AQ"]
+                    avg_sq_val += res["SQ"]
+                    num_val_vids += 1
             
-            self.logger.info(f"Training split: ")
-            self.logger.info(f"Average STQ: {avg_stq_training / 12}")
-            self.logger.info(f"Average AQ: {avg_aq_training / 12}")
-            self.logger.info(f"Average SQ: {avg_sq_training / 12}")
+            if num_train_vids > 0:
+                self.logger.info(f"Training split: ")
+                self.logger.info(f"Average STQ: {avg_stq_training / num_train_vids}")
+                self.logger.info(f"Average AQ: {avg_aq_training / num_train_vids}")
+                self.logger.info(f"Average SQ: {avg_sq_training / num_train_vids}")
 
-            self.logger.info(f"Validation split: ")
-            self.logger.info(f"Average STQ: {avg_stq_val / 9}")
-            self.logger.info(f"Average AQ: {avg_aq_val / 9}")
-            self.logger.info(f"Average SQ: {avg_sq_val / 9}")
+            if num_val_vids > 0:
+                self.logger.info(f"Validation split: ")
+                self.logger.info(f"Average STQ: {avg_stq_val / num_val_vids}")
+                self.logger.info(f"Average AQ: {avg_aq_val / num_val_vids}")
+                self.logger.info(f"Average SQ: {avg_sq_val / num_val_vids}")
             
-            self.logger.info(f"Average STQ: {avg_stq / 21}")
-            self.logger.info(f"Average AQ: {avg_aq / 21}")
-            self.logger.info(f"Average SQ: {avg_sq / 21}")
+            self.logger.info(f"All videos: ")
+            self.logger.info(f"Average STQ: {avg_stq / num_vids}")
+            self.logger.info(f"Average AQ: {avg_aq / num_vids}")
+            self.logger.info(f"Average SQ: {avg_sq / num_vids}")
