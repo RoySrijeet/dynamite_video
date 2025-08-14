@@ -87,8 +87,6 @@ class SequenceManager:
         self.num_clicks_per_frame = np.zeros((self.T), dtype=np.uint16)
         # time stamp of the latest click on each frame
         self.max_timestamps = np.zeros((self.T), dtype=np.uint16)
-        # first click at timestamp 1
-        self.t = 1
         # foreground clicks sampled on each target in each frame from the ground truth mask
         self.gt_fg_coords_list = [[] for _ in range(self.T)]
         # background clicks sampled on each frame from the ground truth mask
@@ -238,59 +236,51 @@ class SequenceManager:
         clip_fg_coords_list, clip_bg_coords_list = [], []
         clip_num_clicks_per_target = np.zeros((len(indices), len(clip_target_ids)), dtype=np.uint16)
         clip_max_timestamps = [0 for _ in indices]
-        t = self.t + 1
+        t = 1
         
-        for fr_idx, fr_targets in frames_to_sample.items():
-            local_fr_idx = indices.index(fr_idx)
+        for global_fr_idx, fr_targets in frames_to_sample.items():
+            local_fr_idx = indices.index(global_fr_idx)
             
             # already sampled g.t. clicks - update the indices to clip-level values
-            for fg_click in self.gt_fg_coords_list[fr_idx]:
-                clk_y, clk_x, clk_i, clk_f, clk_t = fg_click
-                local_tgt_id = clip_orig_to_serial_id[clk_i]
-                clip_fg_coords_list.append([clk_y, clk_x, local_tgt_id, local_fr_idx, clk_t])
+            for fg_click in self.gt_fg_coords_list[global_fr_idx]:
+                local_tgt_id = clip_orig_to_serial_id[fg_click[2]]
+                clip_fg_coords_list.append([fg_click[0], fg_click[1], local_tgt_id, local_fr_idx, t])
                 clip_num_clicks_per_target[local_fr_idx][local_tgt_id-1] += 1
-                clip_max_timestamps[local_fr_idx] += 1
-            for bg_click in self.gt_bg_coords_list[fr_idx]:
-                clk_y, clk_x, clk_i, clk_f, clk_t = bg_click
-                clip_bg_coords_list.append([clk_y, clk_x, clk_i, local_fr_idx, clk_t])
-                clip_max_timestamps[local_fr_idx] += 1
+                t += 1
+                clip_max_timestamps[local_fr_idx] = t
+            for bg_click in self.gt_bg_coords_list[global_fr_idx]:
+                clip_bg_coords_list.append([bg_click[0], bg_click[1], bg_click[2], local_fr_idx, t])
+                t += 1
+                clip_max_timestamps[local_fr_idx] = t
             
             # sample a click on the g.t. mask of the new target
-            for tgt_id in fr_targets["new"]:
+            for global_tgt_id in fr_targets["new"]:
+                local_tgt_id = clip_orig_to_serial_id[global_tgt_id]
                 # get target center coordinates
-                center_coords = get_center_coords((self.gt_masks[fr_idx] == tgt_id).astype(np.uint8) * self.not_clicked_map[fr_idx])
-                # center_coords = get_random_coords((self.gt_masks[fr_idx] == tgt_id).astype(np.uint8) * self.not_clicked_map[fr_idx], 1)[0]
+                center_coords = get_center_coords((self.gt_masks[global_fr_idx] == global_tgt_id).astype(np.uint8) * self.not_clicked_map[global_fr_idx])
                 # record the click as [y,x,i,f,t]
-                local_tgt_id = clip_orig_to_serial_id[tgt_id]
-                clip_fg_coords_list.append([center_coords[0], center_coords[1], local_tgt_id, local_fr_idx, self.t])
+                clip_fg_coords_list.append([center_coords[0], center_coords[1], local_tgt_id, local_fr_idx, t])
                 clip_num_clicks_per_target[local_fr_idx][local_tgt_id-1] += 1
-                clip_max_timestamps[local_fr_idx] += 1
-                self.record_gt_click(fr_idx, tgt_id, center_coords)
+                self.record_gt_click(global_fr_idx, global_tgt_id, center_coords, t)
+                t += 1
+                clip_max_timestamps[local_fr_idx] = t
             
             # targets in overlapping frames
             if fr_targets["overlap"]:
-                overlapping_masks = self.pred_logits[fr_idx]
-                for tgt_id in fr_targets["overlap"]:
-                    tgt_msk = overlapping_masks[tgt_id]
-                    center_coords = get_center_coords(tgt_msk)
-                    local_tgt_id = clip_orig_to_serial_id[tgt_id]
+                overlapping_masks = self.pred_logits[global_fr_idx]
+                for global_tgt_id in fr_targets["overlap"]:
+                    local_tgt_id = clip_orig_to_serial_id[global_tgt_id]
+                    # get target center coordinates
+                    center_coords = get_center_coords(overlapping_masks[global_tgt_id])
+                    # record the click as [y,x,i,f,t]
                     clip_fg_coords_list.append([center_coords[0], center_coords[1], local_tgt_id, local_fr_idx, t])
                     clip_num_clicks_per_target[local_fr_idx][local_tgt_id-1] += 1
-                    clip_max_timestamps[local_fr_idx] += 1
-                    self.overlap_coords_list[fr_idx].append([center_coords[0], center_coords[1], tgt_id, fr_idx, t])
+                    self.overlap_coords_list[global_fr_idx].append([center_coords[0], center_coords[1], global_tgt_id, global_fr_idx, t])
                     t += 1
-
-                    # random_coords = get_random_coords(tgt_msk, 5)
-                    # for coords in random_coords:
-                    #     clip_fg_coords_list.append([coords[0], coords[1], local_tgt_id, local_fr_idx, t])
-                    #     clip_num_clicks_per_target[local_fr_idx][local_tgt_id-1] += 1
-                    #     clip_max_timestamps[local_fr_idx] += 1
-                    #     self.overlap_coords_list[fr_idx].append([coords[0], coords[1], tgt_id, fr_idx, t])
-                    #     t += 1
-
+                    clip_max_timestamps[local_fr_idx] = t
                 
                 if self.save_vis:
-                    self.save_overlapping_frame_w_clicks(fr_idx, clip_idx)
+                    self.save_overlapping_frame_w_clicks(global_fr_idx, clip_idx)
                 
         clip_fg_coords_list = sorted(clip_fg_coords_list, key=lambda x:x[2])
         inputs = {
@@ -384,7 +374,7 @@ class SequenceManager:
         return indices, last_clip
     
 
-    def record_gt_click(self, frame_idx: int, tgt_id: int, coords: List[int]) -> None:
+    def record_gt_click(self, frame_idx: int, tgt_id: int, coords: List[int], timestamp: int) -> None:
         """
         Record a click in global buffers
 
@@ -394,14 +384,13 @@ class SequenceManager:
             coords: list(int), the click location
         """
         if tgt_id == self.bg_id:
-            self.gt_bg_coords_list[frame_idx].append(([coords[0], coords[1], -1, frame_idx, self.t]))
+            self.gt_bg_coords_list[frame_idx].append(([coords[0], coords[1], -1, frame_idx, timestamp]))
         else:
-            self.gt_fg_coords_list[frame_idx].append([coords[0], coords[1], tgt_id, frame_idx, self.t])
+            self.gt_fg_coords_list[frame_idx].append([coords[0], coords[1], tgt_id, frame_idx, timestamp])
             self.num_clicks_per_target[frame_idx][tgt_id-1] += 1
         
         self.num_clicks_per_frame[frame_idx] += 1
-        self.max_timestamps[frame_idx] = self.t
-        self.t+=1
+        self.max_timestamps[frame_idx] = timestamp
 
         self.update_not_clicked_map(frame_idx, coords)
         
