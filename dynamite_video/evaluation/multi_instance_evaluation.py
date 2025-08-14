@@ -86,7 +86,7 @@ def evaluate(model: nn.Module,
                 ### PROPAGATION ###
                 propagation_start_time = time.perf_counter()
                 for clip_idx, indices in enumerate(tqdm(clip_indices, leave=False, desc="Clip")):
-                    
+
                     # prepare clip input to the model
                     inputs = manager.extract_clip(indices, clip_idx)
                     # model forward pass
@@ -192,14 +192,14 @@ def find_refinement_target(
         * iou_threshold: float, IoU threshold when `refine_object_selection` is "threshold"
     """
     sq_per_target = target_level_scores["sq_per_target"]
-    sq_per_frame_per_target = target_level_scores["sq_per_frame_per_target"]
+    sq_per_frame_per_target = np.asarray(target_level_scores["sq_per_frame_per_target"])
 
     if refine_object_selection=="worst":
         # minimum sq score obtained by a target
-        min_tgt_sq = np.min(sq_per_target[1:])
+        min_tgt_sq = np.min(sq_per_target)
         # the target object with the worst sq score
-        worst_target = np.argmin(sq_per_target[1:]) + 1
-        refine_target = [worst_target, min_tgt_sq]
+        worst_target = np.argmin(sq_per_target)
+        refine_target = [worst_target + 1, min_tgt_sq]
 
         # frame where this target has lowest IoU
         min_fr_sq = np.min(sq_per_frame_per_target[:, worst_target])

@@ -135,7 +135,7 @@ class STQuality(object):
     unions = intersections + fps + fns
     ious = (intersections.astype(np.double) / np.maximum(unions, 1e-15).astype(np.double))
     ious[np.where(unions==0)] = 2.
-    self._ious.append(ious[1:])
+    self._ious.append(ious[1:])   # only target objects, excluding BG
     
     # accumulate the confusion matrix scores (area of intersection) across frames
     if self._iou_confusion_matrix is not None:
@@ -238,6 +238,6 @@ class STQuality(object):
       'STQ': float(st_quality),
       'AQ': float(aq_mean),
       'SQ': float(iou_mean),
-      "sq_per_target": ious_per_tgt[1:],
-      "sq_per_frame_per_target": self._ious,
+      "sq_per_target": ious_per_tgt[1:],  # only target objects, excluding BG
+      "sq_per_frame_per_target": self._ious,  # only target objects, excluding BG
     }

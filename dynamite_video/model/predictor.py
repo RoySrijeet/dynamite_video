@@ -88,17 +88,35 @@ class Predictor:
             num_queries_per_target: count of queries on each target in current frame
         """
         temp_out = []
+        
+        # split the mask prediction per target object, based on how many queries were
+        # responsible to make prediction on that object
         splited_masks = torch.split(mask_pred, num_queries_per_target, dim=0)
         for m in splited_masks:
             if len(m) >0:
+                # if there were multiple queries, take their
+                # maximum response in each spatial position
                 temp_out.append(torch.max(m, dim=0).values)
 
         mask_logits = torch.stack(temp_out)       # (N+1)xHxW
+
+        # for each spatial position, get the channel number 
+        # (== target label) where the query response is maximum
         mask_pred = torch.argmax(mask_logits,0)
-        
+
+        # get mask probabilities from raw prediction logits
+        mask_logits = mask_logits.sigmoid()
+        # for each spatial position, find the maximum probability score across all queries
+        mask_proba = torch.gather(mask_logits, 0, mask_pred.unsqueeze(0)).squeeze(0)
+        # for each spatial position, find which target object that maximum probability belongs to
+        one_hot = torch.nn.functional.one_hot(mask_pred, num_classes=len(mask_logits))
+        # only keep foreground targets
+        one_hot_instances = one_hot[..., :num_targets]
+        mask_proba = one_hot_instances.permute(2, 0, 1) * mask_proba
+
         m = []
         for obj_id in range(num_targets):
             m.append((mask_pred == obj_id).float())
         mask_pred = torch.stack(m).to(torch.uint8)
      
-        return mask_pred, mask_logits[:-1].sigmoid()  # discard bg
+        return mask_pred, mask_proba

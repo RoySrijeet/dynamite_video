@@ -124,6 +124,18 @@ class SequenceManager:
         self.prev_clip_output = {}
         self.curr_overlapping_frames = None
         self.refine_frame = None
+
+        # category labels
+        self.category_labels = {}
+        for orig_id, serial_id in self.orig_to_serial_ids.items():
+            tgt_cls = orig_id // dataset_meta["max_instances_per_category"]
+            label = dataset_meta["category_labels"][tgt_cls]
+            inst_id = orig_id % dataset_meta["max_instances_per_category"]
+            if inst_id != 0:
+                label = label + "_" + str(inst_id)
+            self.category_labels[serial_id] = label
+        if self.save_vis:
+            save_color_palette(self.category_labels, self.path_to_visualization)
         
 
     def compute_tfm_sizes(self, tfms: Mapping) -> Tuple[int, int]:
@@ -561,6 +573,8 @@ class SequenceManager:
         """
         gt_instance_mask = np.asarray(self.gt_masks[frame_idx] == tgt_id, dtype=np.bool_)
         pred_instance_mask = np.asarray(self.pred_masks[frame_idx] == tgt_id, dtype=np.bool_)
+        np.save("/home/roy/REPOS/dynamite_video/debug/important/refinement_target_selection/gt_instance_mask.npy", gt_instance_mask)
+        np.save("/home/roy/REPOS/dynamite_video/debug/important/refinement_target_selection/pred_instance_mask.npy", pred_instance_mask)
 
         # false negative map - g.t. foreground missed by the prediction
         fn_mask = np.logical_and(gt_instance_mask, np.logical_not(pred_instance_mask))
