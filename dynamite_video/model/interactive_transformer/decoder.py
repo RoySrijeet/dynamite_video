@@ -2,7 +2,7 @@ import torch
 import einops
 from torch import nn, Tensor
 from .utils import SelfAttentionLayer, CrossAttentionLayer, FFNLayer
-from .position_encoding import PositionEmbeddingSine
+from .position_encoding import PositionalEncoding
 
 class Decoder(nn.Module):
 
@@ -37,7 +37,7 @@ class Decoder(nn.Module):
             )
         # positional encoding for mask features
         N_steps = self.hidden_dim // 2
-        self.pe_mask_features = PositionEmbeddingSine(N_steps, normalize=True)
+        self.pe_mask_features = PositionalEncoding(num_pos_feats=N_steps, encoding_dims="spatial")
     
     def forward(self, x):
         mask_features, output, query_embed = x

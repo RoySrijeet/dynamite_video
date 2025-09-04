@@ -66,7 +66,7 @@ class SetFinalCriterion(nn.Module):
 
         # Accumulate mask for each object (as there might be multiple clicks per object) and background
         new_outputs = []
-        for _, mask_pred in enumerate(outputs['pred_masks']):
+        for mask_pred in outputs['pred_masks']:
             H,W = mask_pred.shape[1:]
             temp_out = []
             splited_masks = torch.split(mask_pred, num_queries_per_object, dim=0)
@@ -157,7 +157,8 @@ class SetFinalCriterion(nn.Module):
         for loss in self.losses:
             losses.update(self.get_loss(loss, outputs, targets, num_masks, num_queries_per_object))
 
-        # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
+        # In case of auxiliary losses, we repeat this process with 
+        # the output of each intermediate layer (viz., pre-encoder and all the encoder layers)
         if "aux_outputs" in outputs:
             for i, aux_outputs in enumerate(outputs["aux_outputs"]):
                 for loss in self.losses:

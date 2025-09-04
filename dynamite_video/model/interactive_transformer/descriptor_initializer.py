@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -39,9 +40,9 @@ class AvgClicksPoolingInitializer(nn.Module):
     def __init__(self, hidden_dim: int):
         super().__init__()
         self.hidden_dim = hidden_dim
+        
         # learnable query for each target
         self.register_parameter("no_click_query", nn.Parameter(torch.zeros(1, hidden_dim), requires_grad=True))
-        
         nn.init.xavier_uniform_(self.no_click_query)
         
     
@@ -54,10 +55,8 @@ class AvgClicksPoolingInitializer(nn.Module):
             norms: Tuple
     ) -> Tensor:
         """
-        For the given list of sampled clicks, extract queries from image features
-
-        Queries belonging to the same frame are grouped together. In each frame, each target
-        must have at least one query (corresponding to one click).
+        For the given list of sampled clicks, extract queries from image features. Clicks
+        follow the format [y,x, target id, frame index, click timestamp]
 
         Args:
             features: multi-scale feature maps of the frames in the clip. In each scale, 
@@ -72,26 +71,26 @@ class AvgClicksPoolingInitializer(nn.Module):
         """
         norm_h, norm_w, norm_t = norms
         
-        # number of feature scales
+        # number of scales in multi-scale features
         feature_levels = len(features)
         device = features[0][0].device
         T,_,h,w = features[-1].shape
-        N = len(num_clicks_per_target[0]) + 1 # add bg
+        N = len(num_clicks_per_target[0])   # num of target objects
         H = float(h*8)
         W = float(w*8)
         
         descriptors = [[] for _ in range(T)]
         normalized_clicks = [[] for _ in range(T)]
-        num_queries_per_target = [0 for _ in range(N)]
+        num_queries_per_target = np.zeros(N+1, dtype=int) # including bg
 
-        # obtain queries one click at a time, across all frames
+        # obtain descriptor for the clicks, one click at a time, across all frames
         for fg_coords in batched_fg_coords_list:
             y,x,obj_id,fr_idx,t = fg_coords
 
             for fr, desc, clks in zip(range(T), descriptors, normalized_clicks):
                 if fr==fr_idx:
                     # normalize the click
-                    clks.append(torch.tensor([y/norm_h, x/norm_w, obj_id, fr/T, t/norm_t]))
+                    clks.append(torch.tensor([y/norm_h, x/norm_w, obj_id/N, fr/T, t/norm_t]))
                     num_queries_per_target[obj_id-1] += 1
 
                     # extract query descriptor
@@ -118,7 +117,7 @@ class AvgClicksPoolingInitializer(nn.Module):
                     desc.extend(torch.split(avg_click_query, 1, dim=1))
                 else:
                     desc.append(repeat(self.no_click_query, "1 C -> 1 1 C"))
-                    clks.append(torch.tensor([y/norm_h, x/norm_w, obj_id, fr/T, t/norm_t]))
+                    clks.append(torch.tensor([y/norm_h, x/norm_w, obj_id/N, fr/T, t/norm_t]))
         
         # background queries
         for bg_coords in batched_bg_coords_list:
@@ -163,7 +162,7 @@ class AvgClicksPoolingInitializer(nn.Module):
         normalized_clicks = [torch.stack(clks).unsqueeze(0) for clks in normalized_clicks]
         normalized_clicks = torch.cat(normalized_clicks, dim=0).to(device)
         
-        return descriptors, normalized_clicks, num_queries_per_target
+        return descriptors, normalized_clicks, num_queries_per_target.tolist()
 
     
     def get_features_descriptors(self, fmap, point_coords_per_image):

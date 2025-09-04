@@ -26,8 +26,6 @@ class DynamiteModel(nn.Module):
         size_divisibility: int,
         pixel_mean: Tuple[float],
         pixel_std: Tuple[float],
-        # inference
-        iterative_evaluation: bool
     ):
         """
         Args:
@@ -50,9 +48,6 @@ class DynamiteModel(nn.Module):
         self.size_divisibility = size_divisibility
         self.register_buffer("pixel_mean", torch.Tensor(pixel_mean).view(-1, 1, 1), False)
         self.register_buffer("pixel_std", torch.Tensor(pixel_std).view(-1, 1, 1), False)
-
-        # iterative
-        self.iterative_evaluation = iterative_evaluation
 
 
     @classmethod
@@ -80,6 +75,8 @@ class DynamiteModel(nn.Module):
         )
 
         if deep_supervision:
+            # include pre-encoder and intermediate encoder layer predictions 
+            # (all encoder layers, except the last) in auxilliary loss calculation
             enc_layers = cfg.MODEL.MASK_FORMER.ENC_LAYERS
             aux_weight_dict = {}
             for i in range(enc_layers - 1):
@@ -95,9 +92,6 @@ class DynamiteModel(nn.Module):
             "size_divisibility": cfg.MODEL.MASK_FORMER.SIZE_DIVISIBILITY,
             "pixel_mean": cfg.MODEL.PIXEL_MEAN,
             "pixel_std": cfg.MODEL.PIXEL_STD,
-
-            #iterative
-            "iterative_evaluation": cfg.ITERATIVE.TEST.INTERACTIVE_EVALAUTION,
         }
         
     

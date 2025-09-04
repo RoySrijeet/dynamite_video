@@ -91,6 +91,8 @@ class DynamiteHead(nn.Module):
         """
 
         # multi-scale features
+        # mask_features are 1/4th of the input spatial resolution
+        # multi_scale_features contain 1/8, 1/16, 1/32 scales
         mask_features, _, multi_scale_features = self.pixel_decoder.forward_features(features)
 
         # forward to interactive transformer

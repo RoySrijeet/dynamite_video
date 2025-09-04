@@ -31,19 +31,16 @@ def seed_rngs(seed: int) -> None:
     torch.cuda.manual_seed_all(str(seed))
 
 
-def evaluation_pipeline(args):
+def evaluation_pipeline(args, cfg):
 
     # setup experiment configuration
-    cfg = load_config(args)
     default_setup(cfg, args)
 
     evaluator = Evaluator(cfg)
     evaluator.interactive_evaluation()
 
 
-def training_pipeline(args):
-    
-    cfg = load_config(args)
+def training_pipeline(args, cfg):
     
     seed_rngs(cfg.SEED)
 
@@ -67,19 +64,19 @@ def training_pipeline(args):
 
 def main(args):
 
-    if args.eval_only:
-        evaluation_pipeline(args)
-        return
-    
     # setup experiment configuration
     cfg = load_config(args)
+    
+    if args.eval_only:
+        evaluation_pipeline(args, cfg)
+        return
     
     # W&B sweep
     if cfg.WANDB.SWEEP and comm.get_rank() == 0:
         wandb_sweep(args, cfg, launch_fn=training_pipeline)
     
     # just a regular run
-    training_pipeline(args)
+    training_pipeline(args, cfg)
 
 
 if __name__=="__main__":

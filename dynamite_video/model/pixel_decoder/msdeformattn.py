@@ -15,7 +15,7 @@ from detectron2.config import configurable
 from detectron2.layers import Conv2d, ShapeSpec, get_norm
 from detectron2.modeling import SEM_SEG_HEADS_REGISTRY
 
-from ..interactive_transformer.position_encoding import PositionEmbeddingSine
+from ..interactive_transformer.position_encoding import PositionalEncoding
 from ..interactive_transformer.transformer import _get_clones, _get_activation_fn
 from .ops.modules import MSDeformAttn
 
@@ -241,7 +241,7 @@ class MSDeformAttnPixelDecoder(nn.Module):
             num_feature_levels=self.transformer_num_feature_levels,
         )
         N_steps = conv_dim // 2
-        self.pe_layer = PositionEmbeddingSine(N_steps, normalize=True)
+        self.pe_layer = PositionalEncoding(num_pos_feats=N_steps, encoding_dims="spatial")
 
         self.mask_dim = mask_dim
         # use 1x1 conv instead

@@ -14,7 +14,7 @@ from detectron2.config import configurable
 from detectron2.layers import Conv2d, DeformConv, ShapeSpec, get_norm
 from detectron2.modeling import SEM_SEG_HEADS_REGISTRY
 
-from ..interactive_transformer.position_encoding import PositionEmbeddingSine
+from ..interactive_transformer.position_encoding import PositionalEncoding
 from ..interactive_transformer.transformer import TransformerEncoder, TransformerEncoderLayer, _get_clones, _get_activation_fn
 
 
@@ -249,7 +249,7 @@ class TransformerEncoderPixelDecoder(BasePixelDecoder):
             normalize_before=transformer_pre_norm,
         )
         N_steps = conv_dim // 2
-        self.pe_layer = PositionEmbeddingSine(N_steps, normalize=True)
+        self.pe_layer = PositionalEncoding(num_pos_feats=N_steps, encoding_dims="spatial")
 
         # update layer
         use_bias = norm == ""
