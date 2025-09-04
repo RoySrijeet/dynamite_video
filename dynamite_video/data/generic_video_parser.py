@@ -203,45 +203,34 @@ class GenericVideoSequence(object):
 
     def prepare_masks(self):
         """
-        Decode RLE masks to numpy arrays of segmentation maps
+        Decode RLE masks to numpy arrays of binary segmentation masks
 
         Returns:
-            binary_masks: binary segmentation masks of the objects in the frames of the video
-                as a list of lists of `np.ndarray`
-            num_objects_per_frame: record of #objects present in each frame separately, as there 
-                may be objects with empty masks which do not count
-            object_ids: IDs of objects in the clip, arranged in the same order as the binary masks
+            binary_masks: binary segmentation masks of the target objects in the frames of the video
+                as a T,N,H,W `np.ndarray`
+            ignore_masks: ignore masks, if present, as a T,H,W `np.ndarray`
         """
-
-        # binary masks of each frame in the clip is made to have same no. 
-        # of channels as the total number of objects in the clip. So, 
-        # if an object is not present in a frame, add an empty mask
-        binary_masks = []
-        
-        # IDs of objects present in each frame
-        objects_per_frame = []
-
         zero_mask = np.zeros(self.image_dims).astype('uint8')
         
-        for fr_idx, fr_masks in enumerate(self.segmentations):
-            objects_per_frame.append(sorted(fr_masks.keys()))
-            
+        # binary segmentation masks
+        binary_masks = []
+        for fr_masks in self.segmentations:
             binary_masks_fr = []
-            # add one channel for each object present in the clip
+            
+            # add one channel for each target object present in the clip
             for obj_id in self.object_ids:
-                if obj_id in objects_per_frame[-1]:
+                if obj_id in fr_masks:
                     # decode RLE
                     rle = fr_masks[obj_id]
                     img_dims = None if isinstance(rle, dict) else self.image_dims
                     _m = decode_mask(rle, img_dims)
-                    # record
                     binary_masks_fr.append(_m)
                 else:
+                    # record an empty mask if target object is not present
                     binary_masks_fr.append(zero_mask)
 
-            binary_masks.append(binary_masks_fr)
-        
-        binary_masks = np.stack([np.stack(fr_masks) for fr_masks in binary_masks])      # [T, N, H, W]
+            binary_masks.append(np.stack(binary_masks_fr))  # N,H,W
+        binary_masks = np.stack(binary_masks)               # T,N,H,W
         
         # ignore masks
         ignore_masks = None
@@ -249,7 +238,7 @@ class GenericVideoSequence(object):
             ignore_masks = [decode_mask(ig_msk, img_dims) for ig_msk in self.ignore_masks]
             ignore_masks = np.stack(ignore_masks)
         
-        return binary_masks, objects_per_frame, ignore_masks
+        return binary_masks, ignore_masks
 
     
     def prepare_eval_masks(self, orig_to_serial_id, fill_value=0):

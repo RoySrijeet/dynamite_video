@@ -33,20 +33,20 @@ class TrainingMapper:
                 `video`: source video cast as GenericVideoSequence object
 
         """
-        # source video
+        # source video, a `GenericVideoSequence`
         video = sample['video']
-        clip_id = sample["vid_id"]
+
         # get absolute frame indices in the video that will form a clip
         frame_indices = [sample["ref_frame"]] + sample["other_frames"]
 
-        # extract clip from the video
-        clip = video.extract_subsequence(frame_indices, new_id=clip_id)
+        # extract clip from the video as a `GenericVideoSequence`
+        clip = video.extract_subsequence(frame_indices, new_id=sample["vid_id"])
 
         # load images [T,H,W,3]
         images = clip.load_images()
         
         # load binary instance masks [T,N,H,W]; NOTE: ignore masks are not part of the binary masks
-        binary_masks, targets_per_frame, ignore_masks = clip.prepare_masks()
+        binary_masks, ignore_masks = clip.prepare_masks()
         
         # color augmentations
         if self.cfg.INPUT.AUGMENTATION.COLOR_AUG:
@@ -75,16 +75,16 @@ class TrainingMapper:
         
         # foreground masks
         T, _, H, W = binary_masks.shape
-        foreground_masks = np.zeros((T,H,W), dtype=np.uint8)
+        panoptic_masks = np.zeros((T,H,W), dtype=np.uint8)      # T,H,W
         for fr_idx in range(T):
             for inst_id, inst_mask in enumerate(binary_masks[fr_idx]):
-                foreground_masks[fr_idx][inst_mask==1] = inst_id+1
+                panoptic_masks[fr_idx][inst_mask==1] = inst_id+1
         
-        # NOTE: 0-labelled region in foreground masks at this point corresponds to 
-        # the ignore mask area, the padding area, and any potential background
+        # NOTE: at this point, 0-labelled regions in foreground masks correspond
+        # to the ignore mask area, the padding area, and any potential background
         
-        # consider all parts of the image withput fg label as bg
-        bg_masks = (foreground_masks==0) & ~padding_mask
+        # consider all parts of the image without fg label as bg
+        bg_masks = (panoptic_masks==0) & ~padding_mask          # T,H,W
 
         
         # sample clicks
@@ -100,7 +100,7 @@ class TrainingMapper:
                                                 start_t=1,
                                             )
         if not all(np.sum(num_clicks_per_target, axis=0)):
-            raise "One or more targets did not receive a click!"
+            raise "One or more targets in this clip did not receive a click!"
 
         meta_info = {
             "orig_dims": video.image_dims,
@@ -133,7 +133,7 @@ class TrainingMapper:
             "bg_masks": torch.as_tensor(bg_masks, dtype=torch.uint8),
             
             # T,H,W semantic map with serialized target IDs. Background gets labeled 0
-            "panoptic_masks": torch.as_tensor(foreground_masks, dtype=torch.uint8),
+            "panoptic_masks": torch.as_tensor(panoptic_masks, dtype=torch.uint8),
 
             # T,N array recording num clicks on each target in each frame
             "num_clicks_per_object": num_clicks_per_target,
