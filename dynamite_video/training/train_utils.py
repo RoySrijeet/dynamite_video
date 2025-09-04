@@ -1,11 +1,10 @@
-import os
 import cv2
 import numpy as np
 import random
 import torch
 
-from collections import defaultdict
 from functools import lru_cache
+
 
 def compute_iou(
     gt_masks,
@@ -35,7 +34,7 @@ def compute_iou(
                         intersections.float() / unions.float()
                 )
     avg_iou = torch.mean(iou, 0)
-    max_objects_to_refine = min(len(avg_iou), max_objects_to_refine)
+    max_objects_to_refine = np.random.randint(1, min(len(avg_iou), max_objects_to_refine))
     
     if strategy == "worst":
         values, indices = torch.topk(avg_iou, k=max_objects_to_refine, largest=False)
@@ -87,7 +86,6 @@ def get_next_clicks(
     """
 
     assert max_objects_to_refine >= 1
-    # max_objects_to_refine = np.random.randint(1, max_objects_to_refine+1)
     
     clip_gt_masks = data["binary_masks"].detach().cpu()
     clip_pred_masks = torch.stack(pred_output).detach().cpu()
