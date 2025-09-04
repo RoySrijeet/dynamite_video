@@ -38,7 +38,7 @@ def get_expt_config(expt_dir: str):
 
 def get_base_config():
     """
-    Path to base configuration file
+    Path to base configuration file (typically, `$DYNAMITE_WORKSPACE_DIR/configs/base.yaml`)
     """
     return os.path.join(Paths.to_configs(), "base.yaml")
 
@@ -68,7 +68,7 @@ def load_config(args):
         expt_config: path to the directory containing experiment .yaml file
 
     """
-    # d2 base config
+    # detectron2 base config
     cfg = get_cfg()
     # for poly lr schedule
     add_deeplab_config(cfg)
@@ -96,7 +96,7 @@ def load_config(args):
             cfg.MODEL.WEIGHTS = os.path.join(args.expt_dir, cfg.MODEL.WEIGHTS)
 
     else:
-        # current experiment config - overwrites on base configuration
+        # current experiment config - overwrites properties in base configuration
         cfg.merge_from_file(get_expt_config(args.expt_dir))
     
     # outputs are saved in experiment directory
@@ -154,7 +154,7 @@ def get_cl_arguments():
         "--eval-config", 
         type=str,
         default=None,
-        help="custom evaluation config"
+        help="path to custom evaluation configuration (.yaml) file"
     )
     
     parser.add_argument(           # eval
@@ -185,21 +185,21 @@ def get_cl_arguments():
         "--machine-rank", 
         type=int, 
         default=0, 
-        help="Unique rank of this machine (machine==node)"
+        help="Unique rank of this machine (or node)"
     )
 
     parser.add_argument(
         "--num-gpus", 
         type=int, 
         default=1, 
-        help="Number of GPUs *per machine* (machine==node)"
+        help="Number of GPUs *per machine* (or node)"
     )
     
     parser.add_argument(
         "--num-machines", 
         type=int, 
         default=1, 
-        help="Total number of machines (machine==node)"
+        help="Total number of machines (or nodes)"
     )
 
     parser.add_argument(
