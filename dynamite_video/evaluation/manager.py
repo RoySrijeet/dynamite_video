@@ -276,13 +276,18 @@ class SequenceManager:
                     clip_fg_coords_list.append([center_coords[0], center_coords[1], local_tgt_id, local_fr_idx, t])
                     clip_num_clicks_per_target[local_fr_idx][local_tgt_id-1] += 1
                     self.overlap_coords_list[global_fr_idx].append([center_coords[0], center_coords[1], global_tgt_id, global_fr_idx, t])
-                    t += 1
                     clip_max_timestamps[local_fr_idx] = t
+                    t += 1
                 
                 if self.save_vis:
                     self.save_overlapping_frame_w_clicks(global_fr_idx, clip_idx)
                 
         clip_fg_coords_list = sorted(clip_fg_coords_list, key=lambda x:x[2])
+        t = 1
+        for fg_click in clip_fg_coords_list:
+            fg_click[-1] = t
+            clip_max_timestamps[fg_click[-2]] = t
+            t += 1
         inputs = {
             "images": torch.as_tensor(self.images[indices], dtype=torch.uint8),
             "num_clicks_per_object": clip_num_clicks_per_target,

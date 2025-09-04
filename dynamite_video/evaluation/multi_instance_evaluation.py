@@ -97,7 +97,7 @@ def evaluate(model: nn.Module,
                 propagation_time += time.perf_counter() - propagation_start_time
 
                 
-                ### EVALUATION METRICS ###
+                ### EVALUATION METRICS ### 
                 logger.info(f"Calculating evaluation metrics...")
                 scores, target_level_scores, compute_time = calculate_score(manager)
                 metric_compute_time += compute_time
