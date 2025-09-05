@@ -41,9 +41,16 @@ class AvgClicksPoolingInitializer(nn.Module):
         super().__init__()
         self.hidden_dim = hidden_dim
         
-        # learnable query for each target
+        # learnable query initialization for each target
         self.register_parameter("no_click_query", nn.Parameter(torch.zeros(1, hidden_dim), requires_grad=True))
         nn.init.xavier_uniform_(self.no_click_query)
+
+        # MLP to project click description to learnable query
+        self.query_proj = nn.Sequential(
+            nn.Linear(self.hidden_dim, self.hidden_dim),
+            nn.ReLU(),
+            nn.Linear(self.hidden_dim, self.hidden_dim)
+        )
         
     
     def forward(
@@ -87,71 +94,142 @@ class AvgClicksPoolingInitializer(nn.Module):
         for fg_coords in batched_fg_coords_list:
             y,x,obj_id,fr_idx,t = fg_coords
 
-            for fr, desc, clks in zip(range(T), descriptors, normalized_clicks):
-                if fr==fr_idx:
-                    # normalize the click
-                    clks.append(torch.tensor([y/norm_h, x/norm_w, obj_id/N, fr/T, t/norm_t]))
-                    num_queries_per_target[obj_id-1] += 1
+            # extract query descriptor
+            clicks = torch.tensor([fg_coords], dtype=torch.float, device=device)
+            clicks = clicks[:,:2]   # [1,2]
+            clicks[:,0]/=H
+            clicks[:,1]/=W
+            # invert (y,x) -> (x,y)
+            clicks = clicks.flip(-1)
+            
+            click_queries = []
+            # extract click features in each scale of multi-res features
+            for i in range(feature_levels):
+                # feature maps at i-th feature scale
+                fmap_scale = features[i]
+                # map of particular frame at i-th feature scale
+                fmap_scale_fr = fmap_scale[fr_idx].unsqueeze(0)
 
-                    # extract query descriptor
-                    clicks = torch.tensor([fg_coords], dtype=torch.float, device=device)
-                    clicks = clicks[:,:2]
-                    clicks[:,0]/=H
-                    clicks[:,1]/=W
-                    # invert (y,x) -> (x,y)
-                    clicks = clicks.flip(-1)
-                    
-                    click_queries = []
-                    # extract click features in each scale of multi-res features
-                    for i in range(feature_levels):
-                        # feature maps at i-th feature scale
-                        fmap_scale = features[i]
-                        # map of particular frame at i-th feature scale
-                        fmap_scale_fr = fmap_scale[fr_idx].unsqueeze(0)
+                nbd_features = self.get_features_descriptors(fmap_scale_fr, clicks.unsqueeze(0))    # 1,1,D
+                click_queries.append(nbd_features)
 
-                        nbd_features = self.get_features_descriptors(fmap_scale_fr, clicks.unsqueeze(0))    # 1,1,D
-                        click_queries.append(nbd_features)
+            # take the average of the features from multiple scales as the click query
+            avg_click_query = torch.mean(torch.stack(click_queries, -1), dim = -1)  # 1,1,D
 
-                    # take the average of the features from multiple scales as the click query
-                    avg_click_query = torch.mean(torch.stack(click_queries, -1), dim = -1)
-                    desc.extend(torch.split(avg_click_query, 1, dim=1))
+            # add query to frames
+            for fr in range(T):
+                if fr == fr_idx:
+                    descriptors[fr].append(avg_click_query)
                 else:
-                    desc.append(repeat(self.no_click_query, "1 C -> 1 1 C"))
-                    clks.append(torch.tensor([y/norm_h, x/norm_w, obj_id/N, fr/T, t/norm_t]))
+                    learnable_query = repeat(self.no_click_query, "1 D -> 1 1 D") + self.query_proj(avg_click_query)
+                    descriptors[fr].append(learnable_query)
+                normalized_clicks[fr].append(torch.tensor([y/norm_h, x/norm_w, obj_id/N, fr/T, t/norm_t]))
+            num_queries_per_target[obj_id-1] += 1
         
         # background queries
         for bg_coords in batched_bg_coords_list:
             y,x,obj_id,fr_idx,t = bg_coords
             assert obj_id == -1
         
-            for fr, desc, clks in zip(range(T), descriptors, normalized_clicks):
-                if fr==fr_idx:
-                    clks.append(torch.tensor([y/norm_h, x/norm_w, obj_id, fr/T, t/norm_t]))
-                    num_queries_per_target[-1] += 1
-        
-                    clicks = torch.tensor([bg_coords], dtype=torch.float, device=device)
-                    # extract and scale spatial coordinates
-                    clicks = clicks[:,:2]
-                    clicks[:,0]/=H
-                    clicks[:,1]/=W
-                    # invert (y,x) -> (x,y)
-                    clicks = clicks.flip(-1)
+            # extract and scale spatial coordinates
+            clicks = torch.tensor([bg_coords], dtype=torch.float, device=device)
+            clicks = clicks[:,:2]
+            clicks[:,0]/=H
+            clicks[:,1]/=W
+            # invert (y,x) -> (x,y)
+            clicks = clicks.flip(-1)
 
-                    fr_bg_queries = []
-                    for i in range(feature_levels):
-                        # maps at i-th feature scale
-                        fmap_scale = features[i]
-                        # map of particular frame at i-th feature scale
-                        fmap_scale_fr = fmap_scale[fr_idx].unsqueeze(0)
+            fr_bg_queries = []
+            for i in range(feature_levels):
+                # maps at i-th feature scale
+                fmap_scale = features[i]
+                # map of particular frame at i-th feature scale
+                fmap_scale_fr = fmap_scale[fr_idx].unsqueeze(0)
 
-                        nbd_features = self.get_features_descriptors(fmap_scale_fr, clicks.unsqueeze(0))
-                        fr_bg_queries.append(nbd_features)
-                    
-                    avg_bg_query = torch.mean(torch.stack(fr_bg_queries, -1), dim = -1)
-                    desc.extend(torch.split(avg_bg_query, 1, dim=1))
+                nbd_features = self.get_features_descriptors(fmap_scale_fr, clicks.unsqueeze(0))
+                fr_bg_queries.append(nbd_features)
+            
+            avg_bg_query = torch.mean(torch.stack(fr_bg_queries, -1), dim = -1)
+            
+            for fr in range(T):
+                if fr == fr_idx:
+                    descriptors[fr].append(avg_bg_query)
                 else:
-                    desc.append(repeat(self.no_click_query, "1 C -> 1 1 C"))
-                    clks.append(torch.tensor([y/norm_h, x/norm_w, obj_id, fr/T, t/norm_t]))
+                    learnable_query = repeat(self.no_click_query, "1 D -> 1 1 D") + self.query_proj(avg_bg_query)
+                    descriptors[fr].append(avg_bg_query)
+                normalized_clicks[fr].append(torch.tensor([y/norm_h, x/norm_w, obj_id, fr/T, t/norm_t]))
+            num_queries_per_target[-1] += 1
+
+        # # obtain descriptor for the clicks, one click at a time, across all frames
+        # for fg_coords in batched_fg_coords_list:
+        #     y,x,obj_id,fr_idx,t = fg_coords
+
+            # for fr, desc, clks in zip(range(T), descriptors, normalized_clicks):
+            #     if fr==fr_idx:
+            #         # normalize the click
+            #         clks.append(torch.tensor([y/norm_h, x/norm_w, obj_id/N, fr/T, t/norm_t]))
+            #         num_queries_per_target[obj_id-1] += 1
+
+            #         # extract query descriptor
+            #         clicks = torch.tensor([fg_coords], dtype=torch.float, device=device)
+            #         clicks = clicks[:,:2]
+            #         clicks[:,0]/=H
+            #         clicks[:,1]/=W
+            #         # invert (y,x) -> (x,y)
+            #         clicks = clicks.flip(-1)
+                    
+            #         click_queries = []
+            #         # extract click features in each scale of multi-res features
+            #         for i in range(feature_levels):
+            #             # feature maps at i-th feature scale
+            #             fmap_scale = features[i]
+            #             # map of particular frame at i-th feature scale
+            #             fmap_scale_fr = fmap_scale[fr_idx].unsqueeze(0)
+
+            #             nbd_features = self.get_features_descriptors(fmap_scale_fr, clicks.unsqueeze(0))    # 1,1,D
+            #             click_queries.append(nbd_features)
+
+            #         # take the average of the features from multiple scales as the click query
+            #         avg_click_query = torch.mean(torch.stack(click_queries, -1), dim = -1)
+            #         desc.extend(torch.split(avg_click_query, 1, dim=1))
+            #     else:
+            #         learnable_query = repeat(self.no_click_query, "1 C -> 1 1 C") + self.query_proj()
+            #         desc.append()
+            #         clks.append(torch.tensor([y/norm_h, x/norm_w, obj_id/N, fr/T, t/norm_t]))
+        
+        # background queries
+        # for bg_coords in batched_bg_coords_list:
+        #     y,x,obj_id,fr_idx,t = bg_coords
+        #     assert obj_id == -1
+        
+        #     for fr, desc, clks in zip(range(T), descriptors, normalized_clicks):
+        #         if fr==fr_idx:
+        #             clks.append(torch.tensor([y/norm_h, x/norm_w, obj_id, fr/T, t/norm_t]))
+        #             num_queries_per_target[-1] += 1
+        
+        #             clicks = torch.tensor([bg_coords], dtype=torch.float, device=device)
+        #             # extract and scale spatial coordinates
+        #             clicks = clicks[:,:2]
+        #             clicks[:,0]/=H
+        #             clicks[:,1]/=W
+        #             # invert (y,x) -> (x,y)
+        #             clicks = clicks.flip(-1)
+
+        #             fr_bg_queries = []
+        #             for i in range(feature_levels):
+        #                 # maps at i-th feature scale
+        #                 fmap_scale = features[i]
+        #                 # map of particular frame at i-th feature scale
+        #                 fmap_scale_fr = fmap_scale[fr_idx].unsqueeze(0)
+
+        #                 nbd_features = self.get_features_descriptors(fmap_scale_fr, clicks.unsqueeze(0))
+        #                 fr_bg_queries.append(nbd_features)
+                    
+        #             avg_bg_query = torch.mean(torch.stack(fr_bg_queries, -1), dim = -1)
+        #             desc.extend(torch.split(avg_bg_query, 1, dim=1))
+        #         else:
+        #             desc.append(repeat(self.no_click_query, "1 C -> 1 1 C"))
+        #             clks.append(torch.tensor([y/norm_h, x/norm_w, obj_id, fr/T, t/norm_t]))
 
         # at this point, in each frame, there is at least one query for 
         # each target present in that frame. Each click query in one frame 
