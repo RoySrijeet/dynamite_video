@@ -126,7 +126,9 @@ def show_points(image, coords, label, marker_size=15):
     elif label==2:
         color = (255,255,0)   # cyan for overlapping/correcting clicks
 
-    for (y, x, _, _, _) in coords:
+    for c in coords:
+        x = c[1]
+        y = c[0]
         cv2.drawMarker(
             image,
             position=(int(x), int(y)),

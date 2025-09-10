@@ -81,7 +81,7 @@ def evaluate(model: nn.Module,
                 logger.info(f"Round {manager.round_num}: \nPropagating...")
 
                 # generate indices of shorter sub-sequences or clips from the whole sequence
-                clip_indices = manager.generate_clip_indices(start=0) #lowest_frame_index) # TODO
+                clip_indices = manager.generate_clip_indices(start=lowest_frame_index)
                 
                 ### PROPAGATION ###
                 propagation_start_time = time.perf_counter()
@@ -127,7 +127,7 @@ def evaluate(model: nn.Module,
                         lowest_frame_index = -1
                     else:
                         # sample a corrective click
-                        refined_tgt_id = manager.get_corrective_click(frame_idx=refine_frame[0], tgt_id=refine_target[0])
+                        refined_tgt_id = manager.get_corrective_click(frame_idx=refine_frame[0], refine_tgt_id=refine_target[0])
                         lowest_frame_index = refine_frame[0]
                         logger.info(f'Sampled a click on target {refined_tgt_id} in frame {lowest_frame_index}')
 
@@ -191,8 +191,8 @@ def find_refinement_target(
         * K: int, value of K when `refine_object_selection` is "topk"
         * iou_threshold: float, IoU threshold when `refine_object_selection` is "threshold"
     """
-    sq_per_target = target_level_scores["sq_per_target"]
-    sq_per_frame_per_target = np.asarray(target_level_scores["sq_per_frame_per_target"])
+    sq_per_target = target_level_scores["sq_per_target"]                                    # N
+    sq_per_frame_per_target = np.asarray(target_level_scores["sq_per_frame_per_target"])    # T,N
 
     if refine_object_selection=="worst":
         # minimum sq score obtained by a target
