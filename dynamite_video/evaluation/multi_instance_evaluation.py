@@ -81,11 +81,12 @@ def evaluate(model: nn.Module,
                 logger.info(f"Round {manager.round_num}: \nPropagating...")
 
                 # generate indices of shorter sub-sequences or clips from the whole sequence
-                clip_indices = manager.generate_clip_indices(start=lowest_frame_index)
+                clip_indices = manager.generate_clip_indices(start=0) #lowest_frame_index)
                 
                 ### PROPAGATION ###
                 propagation_start_time = time.perf_counter()
-                for clip_idx, indices in enumerate(tqdm(clip_indices, leave=False, desc="Clip")):
+                # for clip_idx, indices in enumerate(tqdm(clip_indices, leave=False, desc="Clip")):
+                for clip_idx, indices in enumerate(clip_indices):
 
                     # prepare clip input to the model
                     inputs = manager.extract_clip(indices, clip_idx)

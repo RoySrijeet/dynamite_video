@@ -225,6 +225,10 @@ class SequenceManager:
         """
 
         indices, last_clip = self.get_serial_indices(_indices)
+
+        # ground truth target objects
+        gt_panoptic_masks = self.gt_masks[indices]
+        print(f"Clip {clip_idx}")
         
         # find targets in the clip
         clip_target_ids, frames_to_sample = self.find_targets_in_clip(indices)
@@ -255,6 +259,7 @@ class SequenceManager:
             
             # sample a click on the g.t. mask of the new target
             for orig_id in fr_targets["new"]:
+                print(f"New object appeared {orig_id} in frame {global_fr_idx}!")
                 serial_id = clip_orig_to_serial_id[orig_id]
                 center_coords = get_center_coords((self.gt_masks[global_fr_idx] == orig_id).astype(np.uint8) * self.not_clicked_map[global_fr_idx])
                 clip_fg_coords_list.append([center_coords[0], center_coords[1], serial_id, local_fr_idx, t])
@@ -288,10 +293,12 @@ class SequenceManager:
             "orig_to_serial_id": clip_orig_to_serial_id,
             "serial_to_orig_id": clip_serial_to_orig_id,
             # extras
-            "panoptic_masks": self.gt_masks[indices],
+            "panoptic_masks": gt_panoptic_masks,
             "overlapping_frames": self.curr_overlapping_frames,
             "overlapping_masks": self.pred_masks[self.curr_overlapping_frames] if self.curr_overlapping_frames is not None else None,
         }
+        # debug
+        print(f"G.T. targets: {np.unique(gt_panoptic_masks).tolist()}")
 
         self.curr_clip_input = inputs
         if not last_clip:
@@ -435,7 +442,7 @@ class SequenceManager:
         
         # predicted panoptic maps
         T,N,H,W = binary_pred_masks.shape
-        panoptic_pred_masks = np.full((T,H,W), fill_value=self.bg_id).astype(np.uint8)
+        pred_panoptic_masks = np.full((T,H,W), fill_value=self.bg_id).astype(np.uint8)
         
         for fr_idx, global_fr_idx in enumerate(indices):
             fr_pred_logits = {}
@@ -443,11 +450,13 @@ class SequenceManager:
                 orig_id = self.curr_clip_input["serial_to_orig_id"][tgt_id+1]
                 mask = binary_pred_masks[fr_idx][tgt_id]
                 if mask.any():
-                    panoptic_pred_masks[fr_idx][np.where(mask==1)] = orig_id
+                    pred_panoptic_masks[fr_idx][np.where(mask==1)] = orig_id
                 fr_pred_logits[orig_id] = (pred_logits[fr_idx][tgt_id] > confidence_threshold).numpy().astype(np.uint8)
 
             self.pred_logits[global_fr_idx] = fr_pred_logits
-        self.pred_masks[indices] = panoptic_pred_masks
+        self.pred_masks[indices] = pred_panoptic_masks
+
+        print(f"Pred targets: {np.unique(pred_panoptic_masks).tolist()}")
 
         if self.save_vis:
             self.save_visualization(clip_idx)
@@ -506,37 +515,37 @@ class SequenceManager:
         prev_clip_output_targets = [tgt_id for tgt_id in overlapping_targets if tgt_id!=self.bg_id]
         
         corrections = [sample_locations]
-        # if its a negative click, i.e., gt_tgt_index is different from refine_tgt_id
-        # then sample another click on the gt area of refine_tgt_id, if it exists
-        if gt_tgt_index != refine_tgt_id:
-            if gt_instance_mask.any():
-                center_coords = get_center_coords(gt_instance_mask * self.not_clicked_map[frame_idx])
-                self.record_gt_click(frame_idx, refine_tgt_id, center_coords)
-                corrections.append(center_coords)
-            prev_clip_output_targets.remove(refine_tgt_id)
+        # # if its a negative click, i.e., gt_tgt_index is different from refine_tgt_id
+        # # then sample another click on the gt area of refine_tgt_id, if it exists
+        # if gt_tgt_index != refine_tgt_id:
+        #     if gt_instance_mask.any():
+        #         center_coords = get_center_coords(gt_instance_mask * self.not_clicked_map[frame_idx])
+        #         self.record_gt_click(frame_idx, refine_tgt_id, center_coords)
+        #         corrections.append(center_coords)
+        #     prev_clip_output_targets.remove(refine_tgt_id)
 
-        self.prev_clip_output = {frame_idx: prev_clip_output_targets}
-        self.refine_frame = self.prev_clip_output
+        self.refine_frame = {frame_idx: prev_clip_output_targets}
+        self.prev_clip_output = self.refine_frame
         
-        # if self.save_vis:
-        #     vis_path = os.path.join(self.path_to_visualization, f"round_{str(self.round_num)}/corrections")
-        #     if not os.path.isdir(vis_path):
-        #         os.makedirs(vis_path)
+        if self.save_vis:
+            vis_path = os.path.join(self.path_to_debug_visualization, f"round_{str(self.round_num)}_corrections")
+            if not os.path.isdir(vis_path):
+                os.makedirs(vis_path)
             
-        #     image_bgr = cv2.cvtColor(self.images[frame_idx].transpose(1,2,0), cv2.COLOR_RGB2BGR)
-        #     fr_gt_msk = Image.fromarray(self.gt_masks[frame_idx].astype(np.uint8))
-        #     fr_gt_msk.putpalette(color_map)
-        #     fr_gt_msk = cv2.cvtColor(np.array(fr_gt_msk.convert("RGB")), cv2.COLOR_RGB2BGR)
-        #     overlaid_gt = cv2.addWeighted(image_bgr, 0.5, fr_gt_msk, 0.5, 0)
-        #     show_points(overlaid_gt, corrections, 2)
-        #     cv2.imwrite(os.path.join(vis_path, f"correction_click_gt_fr_{frame_idx}_tgt_{refine_tgt_id}.png"), overlaid_gt)
+            image_bgr = cv2.cvtColor(self.images[frame_idx].transpose(1,2,0), cv2.COLOR_RGB2BGR)
+            fr_gt_msk = Image.fromarray(self.gt_masks[frame_idx].astype(np.uint8))
+            fr_gt_msk.putpalette(color_map)
+            fr_gt_msk = cv2.cvtColor(np.array(fr_gt_msk.convert("RGB")), cv2.COLOR_RGB2BGR)
+            overlaid_gt = cv2.addWeighted(image_bgr, 0.5, fr_gt_msk, 0.5, 0)
+            show_points(overlaid_gt, corrections, 2)
+            cv2.imwrite(os.path.join(vis_path, f"correction_click_gt_fr_{frame_idx}_tgt_{refine_tgt_id}.png"), overlaid_gt)
             
-        #     fr_pred_mask = Image.fromarray(self.pred_masks[frame_idx].astype(np.uint8))
-        #     fr_pred_mask.putpalette(color_map)
-        #     fr_pred_mask = cv2.cvtColor(np.array(fr_pred_mask.convert("RGB")), cv2.COLOR_RGB2BGR)
-        #     overlaid_pred = cv2.addWeighted(image_bgr, 0.5, fr_pred_mask, 0.5, 0)
-        #     show_points(overlaid_pred, corrections, 2)
-        #     cv2.imwrite(os.path.join(vis_path, f"correction_click_pred_fr_{frame_idx}_tgt_{refine_tgt_id}.png"), overlaid_pred)
+            fr_pred_mask = Image.fromarray(self.pred_masks[frame_idx].astype(np.uint8))
+            fr_pred_mask.putpalette(color_map)
+            fr_pred_mask = cv2.cvtColor(np.array(fr_pred_mask.convert("RGB")), cv2.COLOR_RGB2BGR)
+            overlaid_pred = cv2.addWeighted(image_bgr, 0.5, fr_pred_mask, 0.5, 0)
+            show_points(overlaid_pred, corrections, 2)
+            cv2.imwrite(os.path.join(vis_path, f"correction_click_pred_fr_{frame_idx}_tgt_{refine_tgt_id}.png"), overlaid_pred)
         
         return gt_tgt_index
     
