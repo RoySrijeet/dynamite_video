@@ -228,7 +228,7 @@ class SequenceManager:
 
         # ground truth target objects
         gt_panoptic_masks = self.gt_masks[indices]
-        print(f"Clip {clip_idx}")
+        # print(f"Clip {clip_idx}")
         
         # find targets in the clip
         clip_target_ids, frames_to_sample = self.find_targets_in_clip(indices)
@@ -259,7 +259,7 @@ class SequenceManager:
             
             # sample a click on the g.t. mask of the new target
             for orig_id in fr_targets["new"]:
-                print(f"New object appeared {orig_id} in frame {global_fr_idx}!")
+                # print(f"New object appeared {orig_id} in frame {global_fr_idx}!")
                 serial_id = clip_orig_to_serial_id[orig_id]
                 center_coords = get_center_coords((self.gt_masks[global_fr_idx] == orig_id).astype(np.uint8) * self.not_clicked_map[global_fr_idx])
                 clip_fg_coords_list.append([center_coords[0], center_coords[1], serial_id, local_fr_idx, t])
@@ -298,7 +298,7 @@ class SequenceManager:
             "overlapping_masks": self.pred_masks[self.curr_overlapping_frames] if self.curr_overlapping_frames is not None else None,
         }
         # debug
-        print(f"G.T. targets: {np.unique(gt_panoptic_masks).tolist()}")
+        # print(f"G.T. targets: {np.unique(gt_panoptic_masks).tolist()}")
 
         self.curr_clip_input = inputs
         if not last_clip:
@@ -456,7 +456,7 @@ class SequenceManager:
             self.pred_logits[global_fr_idx] = fr_pred_logits
         self.pred_masks[indices] = pred_panoptic_masks
 
-        print(f"Pred targets: {np.unique(pred_panoptic_masks).tolist()}")
+        # print(f"Pred targets: {np.unique(pred_panoptic_masks).tolist()}")
 
         if self.save_vis:
             self.save_visualization(clip_idx)
