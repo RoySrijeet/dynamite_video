@@ -46,11 +46,11 @@ class AvgClicksPoolingInitializer(nn.Module):
         nn.init.xavier_uniform_(self.no_click_query)
 
         # MLP to project click description to learnable query
-        # self.query_proj = nn.Sequential(
-        #     nn.Linear(self.hidden_dim, self.hidden_dim),
-        #     nn.ReLU(),
-        #     nn.Linear(self.hidden_dim, self.hidden_dim)
-        # )
+        self.query_proj = nn.Sequential(
+            nn.Linear(self.hidden_dim, self.hidden_dim),
+            nn.ReLU(),
+            nn.Linear(self.hidden_dim, self.hidden_dim)
+        )
         
     
     def forward(
@@ -121,7 +121,8 @@ class AvgClicksPoolingInitializer(nn.Module):
                 if fr == fr_idx:
                     descriptors[fr].append(avg_click_query)
                 else:
-                    learnable_query = repeat(self.no_click_query, "1 D -> 1 1 D")# + self.query_proj(avg_click_query)
+                    learnable_query = repeat(self.no_click_query, "1 D -> 1 1 D") + self.query_proj(avg_click_query)
+                    # learnable_query = self.query_proj(avg_click_query)
                     descriptors[fr].append(learnable_query)
                 normalized_clicks[fr].append(torch.tensor([y/norm_h, x/norm_w, obj_id/N, fr/T, t/norm_t]))
             num_queries_per_target[obj_id-1] += 1
@@ -155,7 +156,8 @@ class AvgClicksPoolingInitializer(nn.Module):
                 if fr == fr_idx:
                     descriptors[fr].append(avg_bg_query)
                 else:
-                    learnable_query = repeat(self.no_click_query, "1 D -> 1 1 D")# + self.query_proj(avg_bg_query)
+                    learnable_query = repeat(self.no_click_query, "1 D -> 1 1 D") + self.query_proj(avg_bg_query)
+                    # learnable_query = self.query_proj(avg_click_query)
                     descriptors[fr].append(avg_bg_query)
                 normalized_clicks[fr].append(torch.tensor([y/norm_h, x/norm_w, obj_id, fr/T, t/norm_t]))
             num_queries_per_target[-1] += 1

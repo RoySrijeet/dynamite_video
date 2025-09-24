@@ -60,14 +60,9 @@ class VIPSEGTrainingDataset(TrainingDataset):
         self.videos: Dict[str, GenericVideoSequence] = {vid.id: vid for vid in videos}
 
         # create samples
-        self.samples, self.sample_image_dims, self.sample_instance_counts = self.create_training_samples(
-            self.videos, num_samples, max_num_instances
-        )
+        self.samples = self.create_training_samples(self.videos, num_samples)
 
-        # store fallback candidates
-        self.fallback_candidates = defaultdict(set)
-        for i, num_instances in enumerate(self.sample_instance_counts):
-            self.fallback_candidates[num_instances].add(i)
+        self.sample_image_dims = [[1, 1] for _ in range(num_samples)]
 
 
 

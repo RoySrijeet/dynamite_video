@@ -430,6 +430,14 @@ class DynamiteInteractiveTransformer(nn.Module):
                                                             query_pos=query_embed)
             
             # QUERY-QUERY CROSS ATTENTION between queries (inter-frame)
+            #Q,T,D = output.shape
+            #qqca_output = self.encoder.query_query_cross_attention_layers[i](
+            #    output.view(Q*T,1,D),
+            #    tgt_mask=None,
+            #    tgt_key_padding_mask=None,
+            #    query_pos=query_embed.view((Q*T, 1, D))
+            #)
+            #output = qqca_output.view(Q,T,D)
             tgt_batched_query, tgt_batched_query_embed, qqca_mask = self.pack_masked_qqca_queries(output, query_embed, num_queries_per_target)
             qqca_output = self.encoder.query_query_cross_attention_layers[i](tgt_batched_query,
                                                                                 tgt_mask=None,

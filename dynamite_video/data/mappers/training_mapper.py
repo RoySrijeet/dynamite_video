@@ -110,7 +110,7 @@ class TrainingMapper:
             "serial_to_orig_id": clip.serial_to_orig_id, 
             "ignore_class": clip.ignore_class,
             "target_categories": clip.object_categories,
-            "max_instances_per_category": clip.meta_info['max_instances_per_category'],
+            "max_instances_per_category": clip.meta_info.get('max_instances_per_category', None),
         }
         
         return {
