@@ -4,7 +4,7 @@ from .header import FilePackHeader
 from .writer import FilePackWriter, pack_directory_contents
 from .reader import FilePackReader
 
-import data.utils.file_packer.utils
+import dynamite_video.data.utils.file_packer.utils
 
 
 __all__ = [
