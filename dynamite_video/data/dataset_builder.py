@@ -6,18 +6,14 @@ from detectron2.utils.logger import setup_logger
 from dynamite_video.data.datasets import *
 
 TRAINING_DATASET_BUILDERS = {
+    "COCO": COCOPanopticDataset,
     "BURST": BURSTTrainingDataset,
-    "CITYSCAPES_VPS": CITYSCAPESVPSTrainingDataset,
     "DAVIS": DAVISTrainingDataset,
     "KITTI_STEP": KITTISTEPTrainingDataset,
-    "MOSE": MOSETrainingDataset,
-    "PUMAVOS": PUMAVOSTrainingDataset,
     "VIPSEG": VIPSEGTrainingDataset,
 }
 
 EVALUATION_DATASET_BUILDERS = {
-    "DAVIS": DAVISEvaluationDataset,
-    "BURST": BURSTEvaluationDataset,
     "KITTI_STEP": KITTISTEPEvaluationDataset,
 }
 
@@ -25,15 +21,18 @@ def build_training_dataset(cfg):
     """
     Load training samples from one or more datasets and return as a single training dataset
     """
-
-    dataset_list = cfg.TRAINING.DATASET_LIST
-    dataset_weights = cfg.TRAINING.DATASET_WEIGHTS
+    logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name=__name__)
+    if cfg.TRAINING.PRETRAIN:
+        dataset_list = cfg.TRAINING.PRETRAIN_DATASET_LIST
+        dataset_weights = cfg.TRAINING.PRETRAIN_DATASET_WEIGHTS
+    else:
+        dataset_list = cfg.TRAINING.DATASET_LIST
+        dataset_weights = cfg.TRAINING.DATASET_WEIGHTS
     total_iterations = cfg.SOLVER.MAX_ITER
     batch_size = cfg.SOLVER.IMS_PER_BATCH
 
     num_samples = total_iterations * batch_size
-
-    logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name=__name__)
+    
     logger.info(f"Building training dataset from following datasets: {dataset_list}")
     logger.info(f"Building training dataset with following dataset weights: {dataset_weights}")
     logger.info(f"Number of training samples: {num_samples} (MAX_ITER: {total_iterations}, BATCH_SIZE: {batch_size})")
@@ -51,7 +50,11 @@ def build_training_dataset(cfg):
         datasets.append(TRAINING_DATASET_BUILDERS[ds_name](cfg, ds_num_samples))
         logger.info(f"Done!")
 
-    return listify(datasets)
+    if cfg.TRAINING.PRETRAIN:
+        return datasets[0]
+        # TODO - concat dataset; right now, works with only one pretraining dataset
+    else:
+        return listify(datasets)
     
 
 def listify(datasets):
