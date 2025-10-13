@@ -6,12 +6,8 @@ from torch.utils.data import DataLoader
 from typing import Any, Dict, List, Set
 
 from detectron2.engine import DefaultTrainer
-from detectron2.data.build import build_batch_data_loader
-from detectron2.data.common import DatasetFromList, MapDataset
-from detectron2.data.samplers import TrainingSampler
 from detectron2.solver.build import maybe_add_gradient_clipping
 
-from dynamite_video.data.mappers import TrainingMapper
 from dynamite_video.data.dataset_builder import build_training_dataset
 from dynamite_video.data.utils.collate import collate_fn_pretrain
 
@@ -21,34 +17,43 @@ class Trainer(DefaultTrainer):
     def build_train_loader(cls, cfg):
         """
         Build training dataset and return training data loader.
-        Applies some overwrites to detectron2's default training data loader.
         """
-
-        # obtain training dataset - a list of training clip metadata
         dataset = build_training_dataset(cfg)
         
-        if cfg.TRAINING.PRETRAIN:
-            return DataLoader(
+        return DataLoader(
                 dataset,
                 batch_size=cfg.SOLVER.IMS_PER_BATCH,
                 num_workers=cfg.DATALOADER.NUM_WORKERS,
                 collate_fn=collate_fn_pretrain,
             )
-        
-        # NOTE: skipping serializing samples to avoid OOM 
-        dataset = DatasetFromList(dataset, copy=False, serialize=False)
-        # training map function over the elements in the dataset
-        # this converts the clip metadata into the actual clip used in training
-        mapper = TrainingMapper(cfg)
-        dataset = MapDataset(dataset, mapper)
 
-        return build_batch_data_loader(
-                        dataset,
-                        sampler=TrainingSampler(len(dataset), seed=cfg.SEED),
-                        total_batch_size=cfg.SOLVER.IMS_PER_BATCH,
-                        aspect_ratio_grouping=cfg.DATALOADER.ASPECT_RATIO_GROUPING,
-                        num_workers=cfg.DATALOADER.NUM_WORKERS,
-                    )
+        
+        # from detectron2.data.build import build_batch_data_loader
+        # from detectron2.data.common import DatasetFromList, MapDataset
+        # from detectron2.data.samplers import TrainingSampler
+        # from dynamite_video.data.mappers import TrainingMapper
+        # if cfg.TRAINING.PRETRAIN:
+        #     return DataLoader(
+        #         dataset,
+        #         batch_size=cfg.SOLVER.IMS_PER_BATCH,
+        #         num_workers=cfg.DATALOADER.NUM_WORKERS,
+        #         collate_fn=collate_fn_pretrain,
+        #     )
+        
+        # # NOTE: skipping serializing samples to avoid OOM 
+        # dataset = DatasetFromList(dataset, copy=False, serialize=False)
+        # # training map function over the elements in the dataset
+        # # this converts the clip metadata into the actual clip used in training
+        # # mapper = TrainingMapper(cfg)
+        # # dataset = MapDataset(dataset, mapper)
+
+        # return build_batch_data_loader(
+        #                 dataset,
+        #                 sampler=TrainingSampler(len(dataset), seed=cfg.SEED),
+        #                 total_batch_size=cfg.SOLVER.IMS_PER_BATCH,
+        #                 aspect_ratio_grouping=cfg.DATALOADER.ASPECT_RATIO_GROUPING,
+        #                 num_workers=cfg.DATALOADER.NUM_WORKERS,
+        #             )
 
     
     @classmethod
