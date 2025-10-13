@@ -6,6 +6,7 @@ from detectron2.utils.logger import setup_logger
 from dynamite_video.data.datasets import *
 
 TRAINING_DATASET_BUILDERS = {
+    "ADE20K": ADE20KPanopticDataset,
     "COCO": COCOPanopticDataset,
     "BURST": BURSTTrainingDataset,
     "DAVIS": DAVISTrainingDataset,
@@ -47,21 +48,13 @@ def build_training_dataset(cfg):
     datasets = []
     for ds_name, ds_num_samples in zip(dataset_list, dataset_num_samples):
         logger.info(f"Loading samples from {ds_name}...")
-        datasets.append(TRAINING_DATASET_BUILDERS[ds_name](cfg, ds_num_samples))
-        logger.info(f"Done!")
+        datasets.append(TRAINING_DATASET_BUILDERS[ds_name](cfg, ds_num_samples))    
+    logger.info(f"Done!")
 
-    if cfg.TRAINING.PRETRAIN:
-        return datasets[0]
-        # TODO - concat dataset; right now, works with only one pretraining dataset
+    if len(datasets) > 1:
+        return ConcatDataset(datasets)
     else:
-        return listify(datasets)
-    
-
-def listify(datasets):
-    dataset_list = []
-    for ds in datasets:
-        dataset_list.extend(ds.samples)
-    return dataset_list
+        return datasets[0]
 
 
 def build_evaluation_dataset(cfg, dataset_name):

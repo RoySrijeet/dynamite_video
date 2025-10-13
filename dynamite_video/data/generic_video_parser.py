@@ -201,6 +201,39 @@ class GenericVideoSequence(object):
         return images
     
 
+    # def prepare_masks(self):
+    #     """
+    #     Decode RLE masks to numpy arrays of segmentation masks
+
+    #     Returns:
+    #         panoptic_masks: panoptic segmentation mask of the frames of the video, T,H,W `np.ndarray`
+    #         ignore_masks: ignore masks, if present, T,H,W `np.ndarray`
+    #     """
+    #     panoptic_masks = []
+    #     for fr_masks in self.segmentations:    
+    #         fr_pano_mask = np.zeros(self.image_dims).astype('uint32')
+            
+    #         for obj_id in self.object_ids:
+    #             if obj_id in fr_masks:
+    #                 # decode RLE
+    #                 rle = fr_masks[obj_id]
+    #                 img_dims = None if isinstance(rle, dict) else self.image_dims
+    #                 _m = decode_mask(rle, img_dims)
+    #                 # store it in panoptic mask
+    #                 fr_pano_mask[np.where(_m==1)] = obj_id
+
+    #         panoptic_masks.append(fr_pano_mask)
+    #     panoptic_masks = np.stack(panoptic_masks)   # T,H,W
+        
+    #     # ignore masks
+    #     ignore_masks = None
+    #     if self.ignore_masks is not None:
+    #         ignore_masks = [decode_mask(ig_msk, img_dims) for ig_msk in self.ignore_masks]
+    #         ignore_masks = np.stack(ignore_masks)   # T,H,W
+        
+    #     return panoptic_masks, ignore_masks
+
+    
     def prepare_masks(self):
         """
         Decode RLE masks to numpy arrays of binary segmentation masks

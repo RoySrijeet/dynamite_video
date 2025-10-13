@@ -58,7 +58,8 @@ def training_pipeline(args, cfg):
     if cfg.WANDB.ENABLE and cfg.WANDB.WATCH_GRAD:
         wandb.watch(trainer.model, log="all", log_freq=cfg.SOLVER.CHECKPOINT_PERIOD//2)
         
-    trainer.resume_or_load(cfg.TRAINING.RESUME)
+    if not cfg.TRAINING.PRETRAIN:
+        trainer.resume_or_load(cfg.TRAINING.RESUME)
     trainer.train()
 
 

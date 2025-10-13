@@ -3,6 +3,7 @@ import json
 import numpy as np
 import pycocotools.mask as mt
 
+from tqdm import tqdm
 from typing import Dict
 
 from dynamite_video.data.datasets.base import TrainingDataset, EvaluationDataset
@@ -30,7 +31,7 @@ def map_kitti_step_annotations(cfg, content, MIN_MASK_AREA):
     # semantic classes are assigned new ID: class ID * max_instances_per_category
     # instances are assigned new ID: class ID * max_instances_per_category + instance ID
     
-    for seq in content["sequences"]:
+    for seq in tqdm(content["sequences"], desc="Sequence", leave=False):
 
         seq["dataset"] = "KITTI_STEP"
 
@@ -155,7 +156,7 @@ class KITTISTEPTrainingDataset(TrainingDataset):
         # create samples
         self.samples = self.create_training_samples(self.videos, num_samples)
 
-        self.sample_image_dims = [[1, 1] for _ in range(num_samples)]
+        self.fallback_candidates = set(np.arange(num_samples))
 
 
 

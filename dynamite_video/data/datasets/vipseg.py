@@ -4,6 +4,7 @@ import numpy as np
 import pycocotools.mask as mt
 
 from PIL import Image
+from tqdm import tqdm
 from typing import Dict
 
 from dynamite_video.data.datasets.base import TrainingDataset, EvaluationDataset
@@ -60,9 +61,7 @@ class VIPSEGTrainingDataset(TrainingDataset):
         # create samples
         self.samples = self.create_training_samples(self.videos, num_samples)
 
-        self.sample_image_dims = [[1, 1] for _ in range(num_samples)]
-
-        self.annotations_content = annotations_content
+        self.fallback_candidates = set(np.arange(num_samples))
 
 
     def map_annotations(
@@ -110,7 +109,7 @@ class VIPSEGTrainingDataset(TrainingDataset):
         
         # read annotations
         sequence_annotations = []
-        for seq in video_info["sequences"]:
+        for seq in tqdm(video_info["sequences"], desc="Sequence", leave=False):
             # each sequence dict has the following keys: 'name', 'filenames', 'stuff_classes', 'thing_classes', 'instance_ids', 'frame_instance_occupancy', 'height', 'width'
             
             entry = {}
@@ -160,6 +159,9 @@ class VIPSEGTrainingDataset(TrainingDataset):
             entry["categories"].update({k:k for k in accepted_stuff_classes})
 
             sequence_annotations.append(entry)
+            # debug - TODO - remove
+            if len(sequence_annotations) == 10:
+                break
 
         return {
             "sequences": sequence_annotations,

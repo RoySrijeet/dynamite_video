@@ -10,6 +10,7 @@ import random
 import torch
 
 from torch.utils.data import Dataset
+from typing import Dict, Any, List, Tuple
 
 from dynamite_video.data.utils.clicker import get_clicks_coords
 from dynamite_video.data.utils.data_utils import serialize_object_ids
@@ -76,7 +77,6 @@ class PseudoVideoTrainingDataset(Dataset):
 
         # output size
         self.output_dims = cfg.INPUT.AUGMENTATION.IMAGE_SIZE
-        self.sample_image_dims = [[1, 1] for _ in range(num_samples)]
 
         # color augmentations
         self.color_augmenter = iaa.Sequential([
@@ -99,20 +99,19 @@ class PseudoVideoTrainingDataset(Dataset):
         return self.num_samples
 
     def __getitem__(self, index: int):
-        img_idx = self.image_ids[index % len(self.image_ids)]
+        index = self.image_ids[index % len(self.image_ids)]
         n_tries = 0
         while True:
             try:
-                sample = self.parse_image(img_idx)
-                self.fallback_candidates.add(img_idx)
+                sample = self.parse_image(index)
                 return sample
 
             except:
-                self.fallback_candidates.discard(img_idx)
-                img_idx = random.choice(list(self.fallback_candidates))
+                self.fallback_candidates.discard(index)
+                index = random.choice(list(self.fallback_candidates))
                 n_tries += 1
                 if n_tries % 3 == 0:
-                    print(f"Num failed tries: {n_tries}")
+                    print(f"Num failed tries: {n_tries} for dataset {self.name}")
 
 
     def parse_image(self, index: str):
@@ -367,7 +366,7 @@ class PseudoVideoTrainingDataset(Dataset):
 
     @property
     def ignore_classes(self):
-        return []
+        return [0]
 
 
 class COCOPanopticDataset(PseudoVideoTrainingDataset):
@@ -382,10 +381,20 @@ class COCOPanopticDataset(PseudoVideoTrainingDataset):
             path_to_categories_info=Paths.to_coco_category_info(),
             num_samples=num_samples,
         )
-    
-    @property
-    def ignore_classes(self):
-        return [0]
+
+
+class ADE20KPanopticDataset(PseudoVideoTrainingDataset):
+    def __init__(self, cfg, num_samples):
+        
+        super().__init__(
+            cfg=cfg,
+            dataset_name="ade20k",
+            path_to_images=Paths.to_ade20k_images(),
+            path_to_annotations=Paths.to_ade20k_annotations(),
+            path_to_json_annotations=Paths.to_ade20k_json_annotations(),
+            path_to_categories_info=Paths.to_ade20k_category_info(),
+            num_samples=num_samples,
+        )
 
 
 
