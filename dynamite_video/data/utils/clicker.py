@@ -120,7 +120,7 @@ def get_foreground_clicks(
         
         # randomly select a location
         index = random.sample(range(sample_locations.shape[0]), 1)
-        extra_coords = sample_locations[index]
+        extra_coords = sample_locations[index][0]
         # record click
         clicks_on_obj.append([extra_coords[0], extra_coords[1], obj_id, fr_idx, t])
         clicks_count_per_frame[fr_idx] += 1
