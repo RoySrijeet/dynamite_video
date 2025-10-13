@@ -20,9 +20,9 @@ def map_kitti_step_annotations(cfg, content, MIN_MASK_AREA):
     """
     sequences = []
     
-    max_instances_per_category = cfg.DATASETS.KITTI_STEP.MAX_INSTANCES_PER_CATEGORY
-    ignore_class = cfg.DATASETS.KITTI_STEP.IGNORE_CLASS
-    thing_classes = cfg.DATASETS.KITTI_STEP.THINGS_CLASSES
+    MAX_INSTANCES_PER_CATEGORY = cfg.DATASETS.KITTI_STEP.MAX_INSTANCES_PER_CATEGORY
+    IGNORE_CLASSES = cfg.DATASETS.KITTI_STEP.IGNORE_CLASSES
+    THING_CLASSES = cfg.DATASETS.KITTI_STEP.THINGS_CLASSES
 
     # NOTE: the semantic classes in KITTI_STEP have IDs from 0-18 and 255 (void).
     # The instance segmentations have independent IDs that overlap with the
@@ -49,16 +49,16 @@ def map_kitti_step_annotations(cfg, content, MIN_MASK_AREA):
             for class_id, sem_seg_rle in sem_masks.items():
 
                 # ignore 'void' class
-                if int(class_id) == ignore_class:
+                if int(class_id) in IGNORE_CLASSES:
                     ignore_masks[-1].append(decode_mask(sem_seg_rle, img_dims))
                     continue
                 
                 # do not include 'thing' classes, they become part of the bg
-                if int(class_id) in thing_classes:
+                if int(class_id) in THING_CLASSES:
                     continue 
                 
                 if mask_area(sem_seg_rle, img_dims) >= MIN_MASK_AREA:
-                    track_id = int(class_id) * max_instances_per_category
+                    track_id = int(class_id) * MAX_INSTANCES_PER_CATEGORY
                     updated_segmentations[-1][track_id] = sem_seg_rle
                     accepted_track_ids[track_id] = int(class_id)
 
@@ -76,7 +76,7 @@ def map_kitti_step_annotations(cfg, content, MIN_MASK_AREA):
                     # id of the class the instance belongs to
                     class_id = seq['categories'][track_id]
                     # new track ID
-                    new_track_id = class_id * max_instances_per_category + int(track_id)
+                    new_track_id = class_id * MAX_INSTANCES_PER_CATEGORY + int(track_id)
                     updated_segmentations[fr_idx][new_track_id] = inst_rle
                     accepted_track_ids[new_track_id] = seq['categories'][track_id]
         
@@ -89,15 +89,14 @@ def map_kitti_step_annotations(cfg, content, MIN_MASK_AREA):
         sequences.append(seq)
     
     # store category id to name mapping
-    meta_info = content["meta"]["category_labels"]
     meta_info = {
         "category_labels": {
             int(id): name for id, name in content["meta"]["category_labels"].items()
         },
         "num_classes": cfg.DATASETS.KITTI_STEP.NUM_CLASSES,
-        "things_list": cfg.DATASETS.KITTI_STEP.THINGS_CLASSES,
-        "ignore_class": cfg.DATASETS.KITTI_STEP.IGNORE_CLASS,
-        "max_instances_per_category": cfg.DATASETS.KITTI_STEP.MAX_INSTANCES_PER_CATEGORY,
+        "things_list": THING_CLASSES,
+        "ignore_class": IGNORE_CLASSES,
+        "max_instances_per_category": MAX_INSTANCES_PER_CATEGORY,
         "min_mask_area": MIN_MASK_AREA,
     }
 

@@ -1,11 +1,8 @@
 import os
-import sys
-sys.path.append(os.environ["DYNAMITE_VIDEO_WORKSPACE"])
 import json
 import numpy as np
 import pycocotools.mask as mt
 
-from collections import defaultdict
 from PIL import Image
 from typing import Dict
 
@@ -79,8 +76,8 @@ class VIPSEGTrainingDataset(TrainingDataset):
 
         # only allow instances with mask area above a certain threshold
         MIN_MASK_AREA = self.cfg.TRAINING.MIN_MASK_AREA
-        # un-segmented area
-        VOID_CLASS = 0
+        IGNORE_CLASSES = self.cfg.DATASETS.VIPSEG.IGNORE_CLASSES  # [0]
+        MAX_INSTANCES_PER_CATEGORY = self.cfg.DATASETS.VIPSEG.MAX_INSTANCES_PER_CATEGORY    # 100
         
         with open(video_info_path, "r") as f:
             video_info = json.load(f)
@@ -97,14 +94,18 @@ class VIPSEGTrainingDataset(TrainingDataset):
         # store category labels in meta info
         categories = {}
         # keep a separate record of IDs of "thing" classes
-        isthing = []
+        things_list = []
         for entry in video_info["categories"]:
             categories[int(entry['id'])+1] = entry['name']
             if entry["isthing"]:
-                isthing.append(int(entry['id'])+1)
+                things_list.append(int(entry['id'])+1)
         meta_info = {
             "category_labels": categories,
-            "thing_ids": isthing
+            "num_classes": len(categories),
+            "things_list": things_list,
+            "ignore_class": IGNORE_CLASSES,
+            "max_instances_per_category": MAX_INSTANCES_PER_CATEGORY,
+            "min_mask_area": MIN_MASK_AREA,
         }
         
         # read annotations
@@ -113,7 +114,7 @@ class VIPSEGTrainingDataset(TrainingDataset):
             # each sequence dict has the following keys: 'name', 'filenames', 'stuff_classes', 'thing_classes', 'instance_ids', 'frame_instance_occupancy', 'height', 'width'
             
             entry = {}
-            entry["id"] = f"{self.name}/{seq['name']}"
+            entry["id"] = f"{self.name}_{seq['name']}"
             entry["dataset"]  = self.name
             entry["height"] = seq["height"]
             entry["width"] = seq["width"]
@@ -132,16 +133,15 @@ class VIPSEGTrainingDataset(TrainingDataset):
                 
                 # instances of both "thing" and "stuff" classes
                 instances = list(np.unique(mask))
-                # remove VOID
-                if VOID_CLASS in instances:
-                    instances.remove(VOID_CLASS)
+                # remove ignore classes
+                instances = [cls_id for cls_id in instances if cls_id not in IGNORE_CLASSES]
 
                 binary_masks = {}
                 for inst_id in instances:
                     # extract binary mask
                     _m = (mask==inst_id).astype(dtype='uint8')
                     # check mask area
-                    if self.mask_area(_m) >= MIN_MASK_AREA:
+                    if _m.sum() >= MIN_MASK_AREA:
                         # encode mask array as RLE
                         binary_masks[int(inst_id)] = mt.encode(np.asfortranarray(_m))
                         if (inst_id-1) in seq["stuff_classes"]:
@@ -154,9 +154,9 @@ class VIPSEGTrainingDataset(TrainingDataset):
             
             entry["segmentations"] = segmentations
             entry["stuff_classes"] = list(accepted_stuff_classes)
-            # assigned_id = category_id x 100 + instance_id
-            entry["thing_classes"] = list(set([k//100 for k in accepted_thing_ids]))
-            entry["categories"] = {k:k//100 for k in accepted_thing_ids} # of "thing" classes
+            # assigned_id = category_id x MAX_INSTANCES_PER_CATEGORY (100) + instance_id
+            entry["thing_classes"] = list(set([k//MAX_INSTANCES_PER_CATEGORY for k in accepted_thing_ids]))
+            entry["categories"] = {k:k//MAX_INSTANCES_PER_CATEGORY for k in accepted_thing_ids} # of "thing" classes
             entry["categories"].update({k:k for k in accepted_stuff_classes})
 
             sequence_annotations.append(entry)
@@ -165,12 +165,6 @@ class VIPSEGTrainingDataset(TrainingDataset):
             "sequences": sequence_annotations,
             "meta": meta_info
         }
-
-    def mask_area(self, mask):
-        assert isinstance(mask, np.ndarray)
-        bin_mask = mask.astype('uint8')
-        assert list(np.unique(bin_mask))==[0,1]
-        return bin_mask.sum()
 
 
 ########################### EVALUATION DATASET ###########################
@@ -306,21 +300,23 @@ class VIPSEGEvaluationDataset(EvaluationDataset):
         return sequence_annotations
     
 
-########################### TEST ###########################
+###########################
 
-if __name__ == "__main__":
-    # prepare config variable
-    from detectron2.config import CfgNode as CN
-    cfg = CN()
-    cfg.TRAINING = CN()
-    cfg.TRAINING.CLIP_LENGTH = 4
-    cfg.TRAINING.MIN_MASK_AREA = 400
-    cfg.DATASETS = CN()
-    cfg.DATASETS.VIPSEG = CN()
-    cfg.DATASETS.VIPSEG.TRAINING = CN()
-    cfg.DATASETS.VIPSEG.TRAINING.FPS = 5
-    cfg.DATASETS.VIPSEG.TRAINING.FRAME_SAMPLING_MULTIPLICATIVE_FACTOR = 3.0
+# if __name__ == "__main__":
+#     # import sys
+#     # sys.path.append(os.environ["DYNAMITE_VIDEO_WORKSPACE"])
+#     # prepare config variable
+#     from detectron2.config import CfgNode as CN
+#     cfg = CN()
+#     cfg.TRAINING = CN()
+#     cfg.TRAINING.CLIP_LENGTH = 4
+#     cfg.TRAINING.MIN_MASK_AREA = 400
+#     cfg.DATASETS = CN()
+#     cfg.DATASETS.VIPSEG = CN()
+#     cfg.DATASETS.VIPSEG.TRAINING = CN()
+#     cfg.DATASETS.VIPSEG.TRAINING.FPS = 5
+#     cfg.DATASETS.VIPSEG.TRAINING.FRAME_SAMPLING_MULTIPLICATIVE_FACTOR = 3.0
     
-    vipseg_loader = VIPSEGTrainingDataset(cfg, 100)
+#     vipseg_loader = VIPSEGTrainingDataset(cfg, 1)
     
-    annotations_content = vipseg_loader.annotations_content
+#     annotations_content = vipseg_loader.annotations_content
