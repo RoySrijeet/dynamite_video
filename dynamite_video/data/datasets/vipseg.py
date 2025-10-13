@@ -159,9 +159,6 @@ class VIPSEGTrainingDataset(TrainingDataset):
             entry["categories"].update({k:k for k in accepted_stuff_classes})
 
             sequence_annotations.append(entry)
-            # debug - TODO - remove
-            if len(sequence_annotations) == 10:
-                break
 
         return {
             "sequences": sequence_annotations,
