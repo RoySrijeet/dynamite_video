@@ -56,7 +56,7 @@ class PseudoVideoTrainingDataset(Dataset):
         if not os.path.exists(self.path_to_images):
             # if path does not exist, perhaps we're on JUWELS
             path_to_images = f"{Paths.to_training_images_on_juwels()}/{dataset_name}.fpack"
-            assert os.path.exists(path_to_images), f"{dataset_name} images not found at: {self.path_to_images}"
+            assert os.path.exists(path_to_images), f"{dataset_name} images not found at: {self.path_to_images} or {path_to_images}"
             self.path_to_images = path_to_images
             self.fpack_reader = FilePackReader(self.path_to_images, multiprocess_lock=False)
 

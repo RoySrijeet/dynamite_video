@@ -37,22 +37,22 @@ class Paths:
     @classmethod
     def to_training_images_on_juwels(cls):
         """Path to base directory containing training images"""
-        return os.path.join(cls.to_datasets_root(), "images/training")
+        return os.path.join(cls.to_datasets_root(), "fpacks")
 
-    @classmethod
-    def to_evaluation_images_on_juwels(cls):
-        """Path to base directory containing evaluation images"""
-        return os.path.join(cls.to_datasets_root(), "images/evaluation")
+    # @classmethod
+    # def to_evaluation_images_on_juwels(cls):
+    #     """Path to base directory containing evaluation images"""
+    #     return os.path.join(cls.to_datasets_root(), "fpacks/images/evaluation")
 
-    @classmethod
-    def to_training_annotations_on_juwels(cls):
-        """Path to base directory containing training annotations"""
-        return os.path.join(cls.to_datasets_root(), "annotations/training")
+    # @classmethod
+    # def to_training_annotations_on_juwels(cls):
+    #     """Path to base directory containing training annotations"""
+    #     return os.path.join(cls.to_datasets_root(), "fpacks/annotations/training")
     
-    @classmethod
-    def to_evaluation_annotations_on_juwels(cls):
-        """Path to base directory containing evaluation annotations"""
-        return os.path.join(cls.to_datasets_root(), "annotations/evaluation")
+    # @classmethod
+    # def to_evaluation_annotations_on_juwels(cls):
+    #     """Path to base directory containing evaluation annotations"""
+    #     return os.path.join(cls.to_datasets_root(), "fpacks/annotations/evaluation")
     
 
     # --------------------- ADE20K --------------------- #
