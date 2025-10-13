@@ -2,6 +2,7 @@ import copy
 import itertools
 import torch
 
+from torch.utils.data import DataLoader
 from typing import Any, Dict, List, Set
 
 from detectron2.engine import DefaultTrainer
@@ -12,6 +13,7 @@ from detectron2.solver.build import maybe_add_gradient_clipping
 
 from dynamite_video.data.mappers import TrainingMapper
 from dynamite_video.data.dataset_builder import build_training_dataset
+from dynamite_video.data.utils.collate import collate_fn_pretrain
 
 class Trainer(DefaultTrainer):
     
@@ -24,6 +26,14 @@ class Trainer(DefaultTrainer):
 
         # obtain training dataset - a list of training clip metadata
         dataset = build_training_dataset(cfg)
+        
+        if cfg.TRAINING.PRETRAIN:
+            return DataLoader(
+                dataset,
+                batch_size=cfg.SOLVER.IMS_PER_BATCH,
+                num_workers=cfg.DATALOADER.NUM_WORKERS,
+                collate_fn=collate_fn_pretrain,
+            )
         
         # NOTE: skipping serializing samples to avoid OOM 
         dataset = DatasetFromList(dataset, copy=False, serialize=False)
