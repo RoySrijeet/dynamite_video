@@ -86,6 +86,8 @@ class TrainingMapper:
         # consider all parts of the image without fg label as bg
         bg_masks = (panoptic_masks==0) & ~padding_mask          # T,H,W
 
+        if ignore_masks is None:
+            ignore_masks = np.zeros_like(panoptic_masks)
         
         # sample clicks
         (num_clicks_per_target, 
@@ -126,7 +128,7 @@ class TrainingMapper:
             "padding_mask": torch.as_tensor(padding_mask, dtype=torch.bool),
             
             # T,H,W boolean mask for `VOID` class
-            "ignore_masks": torch.as_tensor(ignore_masks, dtype=torch.bool) if ignore_masks is not None else None,
+            "ignore_masks": torch.as_tensor(ignore_masks, dtype=torch.bool),
             
             # T,H,W bg mask includes any region not covered by the target object binary masks
             # NOTE: this includes ignore mask regions as well
