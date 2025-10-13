@@ -55,7 +55,35 @@ class Paths:
         return os.path.join(cls.to_datasets_root(), "annotations/evaluation")
     
 
-    # --------------------- PUMaVOS --------------------- #
+    # --------------------- ADE20K --------------------- #
+
+    @classmethod
+    def to_ade20k_root(cls):
+        """Path to ADE20k root directory"""
+        return os.path.join(cls.to_datasets_root(), "ADE20K")
+
+    @classmethod
+    def to_ade20k_images(cls):
+        """Path to ADE20k image files (JPGs)"""
+        return os.path.join(cls.to_ade20k_root(), "images")
+    
+    @classmethod
+    def to_ade20k_annotations(cls):
+        """Path to ADE20k annotation files (PNGs)"""
+        return os.path.join(cls.to_ade20k_root(), "pan_maps")
+    
+    @classmethod
+    def to_ade20k_json_annotations(cls):
+        """Path to ADE20k file with segments info"""
+        return os.path.join(cls.to_ade20k_root(), "segments.json")
+    
+    @classmethod
+    def to_ade20k_category_info(cls):
+        """Path to ADE20k category info"""
+        return os.path.join(cls.to_ade20k_root(), "ade20k_panoptic_categories.json")
+
+
+    # --------------------- COCO --------------------- #
 
     @classmethod
     def to_coco_root(cls):
@@ -82,142 +110,6 @@ class Paths:
         """Path to COCO category info"""
         return os.path.join(cls.to_coco_root(), "coco_panoptic_categories.json")
     
-    # --------------------- DAVIS --------------------- #
-
-    @classmethod
-    def to_davis_root(cls):
-        """Path to DAVIS-2017 root directory"""
-        return os.path.join(cls.to_datasets_root(), "DAVIS/DAVIS-2017-trainval")
-
-    @classmethod
-    def to_davis_images(cls):
-        """Path to DAVIS-2017 JPEGImages"""
-        return os.path.join(cls.to_davis_root(), "JPEGImages/480p")
-    
-    @classmethod
-    def to_davis_annotations(cls):
-        """Path to DAVIS-2017 Annotations"""
-        return os.path.join(cls.to_davis_root(), "Annotations/480p")
-    
-    @classmethod
-    def to_davis_train_annotations_json(cls):
-        """Path to DAVIS-2017 Training Annotations JSON file"""
-        return os.path.join(cls.to_datasets_root(), "davis_semisupervised.json")
-    
-    @classmethod
-    def to_davis_train_imset(cls):
-        """Path to DAVIS-2017 training set list file"""
-        return os.path.join(cls.to_davis_root(), "ImageSets/2017/train.txt")
-    
-    @classmethod
-    def to_davis_val_imset(cls):
-        """Path to DAVIS-2017 training set list file"""
-        return os.path.join(cls.to_davis_root(), "ImageSets/2017/val.txt")
-
-
-    # --------------------- MOSE --------------------- #
-
-    @classmethod
-    def to_mose_root(cls):
-        """Path to MOSE root directory"""
-        return os.path.join(cls.to_datasets_root(), "MOSE")
-    
-    @classmethod
-    def to_mose_train_images(cls):
-        """Path to MOSE training set images"""
-        return os.path.join(cls.to_mose_root(), "train/JPEGImages")
-    
-    @classmethod
-    def to_mose_train_annotations(cls):
-        """Path to MOSE training set images"""
-        return os.path.join(cls.to_mose_root(), "train/Annotations")
-    
-    @classmethod
-    def to_mose_train_imset(cls):
-        """Path to MOSE training split sequences""" # NOTE: this is custom subset
-        return os.path.join(cls.to_mose_root(), "train/MOSE_sample_train_list.txt")
-    
-    @classmethod
-    def to_mose_val_images(cls):
-        """Path to MOSE validation set images"""
-        return os.path.join(cls.to_mose_root(), "valid/JPEGImages")
-    
-    @classmethod
-    def to_mose_val_annotations(cls):
-        """Path to MOSE validation set images"""
-        return os.path.join(cls.to_mose_root(), "valid/Annotations")
-    
-    @classmethod
-    def to_mose_val_imset(cls):
-        """Path to MOSE val split sequences""" # NOTE: this is custom subset
-        return os.path.join(cls.to_mose_root(), "val/MOSE_sample_val_list.txt")
-    
-
-    # --------------------- PUMaVOS --------------------- #
-
-    @classmethod
-    def to_pumavos_root(cls):
-        """Path to PUMaVOS root directory"""
-        return os.path.join(cls.to_datasets_root(), "PUBLIC_PUMaVOS")
-
-    @classmethod
-    def to_pumavos_images(cls):
-        """Path to PUMaVOS JPEGImages"""
-        return os.path.join(cls.to_pumavos_root(), "JPEGImages")
-    
-    @classmethod
-    def to_pumavos_annotations(cls):
-        """Path to PUMaVOS Annotations"""
-        return os.path.join(cls.to_pumavos_root(), "Annotations")
-    
-    @classmethod
-    def to_pumavos_imset(cls):
-        """Path to PUMaVOS video list file"""
-        return os.path.join(cls.to_pumavos_root(), "imset.txt")
-    
-
-    # --------------------- BURST --------------------- #
-
-    @classmethod
-    def to_burst_root(cls):
-        """Path to BURST root directory"""
-        return os.path.join(cls.to_datasets_root(), "BURST")
-    
-    @classmethod
-    def to_burst_train_images(cls):
-        """Path to BURST training images (all_frames)"""
-        return os.path.join(cls.to_burst_root(), "all_frames/train")
-    
-    @classmethod
-    def to_burst_training_annotations(cls):
-        """Path to BURST training annotation JSON file"""
-        return os.path.join(cls.to_burst_root(), "annotations/train/all_classes.json")
-    
-    @classmethod
-    def to_burst_val_images(cls):
-        """Path to BURST validation images (all_frames)"""
-        return os.path.join(cls.to_burst_root(), "all_frames/val")
-    
-    @classmethod
-    def to_burst_val_annotations(cls):
-        """Path to BURST validation annotation JSON file"""
-        return {
-            "all_classes": os.path.join(cls.to_burst_root(), "annotations/val/all_classes.json"),
-            "first_frame_annotations": os.path.join(cls.to_burst_root(), "annotations/val/first_frame_annotations.json"),
-        }
-    
-    @classmethod
-    def to_burst_test_images(cls):
-        """Path to BURST test images (all_frames)"""
-        return os.path.join(cls.to_burst_root(), "all_frames/test")
-    
-    @classmethod
-    def to_burst_val_annotations(cls):
-        """Path to BURST test annotation JSON file"""
-        return {
-            "all_classes": os.path.join(cls.to_burst_root(), "annotations/test/all_classes.json"),
-            "first_frame_annotations": os.path.join(cls.to_burst_root(), "annotations/test/first_frame_annotations.json"),
-        }
     
     # --------------------- KITTI-STEP --------------------- #
 
@@ -285,34 +177,168 @@ class Paths:
         return os.path.join(cls.to_vipseg_root(), "test.txt")
     
     
-    # ------------------- Cityscapes-VPS ------------------- #
+    # ------------------------------------------------- #
+    # --------------------- BURST --------------------- #
 
-    @classmethod
-    def to_cityscapes_vps_root(cls):
-        """Path to Cityscapes VPS root directory"""
-        return os.path.join(cls.to_datasets_root(), "CITYSCAPES-VPS")
+    # @classmethod
+    # def to_burst_root(cls):
+    #     """Path to BURST root directory"""
+    #     return os.path.join(cls.to_datasets_root(), "BURST")
     
-    @classmethod
-    def to_cityscapes_vps_train_images(cls):
-        """Path to Cityscapes VPS training images"""
-        return os.path.join(cls.to_cityscapes_vps_root(), "cityscapes_vps/train/img")
+    # @classmethod
+    # def to_burst_train_images(cls):
+    #     """Path to BURST training images (all_frames)"""
+    #     return os.path.join(cls.to_burst_root(), "all_frames/train")
     
-    @classmethod
-    def to_cityscapes_vps_train_annotations(cls):
-        """Path to Cityscapes VPS training JSON annotation file"""
-        return os.path.join(cls.to_cityscapes_vps_root(), "json_anno/train/cityscapes_vps.json")
+    # @classmethod
+    # def to_burst_training_annotations(cls):
+    #     """Path to BURST training annotation JSON file"""
+    #     return os.path.join(cls.to_burst_root(), "annotations/train/all_classes.json")
+    
+    # @classmethod
+    # def to_burst_val_images(cls):
+    #     """Path to BURST validation images (all_frames)"""
+    #     return os.path.join(cls.to_burst_root(), "all_frames/val")
+    
+    # @classmethod
+    # def to_burst_val_annotations(cls):
+    #     """Path to BURST validation annotation JSON file"""
+    #     return {
+    #         "all_classes": os.path.join(cls.to_burst_root(), "annotations/val/all_classes.json"),
+    #         "first_frame_annotations": os.path.join(cls.to_burst_root(), "annotations/val/first_frame_annotations.json"),
+    #     }
+    
+    # @classmethod
+    # def to_burst_test_images(cls):
+    #     """Path to BURST test images (all_frames)"""
+    #     return os.path.join(cls.to_burst_root(), "all_frames/test")
+    
+    # @classmethod
+    # def to_burst_val_annotations(cls):
+    #     """Path to BURST test annotation JSON file"""
+    #     return {
+    #         "all_classes": os.path.join(cls.to_burst_root(), "annotations/test/all_classes.json"),
+    #         "first_frame_annotations": os.path.join(cls.to_burst_root(), "annotations/test/first_frame_annotations.json"),
+    #     }
+    
+    
+    # # ------------------- Cityscapes-VPS ------------------- #
 
-    @classmethod
-    def to_cityscapes_vps_val_images(cls):
-        """Path to Cityscapes VPS val images"""
-        return os.path.join(cls.to_cityscapes_vps_root(), "cityscapes_vps/val/img_all")
+    # @classmethod
+    # def to_cityscapes_vps_root(cls):
+    #     """Path to Cityscapes VPS root directory"""
+    #     return os.path.join(cls.to_datasets_root(), "CITYSCAPES-VPS")
     
-    @classmethod
-    def to_cityscapes_vps_val_annotations(cls):
-        """Path to Cityscapes VPS val split JSON annotation file"""
-        return os.path.join(cls.to_cityscapes_vps_root(), "json_anno/val/im_all_info_val_city_vps.json")
+    # @classmethod
+    # def to_cityscapes_vps_train_images(cls):
+    #     """Path to Cityscapes VPS training images"""
+    #     return os.path.join(cls.to_cityscapes_vps_root(), "cityscapes_vps/train/img")
     
-    
-    # --------------------- YouTube-VOS --------------------- #
+    # @classmethod
+    # def to_cityscapes_vps_train_annotations(cls):
+    #     """Path to Cityscapes VPS training JSON annotation file"""
+    #     return os.path.join(cls.to_cityscapes_vps_root(), "json_anno/train/cityscapes_vps.json")
 
-    # --------------------- YouTube-VIS --------------------- #
+    # @classmethod
+    # def to_cityscapes_vps_val_images(cls):
+    #     """Path to Cityscapes VPS val images"""
+    #     return os.path.join(cls.to_cityscapes_vps_root(), "cityscapes_vps/val/img_all")
+    
+    # @classmethod
+    # def to_cityscapes_vps_val_annotations(cls):
+    #     """Path to Cityscapes VPS val split JSON annotation file"""
+    #     return os.path.join(cls.to_cityscapes_vps_root(), "json_anno/val/im_all_info_val_city_vps.json")
+    
+    # # --------------------- DAVIS --------------------- #
+
+    # @classmethod
+    # def to_davis_root(cls):
+    #     """Path to DAVIS-2017 root directory"""
+    #     return os.path.join(cls.to_datasets_root(), "DAVIS/DAVIS-2017-trainval")
+
+    # @classmethod
+    # def to_davis_images(cls):
+    #     """Path to DAVIS-2017 JPEGImages"""
+    #     return os.path.join(cls.to_davis_root(), "JPEGImages/480p")
+    
+    # @classmethod
+    # def to_davis_annotations(cls):
+    #     """Path to DAVIS-2017 Annotations"""
+    #     return os.path.join(cls.to_davis_root(), "Annotations/480p")
+    
+    # @classmethod
+    # def to_davis_train_annotations_json(cls):
+    #     """Path to DAVIS-2017 Training Annotations JSON file"""
+    #     return os.path.join(cls.to_datasets_root(), "davis_semisupervised.json")
+    
+    # @classmethod
+    # def to_davis_train_imset(cls):
+    #     """Path to DAVIS-2017 training set list file"""
+    #     return os.path.join(cls.to_davis_root(), "ImageSets/2017/train.txt")
+    
+    # @classmethod
+    # def to_davis_val_imset(cls):
+    #     """Path to DAVIS-2017 training set list file"""
+    #     return os.path.join(cls.to_davis_root(), "ImageSets/2017/val.txt")
+    
+    
+    #  # --------------------- MOSE --------------------- #
+
+    # @classmethod
+    # def to_mose_root(cls):
+    #     """Path to MOSE root directory"""
+    #     return os.path.join(cls.to_datasets_root(), "MOSE")
+    
+    # @classmethod
+    # def to_mose_train_images(cls):
+    #     """Path to MOSE training set images"""
+    #     return os.path.join(cls.to_mose_root(), "train/JPEGImages")
+    
+    # @classmethod
+    # def to_mose_train_annotations(cls):
+    #     """Path to MOSE training set images"""
+    #     return os.path.join(cls.to_mose_root(), "train/Annotations")
+    
+    # @classmethod
+    # def to_mose_train_imset(cls):
+    #     """Path to MOSE training split sequences""" # NOTE: this is custom subset
+    #     return os.path.join(cls.to_mose_root(), "train/MOSE_sample_train_list.txt")
+    
+    # @classmethod
+    # def to_mose_val_images(cls):
+    #     """Path to MOSE validation set images"""
+    #     return os.path.join(cls.to_mose_root(), "valid/JPEGImages")
+    
+    # @classmethod
+    # def to_mose_val_annotations(cls):
+    #     """Path to MOSE validation set images"""
+    #     return os.path.join(cls.to_mose_root(), "valid/Annotations")
+    
+    # @classmethod
+    # def to_mose_val_imset(cls):
+    #     """Path to MOSE val split sequences""" # NOTE: this is custom subset
+    #     return os.path.join(cls.to_mose_root(), "val/MOSE_sample_val_list.txt")
+
+    
+    # # --------------------- PUMaVOS --------------------- #
+
+    # @classmethod
+    # def to_pumavos_root(cls):
+    #     """Path to PUMaVOS root directory"""
+    #     return os.path.join(cls.to_datasets_root(), "PUBLIC_PUMaVOS")
+
+    # @classmethod
+    # def to_pumavos_images(cls):
+    #     """Path to PUMaVOS JPEGImages"""
+    #     return os.path.join(cls.to_pumavos_root(), "JPEGImages")
+    
+    # @classmethod
+    # def to_pumavos_annotations(cls):
+    #     """Path to PUMaVOS Annotations"""
+    #     return os.path.join(cls.to_pumavos_root(), "Annotations")
+    
+    # @classmethod
+    # def to_pumavos_imset(cls):
+    #     """Path to PUMaVOS video list file"""
+    #     return os.path.join(cls.to_pumavos_root(), "imset.txt")
+
