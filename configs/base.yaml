@@ -6,13 +6,6 @@ DATASETS:
       MAX_NUM_INSTANCES: 4
     EVALUATION:
       SPLIT: val
-  CITYSCAPES_VPS:
-    TRAINING:
-      FPS: 10
-      FRAME_SAMPLING_MULTIPLICATIVE_FACTOR: 1   # there aren't that many frames per vid
-      MAX_NUM_INSTANCES: 4
-    EVALUATION:
-      SPLIT: val
   DAVIS:
     TRAINING:
       FPS: 30
@@ -30,21 +23,7 @@ DATASETS:
     MAX_INSTANCES_PER_CATEGORY: 1000
     NUM_CLASSES: 19
     THINGS_CLASSES: [11, 13]
-    IGNORE_CLASS: 255
-  MOSE:
-    TRAINING:
-      FPS: 30
-      FRAME_SAMPLING_MULTIPLICATIVE_FACTOR: 3.0
-      MAX_NUM_INSTANCES: 4
-    EVALUATION:
-      SPLIT: val
-  PUMAVOS:
-    TRAINING:
-      FPS: 30
-      FRAME_SAMPLING_MULTIPLICATIVE_FACTOR: 3.0
-      MAX_NUM_INSTANCES: 4
-    EVALUATION:
-      SPLIT: val
+    IGNORE_CLASSES: [255]
   VIPSEG:
     TRAINING:
       FPS: 5
@@ -52,6 +31,8 @@ DATASETS:
       MAX_NUM_INSTANCES: 4
     EVALUATION:
       SPLIT: val
+    MAX_INSTANCES_PER_CATEGORY: 100
+    IGNORE_CLASSES: [0]
 MODEL:
   BACKBONE:
     FREEZE_AT: 2
@@ -177,6 +158,14 @@ INPUT:
   RGB: true
 
 TRAINING:
+  # enable pseudo-video pre-training
+  PRETRAIN: false
+  # pre-training datasets
+  PRETRAIN_DATASET_LIST: [COCO]
+  # proportion of training samples from each dataset
+  PRETRAIN_DATASET_WEIGHTS: [1]
+  
+  # minimum object mask area permitted in training (n/a in pre-training)
   MIN_MASK_AREA: 400
   CLIP_LENGTH: 3
   # list of training datasets
@@ -223,7 +212,7 @@ TRAINING:
 DATALOADER:
   # num of dataloader workers
   NUM_WORKERS: 4
-  ASPECT_RATIO_GROUPING: True # TODO
+  ASPECT_RATIO_GROUPING: false # TODO
   #FILTER_EMPTY_ANNOTATIONS: True
 
 ITERATIVE:
