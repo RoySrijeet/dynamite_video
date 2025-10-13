@@ -54,6 +54,33 @@ class Paths:
         """Path to base directory containing evaluation annotations"""
         return os.path.join(cls.to_datasets_root(), "annotations/evaluation")
     
+
+    # --------------------- PUMaVOS --------------------- #
+
+    @classmethod
+    def to_coco_root(cls):
+        """Path to COCO root directory"""
+        return os.path.join(cls.to_datasets_root(), "COCO")
+
+    @classmethod
+    def to_coco_images(cls):
+        """Path to COCO image files (JPGs)"""
+        return os.path.join(cls.to_coco_root(), "images")
+    
+    @classmethod
+    def to_coco_annotations(cls):
+        """Path to COCO annotation files (PNGs)"""
+        return os.path.join(cls.to_coco_root(), "annotations")
+    
+    @classmethod
+    def to_coco_json_annotations(cls):
+        """Path to JSON file with COCO segments info"""
+        return os.path.join(cls.to_coco_root(), "segments.json")
+    
+    @classmethod
+    def to_coco_category_info(cls):
+        """Path to COCO category info"""
+        return os.path.join(cls.to_coco_root(), "coco_panoptic_categories.json")
     
     # --------------------- DAVIS --------------------- #
 
