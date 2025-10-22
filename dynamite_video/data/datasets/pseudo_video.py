@@ -136,7 +136,7 @@ class PseudoVideoTrainingDataset(Dataset):
             image = np.flip(image, 1)
             png_mask = np.flip(png_mask, 1)
 
-        # apply geometric transformations
+        # generate pseudo-video from current image
         images, orig_panoptic_masks = self.apply_geometric_augmentations(image, png_mask)
         images = np.transpose(images, (0, 3, 1, 2))   # [T, H, W, 3] -> [T, 3, H, W]
 
@@ -182,7 +182,7 @@ class PseudoVideoTrainingDataset(Dataset):
             raise "One or more targets in this clip did not receive a click!"
         
         meta_info = {
-            "orig_dims": image.shape[:2],
+            "orig_dims": images.shape[:2],
             "seq_name": f"{self.name}_{index}",
             "frame_indices": [0 for _ in range(self.clip_length)],
             "orig_to_serial_id": orig_to_serial_id,
@@ -202,7 +202,7 @@ class PseudoVideoTrainingDataset(Dataset):
             "binary_masks": torch.as_tensor(binary_masks, dtype=torch.uint8),
             
             # H,W boolean padding mask where padded region is labeled True
-            "padding_mask": torch.zeros(self.output_dims, dtype=torch.bool),
+            "padding_mask": torch.zeros((H,W), dtype=torch.bool),
             
             # T,H,W boolean mask for `VOID` class
             "ignore_masks": torch.zeros((T,H,W), dtype=torch.bool),

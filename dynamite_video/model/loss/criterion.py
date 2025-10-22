@@ -62,7 +62,7 @@ class SetFinalCriterion(nn.Module):
 
         # ground truth binary masks
         gt_masks = [t["binary_masks"] for t in targets]
-        gt_masks = torch.cat(gt_masks, dim=0).to(dtype=torch.float16).unsqueeze(1)  # T*N,1,H,W
+        gt_masks = torch.cat(gt_masks, dim=0).to(dtype=torch.float32).unsqueeze(1)  # T*N,1,H,W
 
         # Accumulate mask for each object (as there might be multiple clicks per object) and background
         new_outputs = []
