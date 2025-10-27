@@ -241,3 +241,38 @@ class STQuality(object):
       "sq_per_target": ious_per_tgt[1:],  # only target objects, excluding BG
       "sq_per_frame_per_target": self._ious,  # only target objects, excluding BG
     }
+
+
+# if __name__ == "__main__":
+  
+#   T,H,W = 2,8,8
+  
+#   # g.t. labels
+#   y_true = np.zeros((T,H,W), dtype=np.uint8)
+#   y_true[0, 3:7, 3:7] = 1
+#   y_true[0, :3, :2] = 2
+#   y_true[0, 4:, :2] = 3
+#   y_true[1, 5:, 5:] = 1
+#   y_true[1, 1:5, 1:4] = 2
+#   y_true[1, 6:, :2] = 3
+#   # pred labels
+#   y_pred = np.zeros((T,H,W), dtype=np.uint8)
+#   y_pred[0, 4:7, 4:7] = 1
+#   y_pred[0, :3, :3] = 2
+#   y_pred[0, 4:, 1:3] = 3
+#   y_pred[1, 5:, 5:7] = 1
+#   y_pred[1, 1:5, 1:4] = 2
+#   y_pred[1, 4:, 1:3] = 3
+  
+#   target_ids = [1,2,3]
+#   ignore_label = 0
+  
+#   stq_metric = STQuality(num_classes=len(target_ids)+1,
+#                         things_list=target_ids,
+#                         ignore_label=ignore_label,
+#                         offset=int(1e6))
+
+#   for gt_mask, pred_mask in zip(y_true, y_pred):
+#     stq_metric.update_state(gt_mask, pred_mask)
+  
+#   result = stq_metric.result()

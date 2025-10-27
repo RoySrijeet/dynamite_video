@@ -1,6 +1,7 @@
 import cv2
 import imgaug
 import imgaug.augmenters as iaa
+import imgaug.augmenters.color as iacolor
 import json
 import numpy as np
 import os
@@ -10,7 +11,6 @@ import random
 import torch
 
 from torch.utils.data import Dataset
-from typing import Dict, Any, List, Tuple
 
 from dynamite_video.data.utils.clicker import get_clicks_coords
 from dynamite_video.data.utils.data_utils import serialize_object_ids
@@ -78,6 +78,9 @@ class PseudoVideoTrainingDataset(Dataset):
         # output size
         self.output_dims = cfg.INPUT.AUGMENTATION.IMAGE_SIZE
 
+        if iacolor.AddToHueAndSaturation._LUT_CACHE is None:
+            iacolor.AddToHueAndSaturation._LUT_CACHE = [None] * 2  # hue + sat
+        
         # color augmentations
         self.color_augmenter = iaa.Sequential([
             # color tone and vividness variation simulating white balance settings           
@@ -283,8 +286,8 @@ class PseudoVideoTrainingDataset(Dataset):
 
             min_dim = self.augmentation_min_dims[torch.randint(len(self.augmentation_min_dims), (1,)).item()]
             scale_factor = min_dim / lower_size
-            if (higher_size * scale_factor) > 1333:
-                scale_factor = 1333 / higher_size
+            # if (higher_size * scale_factor) > 1333:
+            #     scale_factor = 1333 / higher_size
 
             new_height, new_width = round(scale_factor * height), round(scale_factor * width)
 
