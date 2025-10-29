@@ -77,9 +77,6 @@ class PseudoVideoTrainingDataset(Dataset):
 
         # output size
         self.output_dims = cfg.INPUT.AUGMENTATION.IMAGE_SIZE
-
-        if iacolor.AddToHueAndSaturation._LUT_CACHE is None:
-            iacolor.AddToHueAndSaturation._LUT_CACHE = [None] * 2  # hue + sat
         
         # color augmentations
         self.color_augmenter = iaa.Sequential([
