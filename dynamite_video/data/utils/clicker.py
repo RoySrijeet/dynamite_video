@@ -243,7 +243,7 @@ def get_clicks_coords(
                 continue
             
             bg_coords_list_fr, t = get_background_clicks(fr_idx,
-                                                    bg_masks[fr_idx],
+                                                    bg_masks[fr_idx].astype(np.uint8),
                                                     max_num_points,
                                                     gamma,
                                                     t
