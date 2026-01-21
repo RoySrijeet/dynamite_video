@@ -84,10 +84,11 @@ class STQuality(object):
     self._ground_truth = None
     self._intersections = None
     self._ious = []
+    self._scaled_fn_error = []
     
     self._offset = offset
     if offset < num_classes:
-      raise ValueError('The provided offset %d is too small. No guarantess '
+      raise ValueError('The provided offset %d is too small. No guarantees'
                        'about the correctness of the results can be made. '
                        'Please choose an offset that is higher than num_classes'
                        ' = %d' % num_classes)
@@ -134,8 +135,16 @@ class STQuality(object):
     fns = confusion.sum(axis=1) - intersections
     unions = intersections + fps + fns
     ious = (intersections.astype(np.double) / np.maximum(unions, 1e-15).astype(np.double))
+    
+    # record error regions
+    # only consider FNs, as one object's FPs are some other objects FNs
+    errors = fns * (1-ious)
+    self._scaled_fn_error.append(errors[self._include_indices])  # excluding BG
+
+    # objects which don't appear in either gt or pred, should have IoU 1.0:
+    # but this heavily inflates the average IoU
     ious[np.where(unions==0)] = 2.
-    self._ious.append(ious[1:])   # only target objects, excluding BG
+    self._ious.append(ious[self._include_indices])   # only target objects, excluding BG
     
     # accumulate the confusion matrix scores (area of intersection) across frames
     if self._iou_confusion_matrix is not None:
@@ -228,18 +237,19 @@ class STQuality(object):
     fns = confusion.sum(axis=1) - intersections
     unions = intersections + fps + fns
 
-    num_classes = np.count_nonzero(unions)
+    # num_classes = np.count_nonzero(unions)
     ious_per_tgt = (intersections.astype(np.double) /
             np.maximum(unions, 1e-15).astype(np.double))
-    iou_mean = np.sum(ious_per_tgt) / num_classes
+    iou_mean = np.sum(ious_per_tgt[self._include_indices]) / len(self._include_indices)
 
     st_quality = np.sqrt(aq_mean * iou_mean)
     return {
       'STQ': float(st_quality),
       'AQ': float(aq_mean),
       'SQ': float(iou_mean),
-      "sq_per_target": ious_per_tgt[1:],  # only target objects, excluding BG
+      "sq_per_target": ious_per_tgt[self._include_indices],  # only target objects, excluding BG
       "sq_per_frame_per_target": self._ious,  # only target objects, excluding BG
+      "error_per_frame_per_target": self._scaled_fn_error, # only target objects, excluding BG
     }
 
 
