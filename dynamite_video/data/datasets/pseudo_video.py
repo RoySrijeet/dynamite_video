@@ -173,7 +173,7 @@ class PseudoVideoTrainingDataset(Dataset):
                                                 max_num_points=self.cfg.CLICKER.TRAINING.MAX_NUM_CLICKS_PER_INSTANCE,
                                                 optional_frames_fg_prob=self.cfg.CLICKER.TRAINING.OPTIONAL_FRAMES_FG_SAMPLE_PROB,
                                                 bg_masks=bg_masks,
-                                                bg_prob=0, #self.cfg.CLICKER.TRAINING.BACKGROUND_SAMPLING_PROB,
+                                                bg_prob=self.cfg.CLICKER.TRAINING.BACKGROUND_SAMPLING_PROB,
                                                 gamma=self.cfg.CLICKER.TRAINING.GAMMA,
                                                 start_t=1,
                                             )
@@ -182,9 +182,9 @@ class PseudoVideoTrainingDataset(Dataset):
             raise "One or more targets in this clip did not receive a click!"
         
         meta_info = {
-            "orig_dims": images.shape[:2],
+            "orig_dims": images.shape[2:],
             "seq_name": f"{self.name}_{index}",
-            "frame_indices": [0 for _ in range(self.clip_length)],
+            "frame_indices": [i for i in range(self.clip_length)],
             "orig_to_serial_id": orig_to_serial_id,
             "serial_to_orig_id": serial_to_orig_id, 
             "ignore_class": self.ignore_classes,
