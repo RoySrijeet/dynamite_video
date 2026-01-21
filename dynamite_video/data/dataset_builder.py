@@ -16,6 +16,8 @@ TRAINING_DATASET_BUILDERS = {
 
 EVALUATION_DATASET_BUILDERS = {
     "KITTI_STEP": KITTISTEPEvaluationDataset,
+    "DAVIS": DAVISEvaluationDataset,
+    "VIPSEG": VIPSEGEvaluationDataset,
 }
 
 def build_training_dataset(cfg):
