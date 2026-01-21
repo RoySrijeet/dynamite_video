@@ -5,6 +5,7 @@ import pycocotools.mask as mt
 
 from collections import defaultdict
 from PIL import Image
+from tqdm import tqdm
 from typing import Dict
 
 from dynamite_video.data.datasets.base import TrainingDataset, EvaluationDataset
@@ -271,6 +272,88 @@ class DAVISEvaluationDataset(EvaluationDataset):
         self.path_to_annotations = Paths.to_davis_annotations()
         self.path_to_val_imset = Paths.to_davis_val_imset()
 
+        annotations_content = self.map_davis_annotations(path_to_imset=self.path_to_val_imset, 
+                                                         MIN_MASK_AREA=cfg.ITERATIVE.TEST.MIN_MASK_AREA)
+
+        self.videos, self.meta = parse_generic_video_dataset(self.path_to_images, annotations_content) #, serialize=True)
+        del annotations_content
+        
+        self.meta["clip_length"] = self.clip_length
+        self.meta["num_overlapping_frames"] = self.num_overlapping_frames
+        self.meta["fps"] = self.fps
+        self.meta["split"] = self.split
+
+    
+    def map_davis_annotations(self, path_to_imset, MIN_MASK_AREA):
+
+        IGNORE_CLASS = [0]    # BG
+
+        # load the list of evaluation sequences as a list
+        with open(path_to_imset, 'r') as f:
+            sequences = [seq.rstrip() for seq in f.readlines()]
+        
+        sequence_annotations = []
+        max_num_instances = 0
+
+        for seq_name in tqdm(sequences, desc="Sequence", leave=False):
+
+            seq = {}
+
+            seq["dataset"] = "DAVIS"
+            seq["id"] = seq_name
+
+            # load image paths
+            seq["image_paths"] = sorted([os.path.join(seq_name, file) for file in os.listdir(os.path.join(self.path_to_images, seq_name)) if file.endswith('jpg')])
+            frame_0 = self.load_images([os.path.join(self.path_to_images, seq["image_paths"][0])])      # [T, H, W, 3]
+            
+            # video resolution
+            seq["height"] = frame_0.shape[1]
+            seq["width"] = frame_0.shape[2]
+
+            # read mask files
+            mask_filepaths = sorted([os.path.join(self.path_to_annotations, seq_name, file) for file in os.listdir(os.path.join(self.path_to_annotations, seq_name)) if file.endswith('png')])
+            
+            updated_segmentations = []
+            accepted_track_ids = {}
+
+            for mask_path in mask_filepaths:
+                updated_segmentations.append(dict())
+                
+                msk = np.asarray(Image.open(mask_path)).astype('uint8')
+                
+                # target IDs
+                object_ids = list(np.unique(msk))
+                object_ids.remove(0)    # remove BG
+
+                for obj_id in object_ids:
+                    obj_mask = (msk == obj_id).astype(np.uint8)
+                    if obj_mask.sum() >= MIN_MASK_AREA:
+                        updated_segmentations[-1][obj_id] = mt.encode(np.asfortranarray(obj_mask))["counts"].decode('utf-8')
+                        accepted_track_ids[obj_id] = obj_id
+                
+            seq["segmentations"] = updated_segmentations
+            seq["ignore_masks"] = []
+            seq["categories"] = accepted_track_ids
+            max_num_instances = max(max_num_instances, len(accepted_track_ids))
+            sequence_annotations.append(seq)
+
+        # store category id to name mapping
+        meta_info = {
+            "dataset": "DAVIS",
+            "category_labels": {
+                id: f"object_{id}" for id in range(1, max_num_instances+1)
+            },
+            "ignore_class": IGNORE_CLASS,
+            "max_instances_per_category": 1,
+            "min_mask_area": MIN_MASK_AREA,
+        }
+
+        return {
+            "sequences": sequence_annotations,
+            "meta": meta_info
+        }
+
+    
     
     def create_inference_dataset(self, single_instance=False):
         """
