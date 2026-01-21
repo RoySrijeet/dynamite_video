@@ -46,7 +46,9 @@ class DynamiteInteractiveTransformer(nn.Module):
         q_positional_encoding: str,
         max_targets_to_refine: int,
         iou_threshold: float,
-        refine_strategy:str
+        refine_strategy:str,
+        use_no_click_query: bool,
+        use_mlp_for_query_proj: bool
     ):
         """
         Args:
@@ -69,6 +71,8 @@ class DynamiteInteractiveTransformer(nn.Module):
             max_targets_to_refine: num of targets to refine in each corrective round
             iou_threshold: refine a target until threshold is reached
             refine_strategy: which target objects are chosen during rounding for refinement, between ["random", "worst"]
+            use_no_click_query: whether to use no_click_query in learnable query initialization
+            use_mlp_for_query_proj: whether to use MLP projection head in learnable query initialization
         """
         super().__init__()
 
@@ -134,7 +138,7 @@ class DynamiteInteractiveTransformer(nn.Module):
         ### QUERIES ###
 
         # query descriptor initializer from clicks
-        self.query_descriptors_initializer = AvgClicksPoolingInitializer(hidden_dim)
+        self.query_descriptors_initializer = AvgClicksPoolingInitializer(hidden_dim, use_no_click_query, use_mlp_for_query_proj)
         # projection head for raw query descriptors
         self.queries_nonlinear_projection = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
@@ -217,6 +221,9 @@ class DynamiteInteractiveTransformer(nn.Module):
         ret["max_targets_to_refine"] = cfg.CLICKER.TRAINING.MAX_NUM_INSTANCES_REFINED_PER_ROUND
         ret["iou_threshold"] = cfg.CLICKER.TRAINING.IOU_THRESHOLD
         ret["refine_strategy"] = cfg.CLICKER.TRAINING.REFINEMENT_STRATEGY
+
+        ret["use_no_click_query"] = cfg.MODEL.MASK_FORMER.USE_NO_CLICK_QUERY
+        ret["use_mlp_for_query_proj"] = cfg.MODEL.MASK_FORMER.USE_MLP_FOR_QUERY_PROJ
 
         return ret
 
