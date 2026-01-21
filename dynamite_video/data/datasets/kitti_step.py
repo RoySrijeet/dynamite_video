@@ -91,6 +91,7 @@ def map_kitti_step_annotations(cfg, content, MIN_MASK_AREA):
     
     # store category id to name mapping
     meta_info = {
+        "dataset": "KITTI_STEP",
         "category_labels": {
             int(id): name for id, name in content["meta"]["category_labels"].items()
         },
