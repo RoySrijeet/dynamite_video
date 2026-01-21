@@ -249,37 +249,37 @@ class Paths:
     #     """Path to Cityscapes VPS val split JSON annotation file"""
     #     return os.path.join(cls.to_cityscapes_vps_root(), "json_anno/val/im_all_info_val_city_vps.json")
     
-    # # --------------------- DAVIS --------------------- #
+    # --------------------- DAVIS --------------------- #
 
-    # @classmethod
-    # def to_davis_root(cls):
-    #     """Path to DAVIS-2017 root directory"""
-    #     return os.path.join(cls.to_datasets_root(), "DAVIS/DAVIS-2017-trainval")
+    @classmethod
+    def to_davis_root(cls):
+        """Path to DAVIS-2017 root directory"""
+        return os.path.join(cls.to_datasets_root(), "DAVIS/DAVIS-2017-trainval")
 
-    # @classmethod
-    # def to_davis_images(cls):
-    #     """Path to DAVIS-2017 JPEGImages"""
-    #     return os.path.join(cls.to_davis_root(), "JPEGImages/480p")
+    @classmethod
+    def to_davis_images(cls):
+        """Path to DAVIS-2017 JPEGImages"""
+        return os.path.join(cls.to_davis_root(), "JPEGImages/480p")
     
-    # @classmethod
-    # def to_davis_annotations(cls):
-    #     """Path to DAVIS-2017 Annotations"""
-    #     return os.path.join(cls.to_davis_root(), "Annotations/480p")
+    @classmethod
+    def to_davis_annotations(cls):
+        """Path to DAVIS-2017 Annotations"""
+        return os.path.join(cls.to_davis_root(), "Annotations/480p")
     
-    # @classmethod
-    # def to_davis_train_annotations_json(cls):
-    #     """Path to DAVIS-2017 Training Annotations JSON file"""
-    #     return os.path.join(cls.to_datasets_root(), "davis_semisupervised.json")
+    @classmethod
+    def to_davis_train_annotations_json(cls):
+        """Path to DAVIS-2017 Training Annotations JSON file"""
+        return os.path.join(cls.to_datasets_root(), "davis_semisupervised.json")
     
-    # @classmethod
-    # def to_davis_train_imset(cls):
-    #     """Path to DAVIS-2017 training set list file"""
-    #     return os.path.join(cls.to_davis_root(), "ImageSets/2017/train.txt")
+    @classmethod
+    def to_davis_train_imset(cls):
+        """Path to DAVIS-2017 training set list file"""
+        return os.path.join(cls.to_davis_root(), "ImageSets/2017/train.txt")
     
-    # @classmethod
-    # def to_davis_val_imset(cls):
-    #     """Path to DAVIS-2017 training set list file"""
-    #     return os.path.join(cls.to_davis_root(), "ImageSets/2017/val.txt")
+    @classmethod
+    def to_davis_val_imset(cls):
+        """Path to DAVIS-2017 training set list file"""
+        return os.path.join(cls.to_davis_root(), "ImageSets/2017/val.txt")
     
     
     #  # --------------------- MOSE --------------------- #
