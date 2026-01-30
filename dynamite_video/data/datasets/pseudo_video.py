@@ -1,7 +1,6 @@
 import cv2
 import imgaug
 import imgaug.augmenters as iaa
-import imgaug.augmenters.color as iacolor
 import json
 import numpy as np
 import os
@@ -63,7 +62,6 @@ class PseudoVideoTrainingDataset(Dataset):
         # path to panoptic maps
         self.path_to_annotations = path_to_annotations
         assert os.path.exists(path_to_annotations), f"{dataset_name} masks not found at: {self.path_to_annotations}"
-        # TODO - fpack reader, if necessary
         
         # read category information
         self.parse_json_category(path_to_categories_info)
@@ -79,6 +77,7 @@ class PseudoVideoTrainingDataset(Dataset):
         self.output_dims = cfg.INPUT.AUGMENTATION.IMAGE_SIZE
         
         # color augmentations
+        # NOTE: imgaug acts freaky with multiple workers (due to global cache _LUT_CACHE); set cfg.DATALOADER.NUM_WORKERS = 0
         self.color_augmenter = iaa.Sequential([
             # color tone and vividness variation simulating white balance settings           
             iaa.AddToHueAndSaturation(value_hue=(-12, 12), value_saturation=(-12, 12)),
@@ -90,7 +89,11 @@ class PseudoVideoTrainingDataset(Dataset):
 
         # geometric transformations
         # apply affine transformations; uses default behaviour and assigns 0 to any "new" pixels created
-        self.augmentation_affine = iaa.Affine(scale=(0.9, 1.1), rotate=(-20, 20), shear=(-10, 10))
+        self.deterministic = cfg.TRAINING.PRETRAIN_DETERMINISTIC_AUG
+        if self.deterministic:
+            self.augmentation_affine = iaa.Affine(scale=(0.9, 1.1), rotate=(-8, 8), shear=(-5, 5))
+        else:
+            self.augmentation_affine = iaa.Affine(scale=(0.9, 1.1), rotate=(-20, 20), shear=(-10, 10))
         self.augmentation_fixed_crop = iaa.CropToFixedSize(self.output_dims[0], self.output_dims[1])
         self.augmentation_min_dims = [self.output_dims[0], self.output_dims[0] + 32, self.output_dims[0] + 64]
 
@@ -143,6 +146,7 @@ class PseudoVideoTrainingDataset(Dataset):
         # IDs of target object in the pseudo-video
         orig_object_ids = list(np.unique(orig_panoptic_masks))
         orig_object_ids = [obj_id for obj_id in orig_object_ids if obj_id not in self.ignore_classes]
+        assert len(orig_object_ids) >= 1, f"no objects in the sampled clip."
         # serialize object ids
         orig_to_serial_id, serial_to_orig_id = serialize_object_ids(orig_object_ids)
         
@@ -229,8 +233,8 @@ class PseudoVideoTrainingDataset(Dataset):
             # info about the clip and its source video
             "meta": meta_info,
         }
-        
     
+
     def apply_geometric_augmentations(self, image: np.ndarray, panoptic_mask: np.ndarray):
         """
         Apply geomtric transformations (affine), resize, and crop to target resolution.
@@ -240,6 +244,14 @@ class PseudoVideoTrainingDataset(Dataset):
             image: np.ndarray, shape [H, W, 3]
             panoptic_mask: np.ndarray, shape [H, W]
         """
+        # deterministic augmentation applies the same affine transformations on successive frames
+        min_dim = None
+        if self.deterministic:
+            self.augmentation_affine.to_deterministic()
+            self.augmentation_fixed_crop.to_deterministic()
+            min_dim = self.augmentation_min_dims[torch.randint(len(self.augmentation_min_dims), (1,)).item()]
+            
+
         # prepare imgaug segmentation object; treats its values as categorical labels, 
         # instead of continuous pixel intensities when applying interpolation (NN)
         seg = imgaug.SegmentationMapsOnImage(panoptic_mask.astype(np.int32), shape=image.shape)
@@ -248,19 +260,22 @@ class PseudoVideoTrainingDataset(Dataset):
 
         for _ in range(self.clip_length):
             # affine augmentation
-            affine_image, affine_seg = self.augmentation_affine(image=image, segmentation_maps=seg)
-            affine_mask = affine_seg.get_arr()  # [H, W], int32
+            _image, _seg = self.augmentation_affine(image=image, segmentation_maps=seg)
+            _mask = _seg.get_arr()  # [H, W], int32
 
             # resize
-            resized_image, resized_mask = self.random_resize(affine_image, affine_mask)
+            _image, _mask = self.random_resize(_image, _mask, min_dim=min_dim)
             
             # crop
-            resized_seg = imgaug.SegmentationMapsOnImage(resized_mask, shape=resized_image.shape)
-            cropped_image, cropped_seg = self.augmentation_fixed_crop(image=resized_image, segmentation_maps=resized_seg)
-            cropped_mask = cropped_seg.get_arr()  # [H, W]
+            _seg = imgaug.SegmentationMapsOnImage(_mask, shape=_image.shape)
+            _image, _seg = self.augmentation_fixed_crop(image=_image, segmentation_maps=_seg)
+            _mask = _seg.get_arr()  # [H, W]
 
-            seq_images.append(cropped_image)
-            seq_panoptic_masks.append(cropped_mask)
+            seq_images.append(_image)
+            seq_panoptic_masks.append(_mask)
+
+            if self.deterministic:
+                image, seg = _image, _seg
 
         # stack over time
         seq_images = np.stack(seq_images, axis=0)              # [T, H, W, 3]
@@ -268,7 +283,7 @@ class PseudoVideoTrainingDataset(Dataset):
         return seq_images, seq_panoptic_masks
 
 
-    def random_resize(self, image: np.ndarray, masks: np.ndarray):
+    def random_resize(self, image: np.ndarray, masks: np.ndarray, min_dim: int=None):
             """
             Resize while preserving aspect ratio
 
@@ -281,7 +296,8 @@ class PseudoVideoTrainingDataset(Dataset):
             lower_size = float(min(dims))
             higher_size = float(max(dims))
 
-            min_dim = self.augmentation_min_dims[torch.randint(len(self.augmentation_min_dims), (1,)).item()]
+            if min_dim is None:
+                min_dim = self.augmentation_min_dims[torch.randint(len(self.augmentation_min_dims), (1,)).item()]
             scale_factor = min_dim / lower_size
             # if (higher_size * scale_factor) > 1333:
             #     scale_factor = 1333 / higher_size
@@ -422,6 +438,7 @@ class ADE20KPanopticDataset(PseudoVideoTrainingDataset):
 #     cfg.CLICKER.TRAINING.GAMMA = 0.7
 #     cfg.TRAINING = CN()
 #     cfg.TRAINING.CLIP_LENGTH = 4
+#     cfg.TRAINING.PRETRAIN_DETERMINISTIC_AUG = True
     
 #     coco_dataset = COCOPanopticDataset(cfg, 20000)
 #     data_loader = DataLoader(coco_dataset, batch_size=4, num_workers=4, collate_fn=collate_fn_pretrain)
