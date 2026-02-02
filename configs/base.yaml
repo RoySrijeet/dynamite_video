@@ -179,6 +179,8 @@ TRAINING:
   DATASET_LIST: [KITTI_STEP]
   # proportion of training sample from each dataset
   DATASET_WEIGHTS: [1]
+  # max num of instances in a clip
+  MAX_NUM_INSTANCES: 30
   # resume or load (bool), specified by cmd line argument `--resume`
   RESUME:
   
