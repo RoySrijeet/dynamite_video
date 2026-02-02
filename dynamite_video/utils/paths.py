@@ -110,6 +110,34 @@ class Paths:
         """Path to COCO category info"""
         return os.path.join(cls.to_coco_root(), "coco_panoptic_categories.json")
     
+
+    # --------------------- COCO+LVIS --------------------- #
+
+    @classmethod
+    def to_coco_lvis_root(cls):
+        """Path to LVIS root directory"""
+        return os.path.join(cls.to_datasets_root(), "LVIS")
+
+    @classmethod
+    def to_coco_lvis_images(cls):
+        """Path to LVIS image files (JPGs)"""
+        return os.path.join(cls.to_coco_lvis_root(), "train/images")
+    
+    @classmethod
+    def to_coco_lvis_masks(cls):
+        """Path to LVIS mask files (PNGs)"""
+        return os.path.join(cls.to_coco_lvis_root(), "train/masks")
+
+    @classmethod
+    def to_coco_lvis_pickle_file(cls):
+        """ """
+        return os.path.join(cls.to_coco_lvis_root(), "coco_lvis_combined.pickle")
+    
+    @classmethod
+    def to_coco_lvis_annotations(cls):
+        """Path to COCO+LVIS annotation"""
+        return os.path.join(cls.to_coco_lvis_root(), "train/hannotation.pickle")
+    
     
     # --------------------- KITTI-STEP --------------------- #
 
