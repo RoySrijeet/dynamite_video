@@ -25,5 +25,6 @@ from .vipseg import (
 
 from .pseudo_video import (
     ADE20KPanopticDataset,
-    COCOPanopticDataset
+    COCOPanopticDataset,
+    COCOLVISPanopticDataset,
 )

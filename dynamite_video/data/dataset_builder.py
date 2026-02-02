@@ -8,6 +8,7 @@ from dynamite_video.data.datasets import *
 TRAINING_DATASET_BUILDERS = {
     "ADE20K": ADE20KPanopticDataset,
     "COCO": COCOPanopticDataset,
+    "COCO_LVIS": COCOLVISPanopticDataset,
     "BURST": BURSTTrainingDataset,
     "DAVIS": DAVISTrainingDataset,
     "KITTI_STEP": KITTISTEPTrainingDataset,

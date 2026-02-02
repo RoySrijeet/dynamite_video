@@ -4,12 +4,12 @@ import imgaug.augmenters as iaa
 import json
 import numpy as np
 import os
-import sys
-sys.path.append(os.environ["DYNAMITE_VIDEO_WORKSPACE"])
+import pycocotools.mask as mt
 import random
 import torch
 
 from torch.utils.data import Dataset
+from typing import Mapping
 
 from dynamite_video.data.utils.clicker import get_clicks_coords
 from dynamite_video.data.utils.data_utils import serialize_object_ids
@@ -28,11 +28,12 @@ class PseudoVideoTrainingDataset(Dataset):
             self, 
             cfg, 
             dataset_name: str, 
-            path_to_images: str,
-            path_to_annotations: str,
-            path_to_json_annotations: str,
-            path_to_categories_info: str,
-            num_samples: int,
+            path_to_images: str=None,
+            path_to_annotations: str=None,
+            path_to_json_annotations: str=None,
+            path_to_categories_info: str=None,
+            num_samples: int=0,
+            dataset_dicts: Mapping=None,
     ):
         """
         Args:
@@ -43,12 +44,15 @@ class PseudoVideoTrainingDataset(Dataset):
             path_to_json_annotations: str, path to JSON file with annotation info
             path_to_categories_info: str, path to JSON file with dataset category info
             num_samples: int, number of training samples from the dataset
+            dataset_dicts: Mapping, detectron2-style dictionary of dataset images
         """
         
         self.cfg = cfg
         self.name = dataset_name
         self.clip_length = cfg.TRAINING.CLIP_LENGTH
         self.num_samples = num_samples
+        self.max_num_instances = cfg.TRAINING.MAX_NUM_INSTANCES
+        self.MIN_MASK_AREA = cfg.TRAINING.MIN_MASK_AREA
 
         # path to training images
         self.path_to_images = path_to_images
@@ -62,14 +66,19 @@ class PseudoVideoTrainingDataset(Dataset):
         # path to panoptic maps
         self.path_to_annotations = path_to_annotations
         assert os.path.exists(path_to_annotations), f"{dataset_name} masks not found at: {self.path_to_annotations}"
-        
-        # read category information
-        self.parse_json_category(path_to_categories_info)
 
-        # read annotations from json
-        parsed_annotations = self.parse_json_annotations(path_to_json_annotations)
-        # filter out zero instance images
-        self.image_samples = self.filter_zero_instance_images(parsed_annotations)
+        if dataset_dicts is not None:
+            assert self.name == "coco_lvis"
+            self.image_samples = self.prepare_cocolvis_samples(dataset_dicts)
+        
+        else:
+            # read category information
+            self.parse_json_category(path_to_categories_info)
+            # read annotations from json
+            parsed_annotations = self.parse_json_annotations(path_to_json_annotations)
+            # filter out zero instance images
+            self.image_samples = self.filter_zero_instance_images(parsed_annotations)
+        
         self.image_ids = list(self.image_samples.keys())
         self.fallback_candidates = set(self.image_ids)
 
@@ -91,7 +100,7 @@ class PseudoVideoTrainingDataset(Dataset):
         # apply affine transformations; uses default behaviour and assigns 0 to any "new" pixels created
         self.deterministic = cfg.TRAINING.PRETRAIN_DETERMINISTIC_AUG
         if self.deterministic:
-            self.augmentation_affine = iaa.Affine(scale=(0.9, 1.1), rotate=(-8, 8), shear=(-5, 5))
+            self.augmentation_affine = iaa.Affine(scale=(0.9, 1.1), rotate=(-15, 15), shear=(-10, 10))
         else:
             self.augmentation_affine = iaa.Affine(scale=(0.9, 1.1), rotate=(-20, 20), shear=(-10, 10))
         self.augmentation_fixed_crop = iaa.CropToFixedSize(self.output_dims[0], self.output_dims[1])
@@ -122,17 +131,28 @@ class PseudoVideoTrainingDataset(Dataset):
 
         # read image file
         image = cv2.imread(os.path.join(self.path_to_images, image_struct["file_name"]), cv2.IMREAD_COLOR)  # [H, W, 3] (BGR)
+        if image is None:
+            raise FileNotFoundError(f"Could not read image {os.path.join(self.path_to_images, image_struct['file_name'])}!")
         if self.cfg.INPUT.RGB:
             # BGR -> RGB
             image = image[:, :, ::-1]
         # apply color augmentation
         image = self.color_augmenter(image=image)
 
-        # read PNG mask
-        png_mask = cv2.imread(os.path.join(self.path_to_annotations, image_struct["file_name_png"]), cv2.IMREAD_COLOR)  # [H, W, 3] (BGR)
-        # convert mask to panoptic map with target IDs as labels
-        png_mask = png_mask.astype(np.int64)
-        png_mask = (256 ** 2 * png_mask[:, :, 0]) + (256 * png_mask[:, :, 1]) + png_mask[:, :, 2]   # [H, W]
+        if self.name == "coco_lvis":
+            # read RLE mask
+            png_mask = np.zeros((image_struct["height"], image_struct["width"]), dtype=np.int64)
+            for seg in image_struct["segments"]:
+                _msk = np.ascontiguousarray(mt.decode(seg["segmentation"])).astype(np.bool_)
+                png_mask[_msk] = seg["id"]+1
+        else:
+            # read PNG mask
+            png_mask = cv2.imread(os.path.join(self.path_to_annotations, image_struct["file_name_png"]), cv2.IMREAD_COLOR)  # [H, W, 3] (BGR)
+            if png_mask is None:
+                raise FileNotFoundError(f"Could not read mask {os.path.join(self.path_to_annotations, image_struct['file_name_png'])}!")
+            # convert mask to panoptic map with target IDs as labels
+            png_mask = png_mask.astype(np.int64)
+            png_mask = (256 ** 2 * png_mask[:, :, 0]) + (256 * png_mask[:, :, 1]) + png_mask[:, :, 2]   # [H, W]
 
         # apply random horizontal flip
         if random.random() < 0.5:
@@ -142,18 +162,28 @@ class PseudoVideoTrainingDataset(Dataset):
         # generate pseudo-video from current image
         images, orig_panoptic_masks = self.apply_geometric_augmentations(image, png_mask)
         images = np.transpose(images, (0, 3, 1, 2))   # [T, H, W, 3] -> [T, 3, H, W]
-
-        # IDs of target object in the pseudo-video
-        orig_object_ids = list(np.unique(orig_panoptic_masks))
-        orig_object_ids = [obj_id for obj_id in orig_object_ids if obj_id not in self.ignore_classes]
-        assert len(orig_object_ids) >= 1, f"no objects in the sampled clip."
-        # serialize object ids
-        orig_to_serial_id, serial_to_orig_id = serialize_object_ids(orig_object_ids)
+        
+        # IDs of target objects in the pseudo-video
+        ids, counts = np.unique(orig_panoptic_masks, return_counts=True)
+        # remove ignored ids (and optionally background id 0)
+        valid = ~np.isin(ids, list(self.ignore_classes))
+        ids, counts = ids[valid], counts[valid]
+        assert ids.size >= 1, f"no objects found in the sampled clip."
+        # remove small objects
+        small = ids[counts < self.MIN_MASK_AREA]
+        if small.size:
+            orig_panoptic_masks[np.isin(orig_panoptic_masks, small)] = 0
+        # remaining object ids
+        orig_object_ids = ids[counts >= self.MIN_MASK_AREA].tolist()
+        
+        # select upto a set number of maximum objects
+        N = min(len(orig_object_ids), self.max_num_instances)
+        orig_object_ids = random.sample(orig_object_ids, N)
         
         # serialize object ids in panoptic map and obtain binary masks
+        orig_to_serial_id, serial_to_orig_id = serialize_object_ids(orig_object_ids)
         panoptic_masks = np.zeros_like(orig_panoptic_masks, dtype=np.uint8)
         T,H,W = panoptic_masks.shape
-        N = len(orig_object_ids)
         binary_masks = np.zeros((T,N,H,W), dtype=np.uint8)
         for orig_id, serial_id in orig_to_serial_id.items():
             panoptic_masks[np.where(orig_panoptic_masks==orig_id)] = serial_id
@@ -359,6 +389,20 @@ class PseudoVideoTrainingDataset(Dataset):
         return parsed_annotations
     
 
+    def prepare_cocolvis_samples(self, images_annotations):
+        self.categories = {1: "thing"}
+        self.thing_classes, self.stuff_classes = [1], []
+        
+        parsed_annotations = {}
+        for entry in images_annotations:
+            image_id = entry["image_id"]
+            entry["file_name"] = f"{image_id}.jpg"
+            entry["segments"] = entry["annotations"]
+            entry.pop("annotations", None)
+            parsed_annotations[entry["image_id"]] = entry
+        return parsed_annotations
+    
+
     def parse_json_category(self, path_to_json: str):
         """
         Given path to a JSON file with dataset category info, read:
@@ -398,6 +442,24 @@ class COCOPanopticDataset(PseudoVideoTrainingDataset):
             num_samples=num_samples,
         )
 
+class COCOLVISPanopticDataset(PseudoVideoTrainingDataset):
+    def __init__(self, cfg, num_samples):
+
+        pickle_file_path = Paths.to_coco_lvis_pickle_file()
+        if os.path.exists(pickle_file_path):
+            print(f"Found pickle file:{pickle_file_path}")
+            import pickle
+            with open(pickle_file_path, 'rb') as f:
+                dataset_dicts = pickle.load(f)
+        
+        super().__init__(
+            cfg=cfg,
+            dataset_name="coco_lvis",
+            dataset_dicts=dataset_dicts,
+            path_to_images=Paths.to_coco_lvis_images(),
+            path_to_annotations=Paths.to_coco_lvis_masks(),
+            num_samples=num_samples,
+        )
 
 class ADE20KPanopticDataset(PseudoVideoTrainingDataset):
     def __init__(self, cfg, num_samples):

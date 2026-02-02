@@ -28,7 +28,7 @@ def seed_rngs(seed: int) -> None:
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(str(seed))
+    torch.cuda.manual_seed_all(seed)
 
 
 def evaluation_pipeline(args, cfg):
@@ -41,9 +41,6 @@ def evaluation_pipeline(args, cfg):
 
 
 def training_pipeline(args, cfg):
-    
-    seed_rngs(cfg.SEED)
-
     # W&B
     if cfg.WANDB.ENABLE and comm.get_rank()==0:
         wandb_init(cfg)
@@ -67,6 +64,7 @@ def main(args):
 
     # setup experiment configuration
     cfg = load_config(args)
+    seed_rngs(cfg.SEED)
     
     if args.eval_only:
         evaluation_pipeline(args, cfg)
