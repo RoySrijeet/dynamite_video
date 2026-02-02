@@ -113,10 +113,10 @@ class DAVISTrainingDataset(TrainingDataset):
                 updated_segmentations.append(dict())
                 for track_id, seg in segs_t.items():
                     # only consider instances with a minimum mask area
-                    if self.mask_area(seg, img_dims) >= MIN_MASK_AREA:
-                        # store instance mask
-                        updated_segmentations[-1][int(track_id)] = seg
-                        accepted_track_ids.add(track_id)
+                    # if self.mask_area(seg, img_dims) >= MIN_MASK_AREA:
+                    # store instance mask
+                    updated_segmentations[-1][int(track_id)] = seg
+                    accepted_track_ids.add(track_id)
             
             
             # if none of the instances are large enough, exclude this sequence
@@ -205,10 +205,10 @@ class DAVISTrainingDataset(TrainingDataset):
                 for i in instances:
                     _m = (mask==i).astype(dtype='uint8')
                     # check mask area
-                    if self.mask_area_array(_m) >= MIN_MASK_AREA:
-                        # if mask larger than threshold, keep it
-                        binary_masks[int(i)] = mt.encode(np.asfortranarray(_m))
-                        seq_instances.append(i)
+                    # if self.mask_area_array(_m) >= MIN_MASK_AREA:
+                    # # if mask larger than threshold, keep it
+                    binary_masks[int(i)] = mt.encode(np.asfortranarray(_m))
+                    seq_instances.append(i)
                 segmentations.append(binary_masks)
 
             seq_instances = set(seq_instances)
@@ -327,9 +327,9 @@ class DAVISEvaluationDataset(EvaluationDataset):
 
                 for obj_id in object_ids:
                     obj_mask = (msk == obj_id).astype(np.uint8)
-                    if obj_mask.sum() >= MIN_MASK_AREA:
-                        updated_segmentations[-1][obj_id] = mt.encode(np.asfortranarray(obj_mask))["counts"].decode('utf-8')
-                        accepted_track_ids[obj_id] = obj_id
+                    # if obj_mask.sum() >= MIN_MASK_AREA:
+                    updated_segmentations[-1][obj_id] = mt.encode(np.asfortranarray(obj_mask))["counts"].decode('utf-8')
+                    accepted_track_ids[obj_id] = obj_id
                 
             seq["segmentations"] = updated_segmentations
             seq["ignore_masks"] = []

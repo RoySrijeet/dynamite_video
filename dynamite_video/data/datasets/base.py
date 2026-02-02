@@ -64,6 +64,8 @@ class TrainingDataset(Dataset, ABC):
 
         self.sample_image_dims = []
         self.sample_object_counts = []
+        self.MIN_MASK_AREA = self.cfg.TRAINING.MIN_MASK_AREA
+        self.MAX_NUM_INSTANCES = self.cfg.TRAINING.MAX_NUM_INSTANCES
 
         self.fpack_reader = None
     
@@ -138,6 +140,18 @@ class TrainingDataset(Dataset, ABC):
         if self.cfg.INPUT.RGB:
             # BGR -> RGB
             images = np.flip(images, 1).copy()
+
+        # remove small objects
+        areas = binary_masks.sum(axis=(2,3))
+        keep = (areas >= self.MIN_MASK_AREA).any(axis=0)
+        assert keep.any(), f"All instances are below MIN_MASK_AREA (={self.MIN_MASK_AREA}) across all frames"
+        binary_masks = binary_masks[:, keep, :, :]
+
+        # select upto a set number of maximum objects
+        if binary_masks.shape[1] > self.MAX_NUM_INSTANCES:
+            keep = random.sample(range(binary_masks.shape[1]), self.MAX_NUM_INSTANCES)
+            keep.sort()
+            binary_masks = binary_masks[:, keep, :, :]
         
         # foreground masks
         T, _, H, W = binary_masks.shape

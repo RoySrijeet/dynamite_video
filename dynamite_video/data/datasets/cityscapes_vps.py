@@ -104,11 +104,11 @@ class CITYSCAPESVPSTrainingDataset(TrainingDataset):
                 # add instance masks of the salient classes
                 for track_id, seg in segs_t.items():
                     # only consider instances with a minimum mask area
-                    if self.mask_area(seg, img_dims) >= MIN_MASK_AREA:
-                        updated_segmentations[-1][int(track_id)] = seg
-                        accepted_track_ids[int(track_id)] = seq['categories'][track_id]
-                        # note the salient classes present in the frame
-                        salient_classes[-1].add(seq['categories'][track_id])
+                    # if self.mask_area(seg, img_dims) >= MIN_MASK_AREA:
+                    updated_segmentations[-1][int(track_id)] = seg
+                    accepted_track_ids[int(track_id)] = seq['categories'][track_id]
+                    # note the salient classes present in the frame
+                    salient_classes[-1].add(seq['categories'][track_id])
 
             # panoptic masks
             for fr_idx, pano_masks in enumerate(seq["semantic_segmentations"]):
@@ -120,11 +120,11 @@ class CITYSCAPESVPSTrainingDataset(TrainingDataset):
                     
                     # skip any annotation that belongs to the salient instances present in this frame
                     if int(class_id) not in salient_classes[fr_idx]:
-                        if self.mask_area(pano_seg, img_dims) >= MIN_MASK_AREA:
-                            # store panoptic mask with unique ID per 'stuff' class
-                            stuff_track_id = int(class_id)
-                            updated_segmentations[fr_idx][stuff_track_id] = pano_seg
-                            accepted_track_ids[int(stuff_track_id)] = int(class_id)
+                        # if self.mask_area(pano_seg, img_dims) >= MIN_MASK_AREA:
+                        # store panoptic mask with unique ID per 'stuff' class
+                        stuff_track_id = int(class_id)
+                        updated_segmentations[fr_idx][stuff_track_id] = pano_seg
+                        accepted_track_ids[int(stuff_track_id)] = int(class_id)
             
             
             # if none of the instances are large enough, exclude this sequence

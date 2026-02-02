@@ -98,10 +98,10 @@ class BURSTTrainingDataset(TrainingDataset):
                 updated_segmentations.append(dict())
                 for track_id, seg in segs_t.items():
                     # only consider instances with a minimum mask area
-                    if self.mask_area(seg['rle'], img_dims) >= MIN_MASK_AREA:
-                        # store instance mask
-                        updated_segmentations[-1][int(track_id)] = seg['rle']
-                        accepted_track_ids.add(track_id)
+                    # if self.mask_area(seg['rle'], img_dims) >= MIN_MASK_AREA:
+                    # store instance mask
+                    updated_segmentations[-1][int(track_id)] = seg['rle']
+                    accepted_track_ids.add(track_id)
 
             # if none of the instances are large enough, exclude this sequence
             if not accepted_track_ids:

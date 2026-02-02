@@ -121,10 +121,10 @@ class PUMAVOSTrainingDataset(TrainingDataset):
                 for i in instances:
                     _m = (mask==i).astype(dtype='uint8')
                     # check mask area
-                    if self.mask_area(_m) >= MIN_MASK_AREA:
-                        # if mask larger than threshold, keep it
-                        binary_masks[int(i)] = mt.encode(np.asfortranarray(_m))
-                        seq_instances.append(i)
+                    # if self.mask_area(_m) >= MIN_MASK_AREA:
+                    # if mask larger than threshold, keep it
+                    binary_masks[int(i)] = mt.encode(np.asfortranarray(_m))
+                    seq_instances.append(i)
                 segmentations.append(binary_masks)
 
             seq_instances = set(seq_instances)

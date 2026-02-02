@@ -140,14 +140,14 @@ class VIPSEGTrainingDataset(TrainingDataset):
                     # extract binary mask
                     _m = (mask==inst_id).astype(dtype='uint8')
                     # check mask area
-                    if _m.sum() >= MIN_MASK_AREA:
-                        # encode mask array as RLE
-                        binary_masks[int(inst_id)] = mt.encode(np.asfortranarray(_m))
-                        if (inst_id-1) in seq["stuff_classes"]:
-                            accepted_stuff_classes.add(int(inst_id))
-                        else:
-                            # instance belongs to a "thing" class
-                            accepted_thing_ids.add(int(inst_id))
+                    # if _m.sum() >= MIN_MASK_AREA:
+                    # encode mask array as RLE
+                    binary_masks[int(inst_id)] = mt.encode(np.asfortranarray(_m))
+                    if (inst_id-1) in seq["stuff_classes"]:
+                        accepted_stuff_classes.add(int(inst_id))
+                    else:
+                        # instance belongs to a "thing" class
+                        accepted_thing_ids.add(int(inst_id))
                 
                 segmentations.append(binary_masks)
             
@@ -159,6 +159,8 @@ class VIPSEGTrainingDataset(TrainingDataset):
             entry["categories"].update({k:k for k in accepted_stuff_classes})
 
             sequence_annotations.append(entry)
+            if len(sequence_annotations) == 10:
+                break
 
         return {
             "sequences": sequence_annotations,
@@ -287,14 +289,14 @@ class VIPSEGEvaluationDataset(EvaluationDataset):
                     # extract binary mask
                     _m = (mask==inst_id).astype(dtype='uint8')
                     # check mask area
-                    if _m.sum() >= MIN_MASK_AREA:
-                        # encode mask array as RLE
-                        binary_masks[int(inst_id)] = mt.encode(np.asfortranarray(_m))["counts"].decode('utf-8')
-                        if inst_id in stuff_list:
-                            accepted_stuff_classes.add(int(inst_id))
-                        else:
-                            # instance belongs to a "thing" class
-                            accepted_thing_ids.add(int(inst_id))
+                    # if _m.sum() >= MIN_MASK_AREA:
+                    # encode mask array as RLE
+                    binary_masks[int(inst_id)] = mt.encode(np.asfortranarray(_m))["counts"].decode('utf-8')
+                    if inst_id in stuff_list:
+                        accepted_stuff_classes.add(int(inst_id))
+                    else:
+                        # instance belongs to a "thing" class
+                        accepted_thing_ids.add(int(inst_id))
                 
                 segmentations.append(binary_masks)
             

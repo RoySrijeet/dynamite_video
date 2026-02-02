@@ -58,10 +58,10 @@ def map_kitti_step_annotations(cfg, content, MIN_MASK_AREA):
                 if int(class_id) in THING_CLASSES:
                     continue 
                 
-                if mask_area(sem_seg_rle, img_dims) >= MIN_MASK_AREA:
-                    track_id = int(class_id) * MAX_INSTANCES_PER_CATEGORY
-                    updated_segmentations[-1][track_id] = sem_seg_rle
-                    accepted_track_ids[track_id] = int(class_id)
+                #if mask_area(sem_seg_rle, img_dims) >= MIN_MASK_AREA:
+                track_id = int(class_id) * MAX_INSTANCES_PER_CATEGORY
+                updated_segmentations[-1][track_id] = sem_seg_rle
+                accepted_track_ids[track_id] = int(class_id)
 
             if len(ignore_masks[-1]) == 0:
                 # if no void mask found, add an empty one
@@ -73,13 +73,13 @@ def map_kitti_step_annotations(cfg, content, MIN_MASK_AREA):
         for fr_idx, fr_inst_masks in enumerate(seq["segmentations"]):
             for track_id, inst_rle in fr_inst_masks.items():
 
-                if mask_area(inst_rle, img_dims) >= MIN_MASK_AREA:
-                    # id of the class the instance belongs to
-                    class_id = seq['categories'][track_id]
-                    # new track ID
-                    new_track_id = class_id * MAX_INSTANCES_PER_CATEGORY + int(track_id)
-                    updated_segmentations[fr_idx][new_track_id] = inst_rle
-                    accepted_track_ids[new_track_id] = seq['categories'][track_id]
+                # if mask_area(inst_rle, img_dims) >= MIN_MASK_AREA:
+                # id of the class the instance belongs to
+                class_id = seq['categories'][track_id]
+                # new track ID
+                new_track_id = class_id * MAX_INSTANCES_PER_CATEGORY + int(track_id)
+                updated_segmentations[fr_idx][new_track_id] = inst_rle
+                accepted_track_ids[new_track_id] = seq['categories'][track_id]
         
 
         seq["segmentations"] = updated_segmentations
