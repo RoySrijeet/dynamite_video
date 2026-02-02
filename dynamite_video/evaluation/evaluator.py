@@ -67,6 +67,7 @@ class Evaluator:
                                     iou_threshold=self.iou_threshold,
                                     max_interactions=self.max_interactions,
                                     max_rounds=self.max_rounds,
+                                    eval_strategy=self.eval_strategy,
                                     output_dir=self.output_dir,
                                     seed_id=self.seed_id,
                                     save_vis=self.save_vis
@@ -75,21 +76,11 @@ class Evaluator:
             with open(os.path.join(self.output_dir, f"metrics_{dataset_name}.yaml"), 'w') as f:
                 yaml.dump(dict(dataset_result), f)
         
-            # debug
-            TRAIN_IDS = ['0000', '0001', '0003', '0004', '0005', '0009', '0011', '0012', '0015', '0017', '0019', '0020']
-            avg_stq_training = 0
-            avg_aq_training = 0
-            avg_sq_training = 0
-            avg_stq_val = 0
-            avg_aq_val = 0
-            avg_sq_val = 0
             avg_stq = 0
             avg_aq = 0
             avg_sq = 0
             
             num_vids = 0
-            num_train_vids = 0
-            num_val_vids = 0
             for vid, res in dataset_result.items():
                 self.logger.info(f"Video: {vid}")
                 self.logger.info(f"Scores: {res}")
@@ -97,29 +88,6 @@ class Evaluator:
                 avg_aq += res["AQ"]
                 avg_sq += res["SQ"]
                 num_vids += 1
-
-                if vid in TRAIN_IDS:
-                    avg_stq_training += res["STQ"]
-                    avg_aq_training += res["AQ"]
-                    avg_sq_training += res["SQ"]
-                    num_train_vids += 1
-                else:
-                    avg_stq_val += res["STQ"]
-                    avg_aq_val += res["AQ"]
-                    avg_sq_val += res["SQ"]
-                    num_val_vids += 1
-            
-            if num_train_vids > 0:
-                self.logger.info(f"Training split: ")
-                self.logger.info(f"Average STQ: {avg_stq_training / num_train_vids}")
-                self.logger.info(f"Average AQ: {avg_aq_training / num_train_vids}")
-                self.logger.info(f"Average SQ: {avg_sq_training / num_train_vids}")
-
-            if num_val_vids > 0:
-                self.logger.info(f"Validation split: ")
-                self.logger.info(f"Average STQ: {avg_stq_val / num_val_vids}")
-                self.logger.info(f"Average AQ: {avg_aq_val / num_val_vids}")
-                self.logger.info(f"Average SQ: {avg_sq_val / num_val_vids}")
             
             self.logger.info(f"All videos: ")
             self.logger.info(f"Average STQ: {avg_stq / num_vids}")
