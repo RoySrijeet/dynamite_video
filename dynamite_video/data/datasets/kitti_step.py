@@ -203,8 +203,8 @@ class KITTISTEPEvaluationDataset(EvaluationDataset):
             val_anno = {"sequences": []}
             for i in range(len(trainval_annotations["sequences"])):
                 seq_id = trainval_annotations["sequences"][i]["id"]
-                # if seq_id in TRAIN_IDS:
-                #     continue
+                if seq_id in TRAIN_IDS:
+                    continue
                 val_anno["sequences"].append(trainval_annotations["sequences"][i])
             val_anno["meta"] = trainval_annotations["meta"]
             json_annotations = val_anno
