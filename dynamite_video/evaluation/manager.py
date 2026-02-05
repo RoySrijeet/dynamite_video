@@ -2,14 +2,16 @@ import cv2
 import numpy as np
 import os
 import torch
+import torch.nn.functional as F
 
 from collections import defaultdict
 from PIL import Image
-from typing import List, Mapping, Optional, Tuple
+from typing import List, Mapping, Tuple
 
 from dynamite_video.data.generic_video_parser import GenericVideoSequence
 from dynamite_video.data.utils.data_utils import compute_resized_dims, resize_images, resize_masks
 from dynamite_video.evaluation.eval_utils import *
+from dynamite_video.evaluation.metrics.metrics import compute_stq
 
 class SequenceManager:
     """
@@ -23,7 +25,8 @@ class SequenceManager:
             tfms: Mapping, 
             output_dir: str, 
             save_vis: bool,
-            debug: bool=True,
+            min_mask_area: int,
+            debug: bool=True,   # TODO
     ) -> None:
         """
         Initialize with information on the sequence data, including ground truth masks
@@ -62,27 +65,27 @@ class SequenceManager:
         # load images, T,orig_H,orig_W,3
         self.images = self.sequence.load_images()
         # load ground truth panoptic masks, T,orig_H,orig_W with serialized IDs
-        self.gt_masks, self.ignore_masks, self.target_appearance = self.sequence.prepare_eval_masks(self.orig_to_serial_ids, self.bg_id)
-        # apply transformation
-        # `images` now has shape T,3,H,W; `gt_masks`, `ignore_masks` now has shape T,H,W
-        self.H, self.W = self.compute_tfm_sizes(tfms)
-        # bg mask - T,H,W; boolean
+        self.gt_masks, _, self.target_appearance = self.sequence.prepare_eval_masks(self.orig_to_serial_ids, self.bg_id)
         self.bg_masks = (self.gt_masks==self.bg_id)
+        # apply transformation
+        self.input_H, self.input_W = self.compute_tfm_sizes(tfms)
 
         # click level information
         
-        # click radius - region around a existing click that is excluded when sampling a new click
+        # click radius - region around an existing click that is excluded when sampling a new click
         self.click_radius = 5
         # Strategy to avoid regions while sampling next clicks
         # 0: new click avoids all the previously sampled click locations
         # 1: new click avoids all locations upto radius=self.click_radius around all prev sampled clicks
         self.sampling_strategy = 1
+        # sample a click only if the mask is bigger than a threshold
+        self.min_mask_area = min_mask_area
         # maintain a map of regions to avoid during click sampling, initially all true
         self.not_clicked_map = np.ones_like(self.gt_masks).astype(np.bool_)
         # num clicks on each target in each frame
-        self.num_clicks_per_target = np.zeros((self.T, self.N), dtype=np.uint16)
-        # num clicks per frame
         self.num_clicks_per_frame = np.zeros((self.T), dtype=np.uint16)
+        # num clicks on each target in each frame
+        self.num_clicks_per_target = np.zeros((self.T, self.N), dtype=np.uint16)
         # foreground clicks sampled on each target in each frame from the ground truth mask
         self.gt_fg_coords_list = [[] for _ in range(self.T)]
         # background clicks sampled on each frame from the ground truth mask
@@ -93,13 +96,17 @@ class SequenceManager:
         # prediction information
         
         # to store predicted masks
-        self.pred_masks = np.zeros((self.T, self.H, self.W), dtype=np.uint8)
+        self.pred_masks = np.zeros((self.T, self.orig_H, self.orig_W), dtype=np.uint8)
         # to store prediction logits
         self.pred_logits = [[] for _ in range(self.T)]
+        # I/O
+        self.curr_clip_input = {}
+        self.prev_clip_output = {}
+        self.curr_overlapping_frames = None
+        self.refine_frame = None
 
         # rounding info
         self.round_num = 0
-
         # length of clips to be extracted from the sequence
         self.clip_length = dataset_meta["clip_length"]
         # overlap between successive clips
@@ -116,24 +123,9 @@ class SequenceManager:
             if self.debug:
                 self.path_to_debug_visualization = os.path.join(output_dir, "debug", self.sequence.id)
                 os.makedirs(self.path_to_debug_visualization)
-
-        # I/O
-        self.curr_clip_input = {}
-        self.prev_clip_output = {}
-        self.curr_overlapping_frames = None
-        self.refine_frame = None
-
-        # category labels
-        self.category_labels = {}
-        for orig_id, serial_id in self.orig_to_serial_ids.items():
-            tgt_cls = orig_id // dataset_meta["max_instances_per_category"]
-            label = dataset_meta["category_labels"][tgt_cls]
-            inst_id = orig_id % dataset_meta["max_instances_per_category"]
-            if inst_id != 0:
-                label = label + "_" + str(inst_id)
-            self.category_labels[serial_id] = label
-        if self.save_vis and self.debug:
-            save_color_palette(self.category_labels, self.path_to_debug_visualization)
+                # category labels
+                category_labels = self.get_category_labels(dataset_meta)
+                save_color_palette(category_labels, self.path_to_debug_visualization)
         
 
     def compute_tfm_sizes(self, tfms: Mapping) -> Tuple[int, int]:
@@ -144,31 +136,39 @@ class SequenceManager:
             tfms: mapping containing transformation info from config, cfg.INPUT
         
         Returns:
-            new_height, new_width: tuple, transformed height and width
+            input_H, input_W: tuple, transformed height and width
         """
-        new_height, new_width = self.orig_H, self.orig_W
+        input_H, input_W = self.orig_H, self.orig_W
         self.resize = False
+        self.scale_H = 1.0
+        self.scale_W = 1.0
         if tfms.AUGMENTATION.RESIZE_TEST:
-            new_height, new_width = compute_resized_dims(self.orig_H, self.orig_W,
+            input_H, input_W = compute_resized_dims(self.orig_H, self.orig_W,
                                                         min_dim=tfms.AUGMENTATION.MIN_DIM_TEST,
                                                         max_dim=tfms.AUGMENTATION.MAX_DIM_TEST,
                                                     )
-            self.images = resize_images(self.images, new_height, new_width)
-            self.gt_masks = resize_masks(self.gt_masks, new_height, new_width, binary=False)
-            self.ignore_masks = resize_masks(self.ignore_masks, new_height, new_width, binary=False)
+            #self.images = resize_images(self.images, input_H, input_W)
+            #self.gt_masks = resize_masks(self.gt_masks, input_H, input_W, binary=False)
+            #self.ignore_masks = resize_masks(self.ignore_masks, input_H, input_W, binary=False)
             self.resize=True
+            self.scale_H = input_H / self.orig_H
+            self.scale_W = input_W / self.orig_W
 
         self.images = np.transpose(self.images, (0, 3, 1, 2))   # T,3,H,W
         if tfms.RGB:
             self.images = np.flip(self.images, 1).copy()        # BGR -> RGB
-        return new_height, new_width
+        return input_H, input_W
         
 
     def generate_clip_indices(self, start: int) -> List[List[int]]:
         """
-        Given a start index, generate list of indices of clips from the sequence.
-        If the start index is in the middle of the sequence, it generates clips in
-        both forward and backward directions.
+        Called at the beginning of each round. Given a start index, generate list 
+        of indices of clips from the sequence. Also resets the clicks sampled on 
+        overlapping frames.
+        
+        NOTE: framework only supports forward propagation
+        ~~If the start index is in the middle of the sequence, it generates clips in \
+            both forward and backward directions.~~
 
         Args:
             start: int, index of the first frame of the first clip
@@ -176,37 +176,38 @@ class SequenceManager:
         Returns:
             indices: List[List[int]], list of frame indices per clip
         """
-        start_copy = start
-        indices = []
         step = self.clip_length - self.num_overlapping_frames
-        if start < self.T - 1:
-            while start + self.clip_length <= self.T:
-                indices.append(list(range(start, start + self.clip_length)))
-                start += step
-            if len(indices) > 0 and indices[-1][-1] != self.T - 1:
-                indices.append(list(range(indices[-1][-1] - self.num_overlapping_frames+1, self.T)))
-            elif len(indices) == 0:
-                indices.append(list(range(start, self.T)))
-            indices[-1].append('_')
+        clips = []
 
-        # generate clips that go back in time
-        if start_copy>0:
-            bwd = []
-            start_copy = min(start_copy, self.T-1)
-            while start_copy - self.clip_length >= 0:
-                bwd.append(list(range(start_copy, start_copy-self.clip_length, -1)))
-                start_copy -= step
-            if len(bwd) > 0 and bwd[-1][-1] != 0:
-                bwd.append(list(range(bwd[-1][-1] + self.num_overlapping_frames-1, -1, -1)))
-            elif len(bwd) == 0:
-                bwd.append(list(range(start_copy, -1, -1)))
-            indices.extend(bwd)
-            indices[-1].append('_')
+        # forward
+        pos = start
+        while pos < self.T:
+            end = min(pos + self.clip_length, self.T)
+            indices = list(range(pos, end))
+            is_last = end == self.T
+            clips.append({"indices": indices, "is_backward": False, "is_last": is_last})
+            if is_last:
+                break
+            pos += step
+        
+        # NOTE: framework only supports forward propagation
+        # backward
+        # pos = start - 1 + self.num_overlapping_frames
+        # while pos >= 0:
+        #     end = max(pos - self.clip_length + 1, 0)
+        #     indices = list(range(pos, end-1, -1))
+        #     is_last = end == 0
+        #     clips.append({"indices": indices, "is_backward": True, "is_last": is_last})
+        #     if is_last:
+        #         break
+        #     pos -= step
+        
+        # resets overlapping coords at the beginning of each round
         self.overlap_coords_list = [[] for _ in range(self.T)]
-        return indices
+        return clips
 
     
-    def extract_clip(self, _indices: List[int], clip_idx: int) -> Mapping:
+    def extract_clip(self, _indices: List[int]) -> Mapping:
         """
         Prepare an input clip in the format the model forward pass expects
 
@@ -224,15 +225,13 @@ class SequenceManager:
             inputs: a mapping in the format expected by the model
         """
 
-        indices, last_clip = self.get_serial_indices(_indices)
+        indices, _, is_last = self.get_serial_indices(_indices)
 
         # ground truth target objects
         gt_panoptic_masks = self.gt_masks[indices]
-        # print(f"Clip {clip_idx}")
         
         # find targets in the clip
         clip_target_ids, frames_to_sample = self.find_targets_in_clip(indices)
-        
         # serialize target IDs
         clip_orig_to_serial_id, clip_serial_to_orig_id = serialize_target_ids(clip_target_ids)
 
@@ -248,12 +247,12 @@ class SequenceManager:
             # already sampled g.t. clicks - update the indices to clip-level values
             for fg_click in self.gt_fg_coords_list[global_fr_idx]:
                 serial_id = clip_orig_to_serial_id[fg_click[2]]
-                clip_fg_coords_list.append([fg_click[0], fg_click[1], serial_id, local_fr_idx, t])
+                clip_fg_coords_list.append([fg_click[0]*self.scale_H, fg_click[1]*self.scale_W, serial_id, local_fr_idx, t])
                 clip_num_clicks_per_target[local_fr_idx][serial_id-1] += 1
                 clip_max_timestamps[local_fr_idx] = t
                 t += 1
             for bg_click in self.gt_bg_coords_list[global_fr_idx]:
-                clip_bg_coords_list.append([bg_click[0], bg_click[1], bg_click[2], local_fr_idx, t])
+                clip_bg_coords_list.append([bg_click[0]*self.scale_H, bg_click[1]*self.scale_W, bg_click[2], local_fr_idx, t])
                 clip_max_timestamps[local_fr_idx] = t
                 t += 1
             
@@ -261,12 +260,20 @@ class SequenceManager:
             for orig_id in fr_targets["new"]:
                 # print(f"New object appeared {orig_id} in frame {global_fr_idx}!")
                 serial_id = clip_orig_to_serial_id[orig_id]
-                center_coords = get_center_coords((self.gt_masks[global_fr_idx] == orig_id).astype(np.uint8) * self.not_clicked_map[global_fr_idx])
-                clip_fg_coords_list.append([center_coords[0], center_coords[1], serial_id, local_fr_idx, t])
-                clip_num_clicks_per_target[local_fr_idx][serial_id-1] += 1
-                self.record_gt_click(global_fr_idx, orig_id, center_coords)
-                clip_max_timestamps[local_fr_idx] = t
-                t += 1
+                #center_coords = get_center_coords((self.gt_masks[global_fr_idx] == orig_id).astype(np.uint8) * self.not_clicked_map[global_fr_idx])
+                # clip_fg_coords_list.append([center_coords[0]*self.scale_H, center_coords[1]*self.scale_W, serial_id, local_fr_idx, t])
+                # clip_num_clicks_per_target[local_fr_idx][serial_id-1] += 1
+                # self.record_gt_click(global_fr_idx, orig_id, center_coords)
+                # clip_max_timestamps[local_fr_idx] = t
+                # t += 1
+                center_coords = get_component_center_coords((self.gt_masks[global_fr_idx] == orig_id).astype(np.uint8) * self.not_clicked_map[global_fr_idx], min_area=self.min_mask_area)
+                for cc in center_coords:
+                    clip_fg_coords_list.append([cc[0]*self.scale_H, cc[1]*self.scale_W, serial_id, local_fr_idx, t])
+                    self.record_gt_click(global_fr_idx, orig_id, cc)
+                    t += 1
+                clip_num_clicks_per_target[local_fr_idx][serial_id-1] += len(center_coords)
+                clip_max_timestamps[local_fr_idx] = t-1
+                
             
             # targets in overlapping frames
             if fr_targets["overlap"]:
@@ -274,17 +281,30 @@ class SequenceManager:
                 for orig_id in fr_targets["overlap"]:
                     serial_id = clip_orig_to_serial_id[orig_id]
                     # get target center coordinates
-                    center_coords = get_center_coords(overlapping_masks[orig_id])
-                    # record the click as [y,x,i,f,t]
-                    clip_fg_coords_list.append([center_coords[0], center_coords[1], serial_id, local_fr_idx, t])
-                    clip_num_clicks_per_target[local_fr_idx][serial_id-1] += 1
-                    self.overlap_coords_list[global_fr_idx].append([center_coords[0], center_coords[1], orig_id])
-                    clip_max_timestamps[local_fr_idx] = t
-                    t += 1
+                    # center_coords = get_center_coords(overlapping_masks[orig_id])
+                    # # record the click as [y,x,i,f,t]
+                    # clip_fg_coords_list.append([center_coords[0]*self.scale_H, center_coords[1]*self.scale_W, serial_id, local_fr_idx, t])
+                    # clip_num_clicks_per_target[local_fr_idx][serial_id-1] += 1
+                    # self.overlap_coords_list[global_fr_idx].append([center_coords[0], center_coords[1], orig_id])
+                    # clip_max_timestamps[local_fr_idx] = t
+                    # t += 1
+                    center_coords = get_component_center_coords(overlapping_masks[orig_id], min_area=self.min_mask_area)
+                    for cc in center_coords:
+                        clip_fg_coords_list.append([cc[0]*self.scale_H, cc[1]*self.scale_W, serial_id, local_fr_idx, t])
+                        self.overlap_coords_list[global_fr_idx].append([cc[0], cc[1], orig_id])
+                        t += 1
+                    clip_num_clicks_per_target[local_fr_idx][serial_id-1] += len(center_coords)
+                    clip_max_timestamps[local_fr_idx] = t-1
                 
         clip_fg_coords_list = sorted(clip_fg_coords_list, key=lambda x:x[2])
+
+        # scale to resized shape
+        clip_images = torch.as_tensor(self.images[indices],dtype=torch.uint8)
+        if self.resize:
+            clip_images = F.interpolate(clip_images, (self.input_H, self.input_W), mode='bilinear', align_corners=False)
+
         inputs = {
-            "images": torch.as_tensor(self.images[indices], dtype=torch.uint8),
+            "images": clip_images,
             "num_clicks_per_object": clip_num_clicks_per_target,
             "fg_coords_list": clip_fg_coords_list,
             "bg_coords_list": clip_bg_coords_list,
@@ -293,16 +313,15 @@ class SequenceManager:
             "orig_to_serial_id": clip_orig_to_serial_id,
             "serial_to_orig_id": clip_serial_to_orig_id,
             # extras
-            "panoptic_masks": gt_panoptic_masks,
+            "orig_res": gt_panoptic_masks.shape[-2:],
             "overlapping_frames": self.curr_overlapping_frames,
             "overlapping_masks": self.pred_masks[self.curr_overlapping_frames] if self.curr_overlapping_frames is not None else None,
         }
-        # debug
-        # print(f"G.T. targets: {np.unique(gt_panoptic_masks).tolist()}")
 
+        # record the current clip, and the overlapping frame indices for the next clip
         self.curr_clip_input = inputs
-        if not last_clip:
-            self.curr_overlapping_frames = _indices[-self.num_overlapping_frames:]
+        if not is_last:
+            self.curr_overlapping_frames = _indices["indices"][-self.num_overlapping_frames:]
         else:
             self.curr_overlapping_frames = None
         return inputs
@@ -317,13 +336,13 @@ class SequenceManager:
 
         if self.num_overlapping_frames > 0:
         
-            # there are 2 types of frames: 
-            # 1. overlapping frames - already seen - no new targets can be found. but, we'd 
-            # like to use any g.t. clicks sampled on these frames. additionally, we sample a 
-            # click on every target predicted in these overlapping frames
-            # 2. non-overlapping frames - may have new targets we want to track
+            # there are 2 types of frames in each input clip: 
+            # 1. Overlapping frames - already seen - no new targets can be found. but, we'd 
+            # like to use any g.t. clicks sampled on these frames. 
+            # Additionally, we sample a click on every target predicted in these overlapping frames
+            # 2. Non-overlapping frames - may have new targets we want to track
             
-            # any g.t. clicks already sampled in these frames
+            # if there's g.t. clicks already sampled in these frames
             gt_click_targets = set()
             for fr_idx in indices:
                 for (_,_,tgt_id) in self.gt_fg_coords_list[fr_idx]:
@@ -352,18 +371,15 @@ class SequenceManager:
     
     
     def get_serial_indices(self, indices):
-        last_clip = False
-        if indices[-1] == "_":
-            # last clip in forward/backward propagation
-            indices = indices[:-1]
-            last_clip = True
-        if len(indices) >= 2 and indices[1] < indices[0]:
-            indices = indices[::-1]
-            if self.refine_frame:
-                self.curr_overlapping_frames = list(self.refine_frame.keys())
-                self.prev_clip_output = self.refine_frame
-                self.refine_frame = None
-        return indices, last_clip
+        if indices["is_backward"]:
+            _indices = indices["indices"][::-1]
+        else:
+            _indices = indices["indices"]
+            # if self.refine_frame:
+            #     self.curr_overlapping_frames = list(self.refine_frame.keys())
+            #     self.prev_clip_output = self.refine_frame
+            #     self.refine_frame = None
+        return _indices, indices["is_backward"], indices["is_last"]
     
 
     def record_gt_click(self, frame_idx: int, tgt_id: int, coords: List[int]) -> None:
@@ -401,7 +417,7 @@ class SequenceManager:
         if self.sampling_strategy == 0:
             self.not_clicked_map[frame_idx][coords[0], coords[1]] = False
         elif self.sampling_strategy == 1:
-            _pm = create_circular_mask(self.H, self.W, centers=[[coords[0], coords[1]]], radius=self.click_radius)
+            _pm = create_circular_mask(self.orig_H, self.orig_W, centers=[[coords[0], coords[1]]], radius=self.click_radius)
             self.not_clicked_map[frame_idx][np.where(_pm)] = False
         else:
             raise RuntimeError(f"Choose sampling strategy from: [0: only exclude click location, \
@@ -416,8 +432,11 @@ class SequenceManager:
             binary_pred_masks: T,N,H,W np.ndarray predicted binary masks
             pred_logits: T,N,H,W np.ndarray predicted mask logits
         """
+        # upsample to orig resolution
+        binary_pred_masks = F.interpolate(binary_pred_masks.float(), size=(self.orig_H, self.orig_W),mode="nearest").to(binary_pred_masks.dtype)
+        pred_logits = F.interpolate(pred_logits.float(), size=(self.orig_H, self.orig_W),mode="bilinear").to(pred_logits.dtype)
+
         confidence_threshold = 0.8
-        
         indices = self.curr_clip_input["indices"]
         
         if self.curr_overlapping_frames:
@@ -499,11 +518,11 @@ class SequenceManager:
         fp_max_dist = np.max(fp_mask_dt)
         is_positive = fn_max_dist > fp_max_dist
 
+        # sample the click at the center of the error region
         if is_positive:
             coords_y, coords_x = np.where(fn_mask_dt == fn_max_dist)  # coords is [y, x]
         else:
             coords_y, coords_x = np.where(fp_mask_dt == fp_max_dist)  # coords is [y, x]
-
         t = len(coords_y) // 2
         sample_locations = [coords_y[t], coords_x[t]]
         gt_tgt_index = self.gt_masks[frame_idx][coords_y[t], coords_x[t]]
@@ -569,13 +588,6 @@ class SequenceManager:
         for fr_idx in inputs["indices"]:
             
             im = self.images[fr_idx].transpose(1,2,0)
-            # resize to original spatial resolution
-            if self.resize:
-                im = cv2.resize(im.copy(), (self.orig_W, self.orig_H))
-                gt = np.resize(gt.copy(), (self.orig_H, self.orig_W))
-                pred = np.resize(pred.copy(), (self.orig_H, self.orig_W))
-                # TODO - scale clicks
-            
             im_bgr = cv2.cvtColor(im, cv2.COLOR_RGB2BGR)
 
             def to_bgr_im(arr):
@@ -633,3 +645,50 @@ class SequenceManager:
             if len(self.gt_fg_coords_list[fr_idx]) > 0:
                 show_points(overlaid, self.gt_fg_coords_list[fr_idx], 1)
             cv2.imwrite(f"{vis_path}/clip_{clip_idx}_{fr_idx:04d}.png", overlaid)
+
+
+    def calculate_score(self) -> Tuple[Mapping, float]:
+        result = compute_stq(y_true=self.gt_masks, 
+                            y_pred=self.pred_masks, 
+                            target_ids=self.target_ids,
+                            ignore_label=self.bg_id)
+        
+        scores = {
+            "Round": self.round_num, 
+            "#frames": self.T, 
+            "#targets": self.N, 
+            "#clicks": int(self.num_clicks_per_frame.sum()), 
+            "STQ": result["STQ"], 
+            "AQ": result["AQ"], 
+            "SQ": result["SQ"],
+        }
+        target_level_scores = {
+            "sq_per_target": result["sq_per_target"],
+            "sq_per_frame_per_target": result["sq_per_frame_per_target"],
+            "error_per_frame_per_target": result["error_per_frame_per_target"]
+        }
+        return scores, target_level_scores
+
+
+    def get_category_labels(self, dataset_meta):
+        category_labels = {}
+        for orig_id, serial_id in self.orig_to_serial_ids.items():
+            if dataset_meta["dataset"] == "VIPSEG":
+                if orig_id in dataset_meta["stuff_list"]:
+                    tgt_cls = orig_id
+                    inst_id = -1
+                else:
+                    tgt_cls = orig_id // dataset_meta["max_instances_per_category"]
+                    inst_id = orig_id % dataset_meta["max_instances_per_category"]
+                label = dataset_meta["category_labels"][tgt_cls]
+                if inst_id != -1:
+                    label = label + "_" + str(inst_id)
+            else:
+                tgt_cls = orig_id // dataset_meta["max_instances_per_category"]
+                label = dataset_meta["category_labels"][tgt_cls]
+                inst_id = orig_id % dataset_meta["max_instances_per_category"]
+                if inst_id != 0:
+                    label = label + "_" + str(inst_id)
+            category_labels[serial_id] = label
+        
+        return category_labels

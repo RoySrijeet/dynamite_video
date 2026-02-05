@@ -22,6 +22,7 @@ class Evaluator:
         self.seed_id = cfg.SEED
         self.save_vis = cfg.ITERATIVE.TEST.SAVE_VISUALIZATIONS
         self.output_dir = cfg.OUTPUT_DIR
+        self.min_mask_area = cfg.ITERATIVE.TEST.MIN_MASK_AREA
 
         self.logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="Evaluator")
         self.logger.info("Welcome to DynaMITe-Video Evaluation Pipeline!")
@@ -68,6 +69,7 @@ class Evaluator:
                                     max_interactions=self.max_interactions,
                                     max_rounds=self.max_rounds,
                                     eval_strategy=self.eval_strategy,
+                                    min_mask_area=self.min_mask_area,
                                     output_dir=self.output_dir,
                                     seed_id=self.seed_id,
                                     save_vis=self.save_vis
