@@ -226,7 +226,6 @@ DATALOADER:
 
 ITERATIVE:
   TEST:
-    MIN_MASK_AREA: 1
     INTERACTIVE_EVALAUTION: True
     # perform evaluation on specified datsets
     DATASETS: [KITTI_STEP]
@@ -240,7 +239,10 @@ ITERATIVE:
     SAVE_VISUALIZATIONS: false
     # Strategy to select the instance to add corrective clicks on. Choose between 'random', 'worst', 'best'
     EVAL_STRATEGY: "random"
-    SINGLE_INSTANCE: false
+    # sample a click only if the mask is bigger than a threshold
+    MIN_MASK_AREA: 200
+    # whether to sample a single click from object center or from all connected components
+    CONNECTED_COMPONENT_SAMPLING: True
 
 CLICKER:
   TRAINING:

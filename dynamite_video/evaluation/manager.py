@@ -26,6 +26,7 @@ class SequenceManager:
             output_dir: str, 
             save_vis: bool,
             min_mask_area: int,
+            connected_component_sampling: bool,
             debug: bool=False,   # TODO
     ) -> None:
         """
@@ -80,6 +81,8 @@ class SequenceManager:
         self.sampling_strategy = 1
         # sample a click only if the mask is bigger than a threshold
         self.min_mask_area = min_mask_area
+        # whether to sample a single click from object center or from all connected components
+        self.connected_component_sampling = connected_component_sampling
         # maintain a map of regions to avoid during click sampling, initially all true
         self.not_clicked_map = np.ones_like(self.gt_masks).astype(np.bool_)
         # num clicks on each target in each frame
@@ -266,6 +269,7 @@ class SequenceManager:
                 serial_id = clip_orig_to_serial_id[orig_id]
                 mask = (self.gt_masks[global_fr_idx] == orig_id).astype(np.uint8) * self.not_clicked_map[global_fr_idx]
                 center_coords = get_component_center_coords(mask, 
+                                                            cc=self.connected_component_sampling,
                                                             budget=self.budget[orig_id-1],
                                                             min_area=self.min_mask_area
                                                         )
@@ -283,6 +287,7 @@ class SequenceManager:
                 for orig_id in fr_targets["overlap"]:
                     serial_id = clip_orig_to_serial_id[orig_id]
                     center_coords = get_component_center_coords(overlapping_masks[orig_id], 
+                                                                cc=self.connected_component_sampling,
                                                                 budget=None,
                                                                 min_area=self.min_mask_area
                                                             )
@@ -375,7 +380,7 @@ class SequenceManager:
         return _indices, indices["is_backward"], indices["is_last"]
     
 
-    def record_gt_click(self, frame_idx: int, tgt_id: int, coords: List[int]) -> None:
+    def record_gt_click(self, frame_idx: int, tgt_id: int, coords: List[int], bg_true_id: int=None) -> None:
         """
         Record a click in global buffers
 
@@ -383,9 +388,13 @@ class SequenceManager:
             frame_idx: int, the frame on which the click was sampled
             tgt_id: int, the ID of the target on which the click was sampled
             coords: list(int), the click location
+            bg_true_id: int, if a click is sampled on BG, the click counts towards
+                    the object it refines
         """
         if tgt_id == self.bg_id:
             self.gt_bg_coords_list[frame_idx].append([coords[0], coords[1], -1])
+            self.num_clicks_per_target[frame_idx][bg_true_id-1] += 1
+            self.budget[bg_true_id-1] -= 1
         else:
             self.gt_fg_coords_list[frame_idx].append([coords[0], coords[1], tgt_id])
             self.num_clicks_per_target[frame_idx][tgt_id-1] += 1
@@ -579,10 +588,16 @@ class SequenceManager:
         # sample the click at the center of the error region
         if fn_max_dist > fp_max_dist:
             # coords_y, coords_x = np.where(fn_mask_dt == fn_max_dist)  # coords is [y, x]
-            center_coords = get_component_center_coords(fn_mask, budget=None, min_area=self.min_mask_area*2).astype(np.int_)
+            center_coords = get_component_center_coords(fn_mask, 
+                                                        cc=self.connected_component_sampling,
+                                                        budget=None, 
+                                                        min_area=self.min_mask_area*2).astype(np.int_)
         else:
             # coords_y, coords_x = np.where(fp_mask_dt == fp_max_dist)  # coords is [y, x]
-            center_coords = get_component_center_coords(fp_mask, budget=None, min_area=self.min_mask_area*2).astype(np.int_)
+            center_coords = get_component_center_coords(fp_mask, 
+                                                        cc=self.connected_component_sampling,
+                                                        budget=None, 
+                                                        min_area=self.min_mask_area*2).astype(np.int_)
         
         # t = len(coords_y) // 2
         # sample_locations = [coords_y[t], coords_x[t]]
@@ -601,7 +616,7 @@ class SequenceManager:
                 continue
             accepted_tgts.append(gt_tgt_index)
             corrections.append(tuple(cc))
-            self.record_gt_click(frame_idx, gt_tgt_index, tuple(cc))
+            self.record_gt_click(frame_idx, gt_tgt_index, tuple(cc), refine_tgt_id)
         if len(accepted_tgts) == 0:
             return None
 

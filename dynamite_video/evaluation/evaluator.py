@@ -1,4 +1,6 @@
+import numpy as np
 import os
+import pandas as pd
 import yaml
 
 from detectron2.checkpoint import DetectionCheckpointer
@@ -23,6 +25,7 @@ class Evaluator:
         self.save_vis = cfg.ITERATIVE.TEST.SAVE_VISUALIZATIONS
         self.output_dir = cfg.OUTPUT_DIR
         self.min_mask_area = cfg.ITERATIVE.TEST.MIN_MASK_AREA
+        self.connected_component_sampling = cfg.ITERATIVE.TEST.CONNECTED_COMPONENT_SAMPLING
 
         self.logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="Evaluator")
         self.logger.info("Welcome to DynaMITe-Video Evaluation Pipeline!")
@@ -61,7 +64,7 @@ class Evaluator:
             self.logger.info(f"Building evaluation dataset from {dataset_name}...")
             dataset, dataset_meta = build_evaluation_dataset(self.cfg, dataset_name)
             
-            dataset_result = evaluate(self.model,
+            dataset_scores, dataset_target_scores = evaluate(self.model,
                                     dataset,
                                     dataset_meta,
                                     self.cfg.INPUT,
@@ -70,28 +73,59 @@ class Evaluator:
                                     max_rounds=self.max_rounds,
                                     eval_strategy=self.eval_strategy,
                                     min_mask_area=self.min_mask_area,
+                                    connected_component_sampling=self.connected_component_sampling,
                                     output_dir=self.output_dir,
                                     seed_id=self.seed_id,
                                     save_vis=self.save_vis
                     )
+            
+            #  calculate dataset-level scores
+            ds_stq, ds_sq, ds_aq = 0, 0, 0
+            ds_sq_per_target = []
+            ds_clicks_per_target = []
+            ds_rounds, ds_T, ds_N, ds_clicks = 0, 0, 0, 0
+            for scores, target_scores in zip(dataset_scores, dataset_target_scores):
+                ds_rounds += scores["Round"]
+                ds_T += scores["#frames"]
+                ds_N += scores["#targets"]
+                ds_clicks += scores["#clicks"]
+                
+                ds_stq += scores["STQ"]
+                ds_aq += scores["AQ"]
+                ds_sq += scores["SQ"]
+
+                ds_sq_per_target.extend(target_scores["sq_per_target"])
+                ds_clicks_per_target.extend(target_scores["num_clicks_per_target"])
+            
+            ds_sq_per_target = np.asarray(ds_sq_per_target)
+            ds_PFO = len(np.where(ds_sq_per_target < self.iou_threshold)[0]) / ds_N
+            ds_PMO = len(np.where(ds_sq_per_target == 0)[0]) / ds_N
+            ds_NoC = 0
+            for obj_id, obj_sq in enumerate(ds_sq_per_target):
+                if obj_sq >= self.iou_threshold:
+                    ds_NoC += ds_clicks_per_target[obj_id]
+                else:
+                    ds_NoC += self.max_interactions
+            ds_NoC = ds_NoC/ds_N
+
+            entry = {
+                "Name": dataset_name,
+                "Round": ds_rounds / len(dataset_scores),
+                "#frames": ds_T,
+                "#targets": ds_N,
+                "#clicks": ds_clicks,
+                "STQ": ds_stq / ds_N,
+                "AQ": ds_aq / ds_N,
+                "SQ": ds_sq / ds_N,
+                "PFO": ds_PFO,
+                "PMO": ds_PMO,
+                "NoC": ds_NoC
+            }
+            dataset_scores.insert(0, entry)
+            df = pd.DataFrame(dataset_scores)
+            df.to_csv(os.path.join(self.output_dir, f"metrics_{dataset_name}.csv"), index=False)
+
             # save result
-            with open(os.path.join(self.output_dir, f"metrics_{dataset_name}.yaml"), 'w') as f:
-                yaml.dump(dict(dataset_result), f)
+            # with open(os.path.join(self.output_dir, f"metrics_{dataset_name}.yaml"), 'w') as f:
+            #     yaml.dump(dict(dataset_scores), f)
         
-            avg_stq = 0
-            avg_aq = 0
-            avg_sq = 0
-            
-            num_vids = 0
-            for vid, res in dataset_result.items():
-                self.logger.info(f"Video: {vid}")
-                self.logger.info(f"Scores: {res}")
-                avg_stq += res["STQ"]
-                avg_aq += res["AQ"]
-                avg_sq += res["SQ"]
-                num_vids += 1
-            
-            self.logger.info(f"All videos: ")
-            self.logger.info(f"Average STQ: {avg_stq / num_vids}")
-            self.logger.info(f"Average AQ: {avg_aq / num_vids}")
-            self.logger.info(f"Average SQ: {avg_sq / num_vids}")

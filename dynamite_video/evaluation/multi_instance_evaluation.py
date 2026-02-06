@@ -4,7 +4,6 @@ import time
 import torch
 import torch.nn as nn
 
-from collections import defaultdict
 from contextlib import ExitStack, contextmanager
 from tqdm import tqdm
 from typing import List, Mapping
@@ -25,6 +24,7 @@ def evaluate(model: nn.Module,
              max_rounds: int=3,
              eval_strategy:str="worst",
              min_mask_area: int=200,
+             connected_component_sampling: bool=True,
              output_dir: str="",
              seed_id: int=0,
              save_vis: bool=False,
@@ -55,13 +55,14 @@ def evaluate(model: nn.Module,
         stack.enter_context(torch.no_grad())
         random.seed(123456+seed_id)
 
-        dataset_scores = defaultdict(dict)
+        dataset_scores = []
+        dataset_target_scores = []
         
         for i, video in enumerate(dataset):
             logger.info(f"Processing Sequence {video.id} [{i+1}/{len(dataset)}]")
             
             # sequence manager for current sequence
-            manager = SequenceManager(video, dataset_meta, tfms, output_dir, save_vis, min_mask_area)
+            manager = SequenceManager(video, dataset_meta, tfms, output_dir, save_vis, min_mask_area, connected_component_sampling)
             del video
 
             # a fresh model for each sequence
@@ -125,16 +126,17 @@ def evaluate(model: nn.Module,
                 manager.find_refinement_targets(target_level_scores, iou_threshold, eval_strategy)
                 
             # interaction metrics
-            click_scores, ds_level_entry = interaction_metrics(manager, target_level_scores, iou_threshold, max_interactions)
+            click_scores, target_scores = interaction_metrics(manager, target_level_scores, iou_threshold, max_interactions)
             logger.info(f"Click scores: {click_scores}")
-            dataset_scores[manager.sequence.id] = scores | click_scores | ds_level_entry
+            dataset_scores.append({"Name": manager.sequence.id} | scores | click_scores)
+            dataset_target_scores.append(target_scores)
             
             logger.info(f"{manager.sequence.id}, Time analysis: \
                         \nAverage propagation time per round: {propagation_time/manager.round_num} \
                         \nAverage metric computation time per round: {metric_compute_time/manager.round_num}")
             del manager, predictor
         
-        return dataset_scores
+        return dataset_scores, dataset_target_scores
 
 
 def interaction_metrics(
@@ -168,12 +170,12 @@ def interaction_metrics(
             NoC += max_interactions
     NoC = NoC/manager.N
     
-    seq_level_scores = {"PFO": round(PFO, 2), "PMO": round(PMO, 2), "NoC": round(NoC, 2)}
-    ds_level_entry = {
-            "num_clicks_per_target": manager.num_clicks_per_target,
-            "sq_per_target": target_level_scores["sq_per_target"]
+    click_scores = {"PFO": round(PFO, 2), "PMO": round(PMO, 2), "NoC": round(NoC, 2)}
+    target_scores = {
+            "num_clicks_per_target": manager.num_clicks_per_target.sum(axis=0).tolist(),
+            "sq_per_target": target_level_scores["sq_per_target"].tolist()
         }
-    return seq_level_scores, ds_level_entry
+    return click_scores, target_scores
     
     # PFF - % failed frames, frames that did not reach the IoU threshold
     # NCI - #clicks per image, normalized by #target objects in it

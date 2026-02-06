@@ -53,7 +53,7 @@ def get_center_coords(mask, k=1.7):
 
     return [coords_y[t],coords_x[t]]
 
-def get_component_center_coords(mask, budget, gap=1, min_area=200, connectivity=8):
+def get_component_center_coords(mask, budget, cc=True, gap=1, min_area=200, connectivity=8):
     assert mask.ndim==2
     if torch.is_tensor(mask):
         mask = mask.numpy()
@@ -62,6 +62,13 @@ def get_component_center_coords(mask, budget, gap=1, min_area=200, connectivity=
     padded_mask = np.pad(mask, ((1, 1), (1, 1)), 'constant')
     dt_mask = cv2.distanceTransform(padded_mask.astype(np.uint8), cv2.DIST_L2, 0)[1:-1, 1:-1]
     # use 3 (fast approximate), instead of 0 (exact L2 dist)
+
+    if not cc:
+        # object center
+        max_dist = np.max(dt_mask)
+        coords_y, coords_x = np.where(dt_mask == max_dist)
+        t = len(coords_y) // 2
+        return [coords_y[t],coords_x[t]]
 
     # merge tiny gaps
     k = 2 * gap + 1
