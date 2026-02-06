@@ -35,6 +35,8 @@ class Evaluator:
         self.logger.info(f"Max #interactions per target: {self.max_interactions}")
         self.logger.info(f"Max corrective rounds: {self.max_rounds}")
         self.logger.info(f"Evaluation strategy: {self.eval_strategy}")
+        self.logger.info(f"Clicker connected component sampling: {self.connected_component_sampling}")
+        self.logger.info(f"Clicker minimum mask area: {self.min_mask_area}")
         self.logger.info(f"Random seed: {self.seed_id}")
         self.logger.info(f"Output path: {self.output_dir}")
         if self.save_vis:

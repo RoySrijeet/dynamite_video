@@ -63,40 +63,38 @@ def get_component_center_coords(mask, budget, cc=True, gap=1, min_area=200, conn
     dt_mask = cv2.distanceTransform(padded_mask.astype(np.uint8), cv2.DIST_L2, 0)[1:-1, 1:-1]
     # use 3 (fast approximate), instead of 0 (exact L2 dist)
 
-    if not cc:
-        # object center
-        max_dist = np.max(dt_mask)
-        coords_y, coords_x = np.where(dt_mask == max_dist)
-        t = len(coords_y) // 2
-        return [[coords_y[t],coords_x[t]]]
+    if cc:
+        # merge tiny gaps
+        k = 2 * gap + 1
+        kernel = np.ones((k, k), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
-    # merge tiny gaps
-    k = 2 * gap + 1
-    kernel = np.ones((k, k), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
-    # connected components
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=connectivity)
-    components = list(range(1, num_labels))
-    if budget is not None and budget < len(components):
-        # select largest components
-        components = sorted(components, key=lambda i: stats[i, cv2.CC_STAT_AREA], reverse=True)
-        components = components[:budget]
-
-    # filter out small components
-    centers = []
-    for lab in components:
-        if stats[lab, cv2.CC_STAT_AREA] < min_area:
-            continue
-        ys, xs = np.where(labels == lab)
-        if ys.size == 0:
-            continue
-        # pick the pixel inside this component that is farthest from background
-        i = np.argmax(dt_mask[ys, xs])
-        centers.append([int(ys[i]), int(xs[i])])
-        
-    centers = np.array(centers, dtype=float) if centers else np.zeros((0,2), float)    
-    return centers
+        # connected components
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=connectivity)
+        components = list(range(1, num_labels))
+        if budget is not None and budget < len(components):
+            components = sorted(components, key=lambda i: stats[i, cv2.CC_STAT_AREA], reverse=True)
+            components = components[:budget]
+        centers = []
+        for lab in components:
+            if stats[lab, cv2.CC_STAT_AREA] < min_area:
+                continue
+            ys, xs = np.where(labels == lab)
+            if ys.size == 0:
+                continue
+            # pick the pixel inside this component that is farthest from background
+            i = np.argmax(dt_mask[ys, xs])
+            centers.append([int(ys[i]), int(xs[i])])
+            
+        centers = np.array(centers, dtype=float) if centers else np.zeros((0,2), float)    
+        if len(centers) > 0:
+            return centers
+    
+    # object center
+    max_dist = np.max(dt_mask)
+    coords_y, coords_x = np.where(dt_mask == max_dist)
+    t = len(coords_y) // 2
+    return [[coords_y[t],coords_x[t]]]
 
 
 def get_random_coords(mask, n=1):
