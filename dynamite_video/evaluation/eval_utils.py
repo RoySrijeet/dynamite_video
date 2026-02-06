@@ -53,7 +53,7 @@ def get_center_coords(mask, k=1.7):
 
     return [coords_y[t],coords_x[t]]
 
-def get_component_center_coords(mask, gap=1, min_area=200, connectivity=8):
+def get_component_center_coords(mask, budget, gap=1, min_area=200, connectivity=8):
     assert mask.ndim==2
     if torch.is_tensor(mask):
         mask = mask.numpy()
@@ -70,17 +70,20 @@ def get_component_center_coords(mask, gap=1, min_area=200, connectivity=8):
 
     # connected components
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=connectivity)
+    components = list(range(1, num_labels))
+    if budget is not None and budget < len(components):
+        # select largest components
+        components = sorted(components, key=lambda i: stats[i, cv2.CC_STAT_AREA], reverse=True)
+        components = components[:budget]
 
     # filter out small components
     centers = []
-    for lab in range(1, num_labels):
+    for lab in components:
         if stats[lab, cv2.CC_STAT_AREA] < min_area:
             continue
-        
         ys, xs = np.where(labels == lab)
         if ys.size == 0:
             continue
-        
         # pick the pixel inside this component that is farthest from background
         i = np.argmax(dt_mask[ys, xs])
         centers.append([int(ys[i]), int(xs[i])])
@@ -192,6 +195,30 @@ def serialize_target_ids(orig_ids):
     serial_to_orig_id = OrderedDict(zip(serial_ids, orig_ids))
     orig_to_serial_id = OrderedDict(zip(orig_ids, serial_ids))
     return orig_to_serial_id, serial_to_orig_id
+
+
+def get_category_labels(orig_to_serial_ids, dataset_meta):
+    category_labels = {}
+    for orig_id, serial_id in orig_to_serial_ids.items():
+        if dataset_meta["dataset"] == "VIPSEG":
+            if orig_id in dataset_meta["stuff_list"]:
+                tgt_cls = orig_id
+                inst_id = -1
+            else:
+                tgt_cls = orig_id // dataset_meta["max_instances_per_category"]
+                inst_id = orig_id % dataset_meta["max_instances_per_category"]
+            label = dataset_meta["category_labels"][tgt_cls]
+            if inst_id != -1:
+                label = label + "_" + str(inst_id)
+        else:
+            tgt_cls = orig_id // dataset_meta["max_instances_per_category"]
+            label = dataset_meta["category_labels"][tgt_cls]
+            inst_id = orig_id % dataset_meta["max_instances_per_category"]
+            if inst_id != 0:
+                label = label + "_" + str(inst_id)
+        category_labels[serial_id] = label
+    
+    return category_labels
 
 
 # def save_mask_to_disc(masks, binary, mask_names, save_dir):
