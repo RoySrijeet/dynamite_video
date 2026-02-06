@@ -64,20 +64,20 @@ class Evaluator:
             self.logger.info(f"Building evaluation dataset from {dataset_name}...")
             dataset, dataset_meta = build_evaluation_dataset(self.cfg, dataset_name)
             
-            dataset_scores, dataset_target_scores = evaluate(self.model,
-                                    dataset,
-                                    dataset_meta,
-                                    self.cfg.INPUT,
-                                    iou_threshold=self.iou_threshold,
-                                    max_interactions=self.max_interactions,
-                                    max_rounds=self.max_rounds,
-                                    eval_strategy=self.eval_strategy,
-                                    min_mask_area=self.min_mask_area,
-                                    connected_component_sampling=self.connected_component_sampling,
-                                    output_dir=self.output_dir,
-                                    seed_id=self.seed_id,
-                                    save_vis=self.save_vis
-                    )
+            dataset_scores, dataset_target_scores, dataset_round_scores = evaluate(self.model,
+                                                                                    dataset,
+                                                                                    dataset_meta,
+                                                                                    self.cfg.INPUT,
+                                                                                    iou_threshold=self.iou_threshold,
+                                                                                    max_interactions=self.max_interactions,
+                                                                                    max_rounds=self.max_rounds,
+                                                                                    eval_strategy=self.eval_strategy,
+                                                                                    min_mask_area=self.min_mask_area,
+                                                                                    connected_component_sampling=self.connected_component_sampling,
+                                                                                    output_dir=self.output_dir,
+                                                                                    seed_id=self.seed_id,
+                                                                                    save_vis=self.save_vis
+                                                                            )
             
             #  calculate dataset-level scores
             ds_stq, ds_sq, ds_aq = 0, 0, 0

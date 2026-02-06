@@ -57,6 +57,7 @@ def evaluate(model: nn.Module,
 
         dataset_scores = []
         dataset_target_scores = []
+        dataset_round_scores = []
         
         for i, video in enumerate(dataset):
             logger.info(f"Processing Sequence {video.id} [{i+1}/{len(dataset)}]")
@@ -130,13 +131,14 @@ def evaluate(model: nn.Module,
             logger.info(f"Click scores: {click_scores}")
             dataset_scores.append({"Name": manager.sequence.id} | scores | click_scores)
             dataset_target_scores.append(target_scores)
+            dataset_round_scores.append(np.asarray(round_scores))
             
             logger.info(f"{manager.sequence.id}, Time analysis: \
                         \nAverage propagation time per round: {propagation_time/manager.round_num} \
                         \nAverage metric computation time per round: {metric_compute_time/manager.round_num}")
             del manager, predictor
         
-        return dataset_scores, dataset_target_scores
+        return dataset_scores, dataset_target_scores, dataset_round_scores
 
 
 def interaction_metrics(
