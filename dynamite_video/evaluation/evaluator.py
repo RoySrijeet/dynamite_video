@@ -26,6 +26,7 @@ class Evaluator:
         self.output_dir = cfg.OUTPUT_DIR
         self.min_mask_area = cfg.ITERATIVE.TEST.MIN_MASK_AREA
         self.connected_component_sampling = cfg.ITERATIVE.TEST.CONNECTED_COMPONENT_SAMPLING
+        self.debug = cfg.ITERATIVE.TEST.DEBUG
 
         self.logger = setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="Evaluator")
         self.logger.info("Welcome to DynaMITe-Video Evaluation Pipeline!")
@@ -78,7 +79,8 @@ class Evaluator:
                                                                                     connected_component_sampling=self.connected_component_sampling,
                                                                                     output_dir=self.output_dir,
                                                                                     seed_id=self.seed_id,
-                                                                                    save_vis=self.save_vis
+                                                                                    save_vis=self.save_vis,
+                                                                                    debug=self.debug,
                                                                             )
             
             #  calculate dataset-level scores

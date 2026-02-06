@@ -28,6 +28,7 @@ def evaluate(model: nn.Module,
              output_dir: str="",
              seed_id: int=0,
              save_vis: bool=False,
+             debug: bool=False
              ):
     """
     Evaluate model on provided dataset.
@@ -63,7 +64,7 @@ def evaluate(model: nn.Module,
             logger.info(f"Processing Sequence {video.id} [{i+1}/{len(dataset)}]")
             
             # sequence manager for current sequence
-            manager = SequenceManager(video, dataset_meta, tfms, output_dir, save_vis, min_mask_area, connected_component_sampling)
+            manager = SequenceManager(video, dataset_meta, tfms, output_dir, save_vis, min_mask_area, connected_component_sampling, debug)
             del video
 
             # a fresh model for each sequence

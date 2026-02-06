@@ -228,11 +228,11 @@ ITERATIVE:
   TEST:
     INTERACTIVE_EVALAUTION: True
     # perform evaluation on specified datsets
-    DATASETS: [KITTI_STEP]
+    DATASETS: []
     # refine a target until threshold is reached
-    IOU_THRESHOLD: 0.95
+    IOU_THRESHOLD: 0.85
     # Max no. of interactions allowed per target, in an entire sequence
-    MAX_INTERACTIONS_PER_TARGET: 3
+    MAX_INTERACTIONS_PER_TARGET: 10
     # Max no. of corrective rounds
     MAX_ROUNDS: 3
     # save mask predictions
@@ -242,7 +242,9 @@ ITERATIVE:
     # sample a click only if the mask is bigger than a threshold
     MIN_MASK_AREA: 200
     # whether to sample a single click from object center or from all connected components
-    CONNECTED_COMPONENT_SAMPLING: True
+    CONNECTED_COMPONENT_SAMPLING: true
+    # save debug information
+    DEBUG: false
 
 CLICKER:
   TRAINING:
