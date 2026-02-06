@@ -126,8 +126,4 @@ class Evaluator:
             dataset_scores.insert(0, entry)
             df = pd.DataFrame(dataset_scores)
             df.to_csv(os.path.join(self.output_dir, f"metrics_{dataset_name}.csv"), index=False)
-
-            # save result
-            # with open(os.path.join(self.output_dir, f"metrics_{dataset_name}.yaml"), 'w') as f:
-            #     yaml.dump(dict(dataset_scores), f)
-        
+            np.save(os.path.join(self.output_dir, f"round_scores_{dataset_name}.npy"), dataset_round_scores)
