@@ -88,7 +88,7 @@ def get_component_center_coords(mask, budget, cc=True, gap=1, min_area=200, conn
             
         centers = np.array(centers, dtype=float) if centers else np.zeros((0,2), float)    
         if len(centers) > 0:
-            return centers
+            return centers.astype(np.int_).tolist()
     
     # object center
     max_dist = np.max(dt_mask)
