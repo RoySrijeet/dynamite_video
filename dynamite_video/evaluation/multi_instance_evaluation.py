@@ -120,8 +120,8 @@ def evaluate(model: nn.Module,
                     break
 
                 # Stopping criterion 3: last round
-                if manager.round_num == max_rounds:
-                    break
+                # if manager.round_num == max_rounds:
+                #     break
 
                 ### REFINEMENT ###
                 manager.find_refinement_targets(target_level_scores, iou_threshold, eval_strategy)
@@ -138,7 +138,7 @@ def evaluate(model: nn.Module,
                         \nAverage metric computation time per round: {metric_compute_time/manager.round_num}")
             del manager, predictor
         
-        return dataset_scores, dataset_target_scores, dataset_round_scores
+        return dataset_scores, dataset_target_scores, np.stack(dataset_round_scores)
 
 
 def interaction_metrics(
