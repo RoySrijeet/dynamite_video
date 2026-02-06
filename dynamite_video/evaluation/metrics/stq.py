@@ -84,7 +84,7 @@ class STQuality(object):
     self._ground_truth = None
     self._intersections = None
     self._ious = []
-    self._scaled_fn_error = []
+    # self._scaled_fn_error = []
     
     self._offset = offset
     if offset < num_classes:
@@ -138,8 +138,8 @@ class STQuality(object):
     
     # record error regions
     # only consider FNs, as one object's FPs are some other objects FNs
-    errors = fns * (1-ious)
-    self._scaled_fn_error.append(errors[self._include_indices])  # excluding BG
+    # errors = fns * (1-ious)
+    # self._scaled_fn_error.append(errors[self._include_indices])  # excluding BG
 
     # objects which don't appear in either gt or pred, should have IoU 1.0:
     # but this heavily inflates the average IoU
@@ -248,8 +248,8 @@ class STQuality(object):
       'AQ': float(aq_mean),
       'SQ': float(iou_mean),
       "sq_per_target": ious_per_tgt[self._include_indices],  # only target objects, excluding BG
-      "sq_per_frame_per_target": self._ious,  # only target objects, excluding BG
-      "error_per_frame_per_target": self._scaled_fn_error, # only target objects, excluding BG
+      "sq_per_frame_per_target": np.asarray(self._ious),  # only target objects, excluding BG
+      # "error_per_frame_per_target": np.asarray(self._scaled_fn_error), # only target objects, excluding BG
     }
 
 
