@@ -120,8 +120,8 @@ def evaluate(model: nn.Module,
                     break
 
                 # Stopping criterion 3: last round
-                # if manager.round_num == max_rounds:
-                #     break
+                if manager.round_num == max_rounds:
+                    break
 
                 ### REFINEMENT ###
                 manager.find_refinement_targets(target_level_scores, iou_threshold, eval_strategy)
