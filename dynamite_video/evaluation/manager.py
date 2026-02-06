@@ -26,7 +26,7 @@ class SequenceManager:
             output_dir: str, 
             save_vis: bool,
             min_mask_area: int,
-            debug: bool=True,   # TODO
+            debug: bool=False,   # TODO
     ) -> None:
         """
         Initialize with information on the sequence data, including ground truth masks
@@ -124,8 +124,13 @@ class SequenceManager:
                 self.path_to_debug_visualization = os.path.join(output_dir, "debug", self.sequence.id)
                 os.makedirs(self.path_to_debug_visualization)
                 # category labels
-                category_labels = self.get_category_labels(dataset_meta)
+                category_labels = get_category_labels(self.orig_to_serial_ids, dataset_meta)
                 save_color_palette(category_labels, self.path_to_debug_visualization)
+
+    
+    def set_budget(self, max_interactions: int):
+        self.budget = np.full(self.N, max_interactions)
+        return max_interactions * self.N
         
 
     def compute_tfm_sizes(self, tfms: Mapping) -> Tuple[int, int]:
@@ -244,7 +249,7 @@ class SequenceManager:
         for global_fr_idx, fr_targets in frames_to_sample.items():
             local_fr_idx = indices.index(global_fr_idx)
             
-            # already sampled g.t. clicks - update the indices to clip-level values
+            # already sampled g.t. clicks
             for fg_click in self.gt_fg_coords_list[global_fr_idx]:
                 serial_id = clip_orig_to_serial_id[fg_click[2]]
                 clip_fg_coords_list.append([fg_click[0]*self.scale_H, fg_click[1]*self.scale_W, serial_id, local_fr_idx, t])
@@ -256,17 +261,14 @@ class SequenceManager:
                 clip_max_timestamps[local_fr_idx] = t
                 t += 1
             
-            # sample a click on the g.t. mask of the new target
+            # new targets
             for orig_id in fr_targets["new"]:
-                # print(f"New object appeared {orig_id} in frame {global_fr_idx}!")
                 serial_id = clip_orig_to_serial_id[orig_id]
-                #center_coords = get_center_coords((self.gt_masks[global_fr_idx] == orig_id).astype(np.uint8) * self.not_clicked_map[global_fr_idx])
-                # clip_fg_coords_list.append([center_coords[0]*self.scale_H, center_coords[1]*self.scale_W, serial_id, local_fr_idx, t])
-                # clip_num_clicks_per_target[local_fr_idx][serial_id-1] += 1
-                # self.record_gt_click(global_fr_idx, orig_id, center_coords)
-                # clip_max_timestamps[local_fr_idx] = t
-                # t += 1
-                center_coords = get_component_center_coords((self.gt_masks[global_fr_idx] == orig_id).astype(np.uint8) * self.not_clicked_map[global_fr_idx], min_area=self.min_mask_area)
+                mask = (self.gt_masks[global_fr_idx] == orig_id).astype(np.uint8) * self.not_clicked_map[global_fr_idx]
+                center_coords = get_component_center_coords(mask, 
+                                                            budget=self.budget[orig_id-1],
+                                                            min_area=self.min_mask_area
+                                                        )
                 for cc in center_coords:
                     clip_fg_coords_list.append([cc[0]*self.scale_H, cc[1]*self.scale_W, serial_id, local_fr_idx, t])
                     self.record_gt_click(global_fr_idx, orig_id, cc)
@@ -280,15 +282,10 @@ class SequenceManager:
                 overlapping_masks = self.pred_logits[global_fr_idx]
                 for orig_id in fr_targets["overlap"]:
                     serial_id = clip_orig_to_serial_id[orig_id]
-                    # get target center coordinates
-                    # center_coords = get_center_coords(overlapping_masks[orig_id])
-                    # # record the click as [y,x,i,f,t]
-                    # clip_fg_coords_list.append([center_coords[0]*self.scale_H, center_coords[1]*self.scale_W, serial_id, local_fr_idx, t])
-                    # clip_num_clicks_per_target[local_fr_idx][serial_id-1] += 1
-                    # self.overlap_coords_list[global_fr_idx].append([center_coords[0], center_coords[1], orig_id])
-                    # clip_max_timestamps[local_fr_idx] = t
-                    # t += 1
-                    center_coords = get_component_center_coords(overlapping_masks[orig_id], min_area=self.min_mask_area)
+                    center_coords = get_component_center_coords(overlapping_masks[orig_id], 
+                                                                budget=None,
+                                                                min_area=self.min_mask_area
+                                                            )
                     for cc in center_coords:
                         clip_fg_coords_list.append([cc[0]*self.scale_H, cc[1]*self.scale_W, serial_id, local_fr_idx, t])
                         self.overlap_coords_list[global_fr_idx].append([cc[0], cc[1], orig_id])
@@ -375,10 +372,6 @@ class SequenceManager:
             _indices = indices["indices"][::-1]
         else:
             _indices = indices["indices"]
-            # if self.refine_frame:
-            #     self.curr_overlapping_frames = list(self.refine_frame.keys())
-            #     self.prev_clip_output = self.refine_frame
-            #     self.refine_frame = None
         return _indices, indices["is_backward"], indices["is_last"]
     
 
@@ -396,6 +389,7 @@ class SequenceManager:
         else:
             self.gt_fg_coords_list[frame_idx].append([coords[0], coords[1], tgt_id])
             self.num_clicks_per_target[frame_idx][tgt_id-1] += 1
+            self.budget[tgt_id-1] -= 1
         
         self.num_clicks_per_frame[frame_idx] += 1
         self.update_not_clicked_map(frame_idx, coords)
@@ -475,11 +469,76 @@ class SequenceManager:
             self.pred_logits[global_fr_idx] = fr_pred_logits
         self.pred_masks[indices] = pred_panoptic_masks
 
-        # print(f"Pred targets: {np.unique(pred_panoptic_masks).tolist()}")
-
         if self.save_vis:
             self.save_visualization(clip_idx)
     
+    
+    def find_refinement_targets(self, target_level_scores: Mapping, iou_threshold: float, eval_strategy: str):
+        """
+        Poorly-segmented objects and where to find them.
+
+        Args:
+            * target_level_scores: object level SQ scores
+            * iou_threshold: float, IoU threshold
+            * eval_strategy: "worst" to select only the worst candidate, 
+                             "random" to select one candidate at random, 
+                             "all" to select all candidates under `iou_threshold`
+        """
+        # select candidates for refinement
+        valid_idx = np.where(target_level_scores["sq_per_target"] < iou_threshold)[0]
+        all_candidates = valid_idx[np.argsort(target_level_scores["sq_per_target"][valid_idx])]
+        if eval_strategy == "random":
+            np.random.shuffle(all_candidates)
+
+        for tgt_id in all_candidates:
+            # find the best frame to sample a click on
+            refine_frame = self.find_refinement_frame(tgt_id, target_level_scores["sq_per_frame_per_target"], iou_threshold)
+            refined_tgt_id = self.get_corrective_click(frame_idx=refine_frame, refine_tgt_id=tgt_id+1)
+            if refined_tgt_id is None:
+                continue
+            print(f"Sampled a click on {refined_tgt_id} (originally, {tgt_id+1}) at frame {refine_frame}")
+            if eval_strategy=="worst":
+                break
+
+
+    def find_refinement_frame(self, tgt_id, sq_per_frame_per_target, iou_threshold):
+        
+        candidate_frames = sq_per_frame_per_target[:, tgt_id] < iou_threshold
+
+        # frame intervals where the target's IoU goes below threshold
+        diff = np.diff(candidate_frames.astype(int))
+        starts = np.where(diff == 1)[0] + 1
+        if candidate_frames[0]:
+            starts = np.r_[0, starts]
+        ends = np.where(diff == -1)[0]
+        if candidate_frames[-1]:
+            ends = np.r_[ends, len(candidate_frames) - 1]
+        weak_intervals = list(zip(starts, ends))
+
+        if len(weak_intervals) == 0:
+            raise RuntimeError(f"No weak frame intervals found for an object to be refined!")
+        
+        if len(weak_intervals) == 1:
+            return weak_intervals[0][0]
+        
+        # severity scores
+        best_score = -float("inf")
+        best_start = None
+        # bias toward choosing earlier frames
+        alpha = 0.5 * (1 - iou_threshold)
+        for start, end in weak_intervals:
+            # how bad the masks in the interval are
+            mean_iou = sq_per_frame_per_target[start:end+1, tgt_id].mean()
+            # how harmful the interval is
+            severity = (end - start + 1) * (1.0 - mean_iou)
+            # penalize later intervals
+            score = severity - alpha * start
+
+            if score > best_score:
+                best_score = score
+                best_start = start
+        return best_start
+
     
     def get_corrective_click(self, frame_idx: int, refine_tgt_id: int) -> int:
         """
@@ -516,37 +575,46 @@ class SequenceManager:
         # choose the bigger error region
         fn_max_dist = np.max(fn_mask_dt)
         fp_max_dist = np.max(fp_mask_dt)
-        is_positive = fn_max_dist > fp_max_dist
 
         # sample the click at the center of the error region
-        if is_positive:
-            coords_y, coords_x = np.where(fn_mask_dt == fn_max_dist)  # coords is [y, x]
+        if fn_max_dist > fp_max_dist:
+            # coords_y, coords_x = np.where(fn_mask_dt == fn_max_dist)  # coords is [y, x]
+            center_coords = get_component_center_coords(fn_mask, budget=None, min_area=self.min_mask_area*2).astype(np.int_)
         else:
-            coords_y, coords_x = np.where(fp_mask_dt == fp_max_dist)  # coords is [y, x]
-        t = len(coords_y) // 2
-        sample_locations = [coords_y[t], coords_x[t]]
-        gt_tgt_index = self.gt_masks[frame_idx][coords_y[t], coords_x[t]]
-        self.record_gt_click(frame_idx, gt_tgt_index, sample_locations)
+            # coords_y, coords_x = np.where(fp_mask_dt == fp_max_dist)  # coords is [y, x]
+            center_coords = get_component_center_coords(fp_mask, budget=None, min_area=self.min_mask_area*2).astype(np.int_)
+        
+        # t = len(coords_y) // 2
+        # sample_locations = [coords_y[t], coords_x[t]]
+        # gt_tgt_index = self.gt_masks[frame_idx][coords_y[t], coords_x[t]]
+        
+        # if the click is on a foreground object, check its remaining budget
+        # if gt_tgt_index!= self.bg_id and self.budget[gt_tgt_index-1] <= 0:
+        #     return None
+        # self.record_gt_click(frame_idx, gt_tgt_index, sample_locations)
+            
+        accepted_tgts = []
+        corrections = []
+        for cc in center_coords:
+            gt_tgt_index = self.gt_masks[frame_idx][tuple(cc)]
+            if gt_tgt_index!= self.bg_id and self.budget[gt_tgt_index-1] <= 0:
+                continue
+            accepted_tgts.append(gt_tgt_index)
+            corrections.append(tuple(cc))
+            self.record_gt_click(frame_idx, gt_tgt_index, tuple(cc))
+        if len(accepted_tgts) == 0:
+            return None
 
         # next round will start from frame `frame_idx`, so sample clicks from the prediction
-        overlapping_targets = np.unique(self.pred_masks[frame_idx])    # includes bg
-        self.curr_overlapping_frames = [frame_idx]
-        prev_clip_output_targets = [tgt_id for tgt_id in overlapping_targets if tgt_id!=self.bg_id]
+        # overlapping_targets = np.unique(self.pred_masks[frame_idx])    # includes bg
+        # self.curr_overlapping_frames = [frame_idx]
+        # prev_clip_output_targets = [tgt_id for tgt_id in overlapping_targets if tgt_id!=self.bg_id]
         
-        corrections = [sample_locations]
-        # # if its a negative click, i.e., gt_tgt_index is different from refine_tgt_id
-        # # then sample another click on the gt area of refine_tgt_id, if it exists
-        # if gt_tgt_index != refine_tgt_id:
-        #     if gt_instance_mask.any():
-        #         center_coords = get_center_coords(gt_instance_mask * self.not_clicked_map[frame_idx])
-        #         self.record_gt_click(frame_idx, refine_tgt_id, center_coords)
-        #         corrections.append(center_coords)
-        #     prev_clip_output_targets.remove(refine_tgt_id)
-
-        self.refine_frame = {frame_idx: prev_clip_output_targets}
-        self.prev_clip_output = self.refine_frame
+        # self.refine_frame = {frame_idx: prev_clip_output_targets}
+        # self.prev_clip_output = self.refine_frame
         
         if self.save_vis:
+            # corrections = [sample_locations]
             vis_path = os.path.join(self.path_to_debug_visualization, f"round_{str(self.round_num)}_corrections")
             if not os.path.isdir(vis_path):
                 os.makedirs(vis_path)
@@ -566,7 +634,7 @@ class SequenceManager:
             show_points(overlaid_pred, corrections, 2)
             cv2.imwrite(os.path.join(vis_path, f"correction_click_pred_fr_{frame_idx}_tgt_{refine_tgt_id}.png"), overlaid_pred)
         
-        return gt_tgt_index
+        return accepted_tgts
     
 
     def save_visualization(self, clip_idx):
@@ -665,30 +733,9 @@ class SequenceManager:
         target_level_scores = {
             "sq_per_target": result["sq_per_target"],
             "sq_per_frame_per_target": result["sq_per_frame_per_target"],
-            "error_per_frame_per_target": result["error_per_frame_per_target"]
+         #   "error_per_frame_per_target": result["error_per_frame_per_target"]
         }
         return scores, target_level_scores
 
 
-    def get_category_labels(self, dataset_meta):
-        category_labels = {}
-        for orig_id, serial_id in self.orig_to_serial_ids.items():
-            if dataset_meta["dataset"] == "VIPSEG":
-                if orig_id in dataset_meta["stuff_list"]:
-                    tgt_cls = orig_id
-                    inst_id = -1
-                else:
-                    tgt_cls = orig_id // dataset_meta["max_instances_per_category"]
-                    inst_id = orig_id % dataset_meta["max_instances_per_category"]
-                label = dataset_meta["category_labels"][tgt_cls]
-                if inst_id != -1:
-                    label = label + "_" + str(inst_id)
-            else:
-                tgt_cls = orig_id // dataset_meta["max_instances_per_category"]
-                label = dataset_meta["category_labels"][tgt_cls]
-                inst_id = orig_id % dataset_meta["max_instances_per_category"]
-                if inst_id != 0:
-                    label = label + "_" + str(inst_id)
-            category_labels[serial_id] = label
-        
-        return category_labels
+    
