@@ -68,7 +68,7 @@ def get_component_center_coords(mask, budget, cc=True, gap=1, min_area=200, conn
         max_dist = np.max(dt_mask)
         coords_y, coords_x = np.where(dt_mask == max_dist)
         t = len(coords_y) // 2
-        return [coords_y[t],coords_x[t]]
+        return [[coords_y[t],coords_x[t]]]
 
     # merge tiny gaps
     k = 2 * gap + 1
