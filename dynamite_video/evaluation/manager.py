@@ -236,7 +236,7 @@ class SequenceManager:
         indices, _, is_last = self.get_serial_indices(_indices)
 
         # ground truth target objects
-        gt_panoptic_masks = self.gt_masks[indices]
+        # gt_panoptic_masks = self.gt_masks[indices]
         
         # find targets in the clip
         clip_target_ids, frames_to_sample = self.find_targets_in_clip(indices)
@@ -315,7 +315,8 @@ class SequenceManager:
             "orig_to_serial_id": clip_orig_to_serial_id,
             "serial_to_orig_id": clip_serial_to_orig_id,
             # extras
-            "orig_res": gt_panoptic_masks.shape[-2:],
+            #"panoptic_masks": gt_panoptic_masks,
+            "orig_res": [self.orig_H, self.orig_W],
             "overlapping_frames": self.curr_overlapping_frames,
             "overlapping_masks": self.pred_masks[self.curr_overlapping_frames] if self.curr_overlapping_frames is not None else None,
         }
@@ -353,9 +354,9 @@ class SequenceManager:
             
             for fr_idx in indices:
                 # new targets = any target that has not been discovered yet
-                new_targets = list(set(self.target_appearance.get(fr_idx, [])) - gt_click_targets)
+                new_targets = self.target_appearance.get(fr_idx, [])
                 # overlapping targets = any target appearing in the predicted masks of overlapping frames
-                overlapping_targets = list(set(self.prev_clip_output.get(fr_idx, [])) - gt_click_targets)
+                overlapping_targets = self.prev_clip_output.get(fr_idx, [])
                 
                 frames_to_sample[fr_idx] = {"overlap": overlapping_targets, "new": new_targets}
                 clip_target_ids.update(overlapping_targets + new_targets)
@@ -591,13 +592,13 @@ class SequenceManager:
             center_coords = get_component_center_coords(fn_mask, 
                                                         cc=self.connected_component_sampling,
                                                         budget=None, 
-                                                        min_area=self.min_mask_area*2).astype(np.int_)
+                                                        min_area=self.min_mask_area*2)
         else:
             # coords_y, coords_x = np.where(fp_mask_dt == fp_max_dist)  # coords is [y, x]
             center_coords = get_component_center_coords(fp_mask, 
                                                         cc=self.connected_component_sampling,
                                                         budget=None, 
-                                                        min_area=self.min_mask_area*2).astype(np.int_)
+                                                        min_area=self.min_mask_area*2)
         
         # t = len(coords_y) // 2
         # sample_locations = [coords_y[t], coords_x[t]]
