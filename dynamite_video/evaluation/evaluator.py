@@ -116,9 +116,9 @@ class Evaluator:
                 "#frames": ds_T,
                 "#targets": ds_N,
                 "#clicks": ds_clicks,
-                "STQ": ds_stq / ds_N,
-                "AQ": ds_aq / ds_N,
-                "SQ": ds_sq / ds_N,
+                "STQ": ds_stq / len(dataset_scores),
+                "AQ": ds_aq / len(dataset_scores),
+                "SQ": ds_sq / len(dataset_scores),
                 "PFO": ds_PFO,
                 "PMO": ds_PMO,
                 "NoC": ds_NoC
