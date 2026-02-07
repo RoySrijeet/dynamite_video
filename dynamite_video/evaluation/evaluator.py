@@ -1,7 +1,7 @@
 import numpy as np
 import os
 import pandas as pd
-import yaml
+import pickle
 
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.modeling import build_model
@@ -93,7 +93,6 @@ class Evaluator:
                 ds_T += scores["#frames"]
                 ds_N += scores["#targets"]
                 ds_clicks += scores["#clicks"]
-                
                 ds_stq += scores["STQ"]
                 ds_aq += scores["AQ"]
                 ds_sq += scores["SQ"]
@@ -102,30 +101,24 @@ class Evaluator:
                 ds_clicks_per_target.extend(target_scores["num_clicks_per_target"])
             
             ds_sq_per_target = np.asarray(ds_sq_per_target)
-            ds_PFO = len(np.where(ds_sq_per_target < self.iou_threshold)[0]) / ds_N
-            ds_PMO = len(np.where(ds_sq_per_target == 0)[0]) / ds_N
             ds_NoC = 0
             for obj_id, obj_sq in enumerate(ds_sq_per_target):
                 if obj_sq >= self.iou_threshold:
                     ds_NoC += ds_clicks_per_target[obj_id]
                 else:
                     ds_NoC += self.max_interactions
-            ds_NoC = ds_NoC/ds_N
 
             entry = {
-                "Name": dataset_name,
-                "Round": ds_rounds / len(dataset_scores),
-                "#frames": ds_T,
-                "#targets": ds_N,
-                "#clicks": ds_clicks,
-                "STQ": ds_stq / len(dataset_scores),
-                "AQ": ds_aq / len(dataset_scores),
-                "SQ": ds_sq / len(dataset_scores),
-                "PFO": ds_PFO,
-                "PMO": ds_PMO,
-                "NoC": ds_NoC
+                "Name": dataset_name, "Round": ds_rounds / len(dataset_scores),
+                "#frames": ds_T, "#targets": ds_N, "#clicks": ds_clicks,
+                "STQ": ds_stq / len(dataset_scores), 
+                "AQ": ds_aq / len(dataset_scores), "SQ": ds_sq / len(dataset_scores),
+                "PFO": len(np.where(ds_sq_per_target < self.iou_threshold)[0]) / ds_N, 
+                "PMO": len(np.where(ds_sq_per_target == 0)[0]) / ds_N, 
+                "NoC": ds_NoC / ds_N
             }
             dataset_scores.insert(0, entry)
             df = pd.DataFrame(dataset_scores)
             df.to_csv(os.path.join(self.output_dir, f"metrics_{dataset_name}.csv"), index=False)
-            np.save(os.path.join(self.output_dir, f"round_scores_{dataset_name}.npy"), dataset_round_scores)
+            with open(os.path.join(self.output_dir, f"round_scores_{dataset_name}.pkl"), "wb") as f:
+                pickle.dump(dataset_round_scores, f)

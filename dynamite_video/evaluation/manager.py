@@ -506,8 +506,8 @@ class SequenceManager:
             refined_tgt_id = self.get_corrective_click(frame_idx=refine_frame, refine_tgt_id=tgt_id+1)
             if refined_tgt_id is None:
                 continue
-            print(f"Sampled a click on {refined_tgt_id} (originally, {tgt_id+1}) at frame {refine_frame}")
-            if eval_strategy=="worst":
+            # print(f"Sampled a click on {refined_tgt_id} (originally, {tgt_id+1}) at frame {refine_frame}")
+            if eval_strategy in ["worst", "random"]:
                 break
 
 

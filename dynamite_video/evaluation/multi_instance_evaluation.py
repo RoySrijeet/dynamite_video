@@ -139,7 +139,7 @@ def evaluate(model: nn.Module,
                         \nAverage metric computation time per round: {metric_compute_time/manager.round_num}")
             del manager, predictor
         
-        return dataset_scores, dataset_target_scores, np.stack(dataset_round_scores)
+        return dataset_scores, dataset_target_scores, dataset_round_scores
 
 
 def interaction_metrics(
