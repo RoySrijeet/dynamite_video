@@ -576,18 +576,18 @@ class SequenceManager:
         # distance transform to find the center of the error region
         fn_mask = np.pad(fn_mask, ((1, 1), (1, 1)), 'constant')
         fp_mask = np.pad(fp_mask, ((1, 1), (1, 1)), 'constant')
-        fn_mask_dt = cv2.distanceTransform(fn_mask.astype(np.uint8), cv2.DIST_L2, 0)
-        fp_mask_dt = cv2.distanceTransform(fp_mask.astype(np.uint8), cv2.DIST_L2, 0)
-        fn_mask_dt = fn_mask_dt[1:-1, 1:-1]
-        fp_mask_dt = fp_mask_dt[1:-1, 1:-1]
+        fn_mask = cv2.distanceTransform(fn_mask.astype(np.uint8), cv2.DIST_L2, 0)
+        fp_mask = cv2.distanceTransform(fp_mask.astype(np.uint8), cv2.DIST_L2, 0)
+        fn_mask = fn_mask[1:-1, 1:-1]
+        fp_mask = fp_mask[1:-1, 1:-1]
         
         # avoid regions around already sampled clicks
-        fn_mask_dt = fn_mask_dt * self.not_clicked_map[frame_idx]
-        fp_mask_dt = fp_mask_dt * self.not_clicked_map[frame_idx]
+        fn_mask = fn_mask * self.not_clicked_map[frame_idx]
+        fp_mask = fp_mask * self.not_clicked_map[frame_idx]
 
         # choose the bigger error region
-        fn_max_dist = np.max(fn_mask_dt)
-        fp_max_dist = np.max(fp_mask_dt)
+        fn_max_dist = np.max(fn_mask)
+        fp_max_dist = np.max(fp_mask)
 
         # sample the click at the center of the error region
         if fn_max_dist > fp_max_dist:
