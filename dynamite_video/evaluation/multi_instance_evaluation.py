@@ -125,7 +125,8 @@ def evaluate(model: nn.Module,
                     break
 
                 ### REFINEMENT ###
-                manager.find_refinement_targets(target_level_scores, iou_threshold, eval_strategy)
+                refinements = manager.find_refinement_targets(target_level_scores, iou_threshold, eval_strategy)
+                logger.info(f'Refinements:\n{refinements}')
                 
             # interaction metrics
             click_scores, target_scores = interaction_metrics(manager, target_level_scores, iou_threshold, max_interactions)
