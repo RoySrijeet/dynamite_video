@@ -354,7 +354,7 @@ class SequenceManager:
             
             for fr_idx in indices:
                 # new targets = any target that has not been discovered yet
-                new_targets = self.target_appearance.get(fr_idx, [])
+                new_targets = self.target_appearance.pop(fr_idx, [])
                 # overlapping targets = any target appearing in the predicted masks of overlapping frames
                 overlapping_targets = self.prev_clip_output.get(fr_idx, [])
                 
@@ -500,6 +500,7 @@ class SequenceManager:
         if eval_strategy == "random":
             np.random.shuffle(all_candidates)
 
+        refinements = []
         for tgt_id in all_candidates:
             # find the best frame to sample a click on
             refine_frame = self.find_refinement_frame(tgt_id, target_level_scores["sq_per_frame_per_target"], iou_threshold)
@@ -507,8 +508,10 @@ class SequenceManager:
             if refined_tgt_id is None:
                 continue
             # print(f"Sampled a click on {refined_tgt_id} (originally, {tgt_id+1}) at frame {refine_frame}")
+            refinements.append({"Target": tgt_id+1, "Frame": refine_frame, "GT objects clicked": refined_tgt_id})
             if eval_strategy in ["worst", "random"]:
                 break
+        return refinements
 
 
     def find_refinement_frame(self, tgt_id, sq_per_frame_per_target, iou_threshold):
@@ -590,13 +593,13 @@ class SequenceManager:
         if fn_max_dist > fp_max_dist:
             # coords_y, coords_x = np.where(fn_mask_dt == fn_max_dist)  # coords is [y, x]
             center_coords = get_component_center_coords(fn_mask, 
-                                                        cc=self.connected_component_sampling,
+                                                        cc=True, #self.connected_component_sampling,
                                                         budget=None, 
                                                         min_area=self.min_mask_area*2)
         else:
             # coords_y, coords_x = np.where(fp_mask_dt == fp_max_dist)  # coords is [y, x]
             center_coords = get_component_center_coords(fp_mask, 
-                                                        cc=self.connected_component_sampling,
+                                                        cc=True, #self.connected_component_sampling,
                                                         budget=None, 
                                                         min_area=self.min_mask_area*2)
         
@@ -613,11 +616,12 @@ class SequenceManager:
         corrections = []
         for cc in center_coords:
             gt_tgt_index = self.gt_masks[frame_idx][tuple(cc)]
-            if gt_tgt_index!= self.bg_id and self.budget[gt_tgt_index-1] <= 0:
-                continue
+            if self.budget[refine_tgt_id-1] <= 0:
+                break
             accepted_tgts.append(gt_tgt_index)
             corrections.append(tuple(cc))
-            self.record_gt_click(frame_idx, gt_tgt_index, tuple(cc), refine_tgt_id)
+            # the click should count towards the budget of the refine target
+            self.record_gt_click(frame_idx, refine_tgt_id, tuple(cc))
         if len(accepted_tgts) == 0:
             return None
 

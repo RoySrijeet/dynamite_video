@@ -1,4 +1,5 @@
 import cv2
+import math
 import numpy as np
 import os
 import random
@@ -72,23 +73,27 @@ def get_component_center_coords(mask, budget, cc=True, gap=1, min_area=200, conn
         # connected components
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=connectivity)
         components = list(range(1, num_labels))
+        # sort components by area
+        components = sorted(components, key=lambda i: stats[i, cv2.CC_STAT_AREA], reverse=True)
+        
         if budget is not None and budget < len(components):
-            components = sorted(components, key=lambda i: stats[i, cv2.CC_STAT_AREA], reverse=True)
+            # if there is a set budget, only select the largest components
             components = components[:budget]
+        
         centers = []
         for lab in components:
             if stats[lab, cv2.CC_STAT_AREA] < min_area:
+                # don't sample clicks on small very components
                 continue
             ys, xs = np.where(labels == lab)
             if ys.size == 0:
                 continue
             # pick the pixel inside this component that is farthest from background
             i = np.argmax(dt_mask[ys, xs])
-            centers.append([int(ys[i]), int(xs[i])])
-            
-        centers = np.array(centers, dtype=float) if centers else np.zeros((0,2), float)    
+            centers.append([math.floor(ys[i]), math.floor(xs[i])])
+
         if len(centers) > 0:
-            return centers.astype(np.int_).tolist()
+            return np.array(centers, dtype=np.int_).tolist()
     
     # object center
     max_dist = np.max(dt_mask)
