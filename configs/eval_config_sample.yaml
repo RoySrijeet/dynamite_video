@@ -1,0 +1,47 @@
+DATASETS:
+  # specify CLIP_LENGTH and FRAME_OVERLAP of evaluation input clips
+  KITTI_STEP:
+    EVALUATION:
+        CLIP_LENGTH: 6
+        FRAME_OVERLAP: 3
+        SPLIT: val
+  VIPSEG:
+    EVALUATION:
+        CLIP_LENGTH: 6
+        FRAME_OVERLAP: 3
+        SPLIT: val
+INPUT:
+  AUGMENTATION:
+    RESIZE_TEST: true
+    MAX_DIM_TEST: 1024
+    MIN_DIM_TEST: 512
+ITERATIVE:
+  TEST:
+    # specify eval dataset
+    DATASETS: [KITTI_STEP]
+
+    # IoU threshold
+    IOU_THRESHOLD: 0.75
+    # Click budget per instance. Default: 10
+    MAX_INTERACTIONS_PER_TARGET: 10
+    
+    # No. of iterative refinement rounds. Set to -1 to run until budget ends.
+    MAX_ROUNDS: 1
+    # Refinement object selection strategy. Choose from ["worst", "random", "all"].
+    EVAL_STRATEGY: "all"
+    
+    # Connected-component click sampling. If not set, clicks are sampled from object center
+    CONNECTED_COMPONENT_SAMPLING: false
+    # Masks with smaller area than this do not receive clicks. Default: 200
+    MIN_MASK_AREA: 200
+    
+    
+    # set to true to save masks
+    SAVE_VISUALIZATIONS: false
+    # set to true to save interactions, comparison with g.t. masks
+    DEBUG: false
+
+MODEL:
+  WEIGHTS: model_final.pth
+
+VERSION: 2
