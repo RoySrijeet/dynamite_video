@@ -1,0 +1,96 @@
+SOLVER:
+  # number of samples in a batch across all GPUs, set it to 1 per GPU
+  IMS_PER_BATCH: 4
+  # base learning rate
+  BASE_LR: 0.0001
+  # learning rate decay steps
+  STEPS: (22000, 24000)
+  # num of training iterations on each GPU
+  MAX_ITER: 25000
+  CHECKPOINT_PERIOD: 10000
+
+INPUT:
+  AUGMENTATION:
+    # color augmentation
+    COLOR_AUG: true
+    # random horizontal flip
+    RANDOM_FLIP_AXIS: "horizontal"
+    RANDOM_FLIP_PROB: 0.5
+    # resize scale
+    MIN_SCALE: 0.5
+    MAX_SCALE: 2.0
+    # IMPORTANT: final frame dims must be divisible by MASK_FORMER.SIZE_DIVISIBILITY (32)
+    IMAGE_SIZE: [480, 864]
+  RGB: true
+
+TRAINING:
+  # enable pseudo-video pre-training
+  PRETRAIN: false
+  # pre-training datasets [COCO]
+  PRETRAIN_DATASET_LIST: []
+  # proportion of training samples from each dataset
+  PRETRAIN_DATASET_WEIGHTS: [1]
+  
+  MIN_MASK_AREA: 400
+  # input clip length training samples
+  CLIP_LENGTH: 4
+  # list of training datasets [VIPSEG, KITTI_STEP]
+  DATASET_LIST: [VIPSEG]
+  # proportion of training sample from each dataset
+  DATASET_WEIGHTS: [1]
+  # max num of instances in a clip
+  MAX_NUM_INSTANCES: 30
+
+DATALOADER:
+  ASPECT_RATIO_GROUPING: false
+  # num of dataloader workers
+  NUM_WORKERS: 4
+
+MODEL:
+  # pretrained weights
+  WEIGHTS: "path/to/pre-trained/weights.pth"
+  MASK_FORMER:
+    # positional encoding to be applied to multi-scale image features. Choose from ["spatial", "spatio_temporal"]
+    KV_POSITIONAL_EMBED: "spatio_temporal"
+    # positional encoding to be applied to click query descriptors. Choose from ["2D", "3D", "4D", "5D"]
+    Q_POSITIONAL_EMBED: "5D"
+    # static background queries
+    USE_STATIC_BG_QUERIES: true
+    NUM_STATIC_BG_QUERIES: 3
+
+    # whether to use no_click_query in learnable query initialization
+    USE_NO_CLICK_QUERY: True
+    # whether to use MLP projection head in learnable query initialization
+    USE_MLP_FOR_QUERY_PROJ: False
+
+CLICKER:
+  TRAINING:
+    # max #clicks *per-target object* to be sampled from a frame (default: 6)
+    MAX_NUM_CLICKS_PER_INSTANCE: 6
+    # prob of choosing optional frames to add foreground clicks in
+    OPTIONAL_FRAMES_FG_SAMPLE_PROB: 1.
+    # probability of sampling background clicks from a frame (default: 0.5)
+    BACKGROUND_SAMPLING_PROB: 0.5
+    # probability scaling factor of sampling n no. of clicks (default: 0.7 )
+    GAMMA: 0.7
+
+    # max num of rounds during training. Default: 6
+    MAX_NUM_REFINEMENT_ROUNDS: 6
+    # max num of target objects to be refined in each training round. Default: 4
+    MAX_NUM_INSTANCES_REFINED_PER_ROUND: 4
+    # IoU threshold in training. Default: 0.95
+    IOU_THRESHOLD: 0.95
+    # which target objects are chosen during rounding. Choose between ["random", "worst"]
+    REFINEMENT_STRATEGY: random
+
+WANDB:
+  # whether to enable W&B logging (bool)
+  ENABLE: true
+  # W&B account username (str)
+  ENTITY: 
+  # W&B project name (str)
+  PROJECT: 
+  # name of the current run (str)
+  RUN_NAME: 
+
+VERSION: 2

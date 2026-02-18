@@ -148,4 +148,5 @@ visualization
 # do not remove
 !dynamite_video/.env
 !datasets/.gitkeep
-!weights/.gitkeep
+!weights/README.md
+!weights/mask2former_weight_tools
