@@ -1,4 +1,4 @@
-# Presenting DynaMITe-Video
+# Towards Video Multi-object Interactive Segmentation
 
 ## Datasets
 
