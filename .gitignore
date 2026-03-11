@@ -131,6 +131,9 @@ dmypy.json
 # vscode stuff
 .vscode
 
+# mac assets
+.DS_STORE
+
 # chunky directories
 weights/*
 datasets/*
